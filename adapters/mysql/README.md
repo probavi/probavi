@@ -11,6 +11,7 @@ from the protocol document alone.
 |-----------------|-------------------------------------------------------------|
 | `mysqldump`     | One `mysqldump` SQL file.                                   |
 | `mysqldump_dir` | A directory of dump files; the newest regular file is restored (mtime, ties broken by name). |
+| `mysqldump_with_users` | A directory holding an accounts-and-grants script (`params.users`) and one dump; the accounts are replayed first, and the drill fails while the restored principal chain is broken. |
 | `xtrabackup`    | A Percona XtraBackup full-backup directory (unprepared, as `xtrabackup --backup` leaves it) — a physical restore. |
 
 ## Sandbox image and authentication
@@ -44,6 +45,111 @@ expressible at all. The credential never protects anything reachable.
   at the first error: partial restores fail loudly as `restore_failed`;
   input the parser rejects (`ERROR 1064`, `ASCII '\0'`) is classified
   `source_corrupt`.
+
+## The mysqldump_with_users kind (accounts first)
+
+MySQL accounts and grants live in the `mysql` system schema — a
+single-database dump never contains them. Restore such a dump alone and
+everything succeeds while the application account cannot log in and every
+`SQL SECURITY DEFINER` view, routine, trigger, and event fails at
+invocation (`ERROR 1449`). A `mysqldump` drill's record therefore proves
+data recoverability only. `mysqldump_with_users` makes the drill cover the
+whole principal chain:
+
+```yaml
+source:
+  kind: mysqldump_with_users
+  path: /backups/shop              # a directory holding both members
+  params:
+    users: users.sql               # bare filename inside the directory
+    dump: shop-2026-08-08.sql      # optional: without it, the newest non-users file
+target:
+  options:
+    database: shop                 # the SOURCE database name — see below
+```
+
+The members are named explicitly (no filename-pattern guessing), and one
+directory can hold a shared users script beside several databases' dumps —
+one drill per database, each with its own checks and its own evidence
+record. `params.users` is required; `params.dump` is optional so a drill
+against a rotating backup directory keeps working unattended.
+
+**Restore under the source database name.** MySQL grants are
+database-scoped: a faithful script exported from production says `GRANT
+... ON `` `shop` ``.*`, and restored under any other name nothing can
+reach the target — the account logs in and is denied, definer views fail
+with `ERROR 1356`. Set `options.database` to the source database's name.
+Getting this wrong is caught, not silently passed: see the gates below.
+
+Export the accounts the way recovery run-books do — `CREATE USER` with the
+password hash and `SHOW GRANTS` output. A minimal export, run on the
+production server (the `print_identified_with_as_hex` session variable
+makes the hash printable, which is what export tooling does too):
+
+```sql
+SET SESSION print_identified_with_as_hex = ON;
+SHOW CREATE USER 'app'@'%';
+SHOW GRANTS FOR 'app'@'%';
+-- append ';' to each returned line
+```
+
+Scripts from `pt-show-grants` and similar tooling work too, including ones
+written with `CREATE USER IF NOT EXISTS` (collisions then produce
+warnings, which need no tolerance at all).
+
+### How the replay is judged
+
+The script is fed to the mysql client **through stdin with `--force`**,
+deliberately: without it the client aborts at the first failed statement
+and silently skips every account after it, so the completeness of the
+replay would depend on account ordering — and the `source` client command
+aborts even *with* `--force`. Under `--force` the exit code stays 0, and
+the verdict comes from classifying stderr. Exactly one failure class is
+tolerated — `ERROR 1396` (how a `CREATE USER` collision reports) for
+accounts the sandbox engine itself created: `root`, and the reserved
+`mysql.`-prefixed system accounts (`mysql.sys`, `mysql.session`,
+`mysql.infoschema`), which appear in faithful exports. Any other
+diagnostic fails the drill as `restore_failed`.
+
+### The principal-chain gates
+
+After the dump is loaded, the adapter fails the provision — otherwise an
+incomplete or mismatched script would reintroduce the very defect this
+kind closes:
+
+1. **Orphaned definers**: any view, routine, trigger, or event in the
+   restored database whose `DEFINER` account does not exist.
+2. **Reachability**: at least one restored account (or role) must hold a
+   privilege that reaches the restored database — a grant scoped to it, or
+   a global non-`USAGE` privilege. This is what catches the
+   wrong-database-name trap, and its message says how to fix it. System
+   accounts (`root`, `mysql.*`) do not count: the drill proves the
+   *restored* principal layer, not the sandbox's. If no application
+   account is supposed to reach this database, the plain `mysqldump` kind
+   is the honest choice.
+3. **View resolution**: every restored view is `EXPLAIN`ed (no data is
+   read); a definer that exists but lacks rights fails here.
+
+### Credentials never reach the record
+
+A users script carries password hashes and possibly plaintext passwords,
+and the server quotes the offending source token back in syntax errors.
+Every diagnostic bound for a protocol message is therefore scrubbed
+(`IDENTIFIED ...` literals, `$A$...` hash literals, and long hex literals
+are redacted) before it can reach a signed evidence record.
+
+## What the mysqldump and mysqldump_dir kinds do not prove
+
+A passing `mysqldump` or `mysqldump_dir` drill proves the dump loads and
+its data validates — nothing about accounts, grants, or whether definer
+objects are invocable. Two more silent gaps live in the dump itself:
+`mysqldump` omits stored routines and events unless `--routines`/`--events`
+were passed (triggers are included by default), and a dump without
+`--databases` carries no `CREATE DATABASE`, so the restore target's
+default charset and collation are the sandbox server's, not the source's —
+pin them with the `charset`/`collation` options if your checks depend on
+collation semantics. If your recovery depends on the application logging
+in afterwards, use `mysqldump_with_users`.
 
 ## The xtrabackup kind (physical restore)
 
@@ -99,10 +205,12 @@ exists for (§6.1).
 
 ## Drill config options
 
-| Option     | Default   | Meaning                               |
-|------------|-----------|---------------------------------------|
-| `user`     | `root`    | Superuser inside the sandbox engine (logical restores only). |
-| `database` | `probavi` | Database to restore into (letters, digits, underscores only; logical restores only). |
+| Option      | Default   | Meaning                               |
+|-------------|-----------|---------------------------------------|
+| `user`      | `root`    | Superuser inside the sandbox engine (logical restores only). |
+| `database`  | `probavi` | Database to restore into (letters, digits, underscores only; logical restores only). For `mysqldump_with_users`, set it to the **source** database name — grants are database-scoped. |
+| `charset`   | *(server default)* | Character set for the created target database (logical restores; applies only when the adapter creates it). |
+| `collation` | *(server default)* | Collation for the created target database — without it a `utf8mb4_bin` source restores under the sandbox server's default collation, changing comparison, ordering, and uniqueness semantics. |
 
 ## Environment
 

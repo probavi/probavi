@@ -13,6 +13,35 @@ always called out explicitly.
 
 ### Added
 
+- **`mysqldump_with_users`, a MySQL source kind that replays the account
+  layer before the dump and gates on the restored principal chain** (mysql
+  adapter 0.3.0; tracked in #89). MySQL accounts and grants live in the
+  `mysql` system schema, never in a single-database dump, so a plain
+  `mysqldump` drill passes while the application account cannot log in and
+  every `SQL SECURITY DEFINER` object fails at invocation (`ERROR 1449`).
+  The source is one directory with both members named in `source.params`
+  (`users`, and optionally `dump`); identity is the size-framed two-member
+  composite with the *older* member's mtime, as in the sibling kinds.
+
+  Decisions measured against a real MySQL 8.4 instance: the script is fed
+  through stdin with `--force` (without it the client aborts mid-script,
+  and the `source` command aborts even with it); exactly `ERROR 1396` for
+  `root` and the reserved `mysql.*` accounts is tolerated. Three gates run
+  after the load — orphaned definers, database reachability, and view
+  resolution via `EXPLAIN`. The reachability gate exists because grants
+  are database-scoped: restored under a name the script does not grant on,
+  the account layer silently covers nothing (measured), so the drill must
+  restore under the source database name and the gate's message says so.
+  Diagnostics bound for protocol messages are scrubbed of `IDENTIFIED`
+  literals, `$A$...` hash literals, and long hex literals.
+
+- **`charset` and `collation` drill options for MySQL logical restores**
+  (part of #89). The restore target used to be created with the sandbox
+  server's defaults, silently discarding the source database's collation —
+  which governs comparisons, ordering, and uniqueness. The options pin the
+  source values when the adapter creates the target; the README documents
+  the default's limits.
+
 - **`bak_with_logins`, a SQL Server source kind that replays server
   logins before the restore and refuses to pass while any restored user
   is orphaned** (mssql adapter 0.2.0; tracked in #87). SQL Server splits

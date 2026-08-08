@@ -12,6 +12,7 @@
   "sources": {
     "mysqldump": "One mysqldump SQL file",
     "mysqldump_dir": "A directory of mysqldump files; the newest is restored",
+    "mysqldump_with_users": "A directory holding one dump and an accounts-and-grants script, restored together",
     "xtrabackup": "An unprepared Percona XtraBackup full backup (physical restore)"
   }
 }
