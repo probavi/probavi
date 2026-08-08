@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "mysql"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 
 	defaultUser     = "root"
 	defaultDatabase = "probavi"
@@ -39,6 +39,7 @@ func probePayload() any {
 		"sources": []map[string]any{
 			{"kind": "mysqldump", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "mysqldump_dir", "capabilities": map[string]bool{"pitr": false}},
+			{"kind": "mysqldump_with_users", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "xtrabackup", "capabilities": map[string]bool{"pitr": false}},
 		},
 		"sql_runner": map[string]any{
@@ -84,18 +85,13 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if req.PITR != nil {
 		return nil, protoErr("invalid_request", false, "this adapter does not support pitr")
 	}
-	user := option(req.Options, "user", defaultUser)
-	database := option(req.Options, "database", defaultDatabase)
-	if !databasePattern.MatchString(database) {
-		return nil, protoErr("invalid_request", false,
-			"database name %s must contain only letters, digits, and underscores", database)
+	tgt, perr := parseProvisionTarget(req)
+	if perr != nil {
+		return nil, perr
 	}
-	scratch := req.Sandbox.ScratchDir
-	if scratch == "" {
-		scratch = "/tmp"
-	}
+	user, database, scratch := tgt.user, tgt.database, tgt.scratch
 
-	src, perr := resolveSource(req.Source.Kind, req.Source.Path)
+	src, perr := resolveSource(req.Source.Kind, req.Source.Path, req.Source.Params)
 	if perr != nil {
 		return nil, perr
 	}
@@ -111,13 +107,30 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	}
 	logger.Info("engine ready", "seconds", readySeconds)
 
+	state := map[string]any{"database": database, "user": user}
+	// The account layer goes in before the dump: that is the order of the
+	// recovery run-book this drill stands for (principals, then data), and
+	// its load is part of the restore, not a phase of its own — the
+	// measured restore duration is the drill's RTO figure.
+	var usersTransfer, usersLoad float64
+	if src.usersPath != "" {
+		usersInSandbox := scratch + "/probavi-users.sql"
+		usersTransfer, usersLoad, perr = loadUsers(ctx, c, user, src.usersPath, usersInSandbox)
+		if perr != nil {
+			return nil, perr
+		}
+		logger.Info("user accounts loaded", "seconds", usersLoad)
+		state["users_path"] = usersInSandbox
+	}
+
 	dumpInSandbox := scratch + "/probavi-restore.sql"
+	state["dump_path"] = dumpInSandbox
 	put, perr := c.putFile(ctx, putFileArgs{SourcePath: src.path, DestPath: dumpInSandbox, Mode: "0600"})
 	if perr != nil {
 		return nil, perr
 	}
 
-	if perr := ensureDatabase(ctx, c, user, database); perr != nil {
+	if perr := ensureDatabase(ctx, c, user, database, tgt.charset, tgt.collation); perr != nil {
 		return nil, perr
 	}
 	restore, stderr, perr := execRestore(ctx, c, user, database, dumpInSandbox)
@@ -129,6 +142,12 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	}
 	logger.Info("restore complete", "seconds", restore.DurationSeconds)
 
+	if src.usersPath != "" {
+		if perr := verifyPrincipalChain(ctx, c, user, database); perr != nil {
+			return nil, perr
+		}
+	}
+
 	return map[string]any{
 		"connection": map[string]any{
 			"scheme": "mysql", "host": "127.0.0.1", "port": defaultPort,
@@ -139,11 +158,52 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		},
 		"timings": map[string]any{
 			"engine_ready_seconds": readySeconds,
-			"transfer_seconds":     put.DurationSeconds,
-			"restore_seconds":      restore.DurationSeconds,
+			"transfer_seconds":     usersTransfer + put.DurationSeconds,
+			"restore_seconds":      usersLoad + restore.DurationSeconds,
 		},
-		"state": map[string]any{"database": database, "user": user, "dump_path": dumpInSandbox},
+		"state": state,
 	}, nil
+}
+
+// namePattern validates charset and collation option values: identifier
+// characters only, so nothing can escape the CREATE DATABASE statement
+// they are embedded in.
+var namePattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+
+// provisionTarget is the validated per-drill target configuration.
+type provisionTarget struct {
+	user, database, charset, collation, scratch string
+}
+
+// parseProvisionTarget validates every operator-supplied value that can
+// reach SQL text. The charset and collation options exist because without
+// them the restore target is created with the sandbox server's defaults —
+// which silently differ from the source database's (a dump without
+// --databases carries no CREATE DATABASE, and the collation governs
+// comparisons, ordering, and uniqueness). The options let a drill pin the
+// source values; the README documents the trade.
+func parseProvisionTarget(req *provisionRequest) (*provisionTarget, *protoError) {
+	tgt := &provisionTarget{
+		user:      option(req.Options, "user", defaultUser),
+		database:  option(req.Options, "database", defaultDatabase),
+		charset:   option(req.Options, "charset", ""),
+		collation: option(req.Options, "collation", ""),
+		scratch:   req.Sandbox.ScratchDir,
+	}
+	if !databasePattern.MatchString(tgt.database) {
+		return nil, protoErr("invalid_request", false,
+			"database name %s must contain only letters, digits, and underscores", tgt.database)
+	}
+	for name, v := range map[string]string{"charset": tgt.charset, "collation": tgt.collation} {
+		if v != "" && !namePattern.MatchString(v) {
+			return nil, protoErr("invalid_request", false,
+				"%s %s must contain only letters, digits, and underscores", name, v)
+		}
+	}
+	if tgt.scratch == "" {
+		tgt.scratch = "/tmp"
+	}
+	return tgt, nil
 }
 
 // healthcheckRequest is the §6.3 request payload.
@@ -220,12 +280,20 @@ func awaitEngine(ctx context.Context, c *core, user string) (float64, *protoErro
 // ensureDatabase creates the restore target if missing. Plain mysqldump
 // output (without --databases) carries no CREATE DATABASE statement, so
 // the target must exist before the load; for --databases dumps this is a
-// no-op. The name is validated against databasePattern before it can
-// reach this statement.
-func ensureDatabase(ctx context.Context, c *core, user, database string) *protoError {
+// no-op. Without explicit charset/collation options the target gets the
+// sandbox server's defaults, not the source database's. All three values
+// are pattern-validated before they can reach this statement, and the
+// options only apply when the adapter actually creates the database.
+func ensureDatabase(ctx context.Context, c *core, user, database, charset, collation string) *protoError {
+	stmt := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", database)
+	if charset != "" {
+		stmt += " CHARACTER SET " + charset
+	}
+	if collation != "" {
+		stmt += " COLLATE " + collation
+	}
 	val, _, stderr, perr := c.exec(ctx, execArgs{
-		Argv: []string{"mysql", "-h", "127.0.0.1", "-u", user, "-N", "-B",
-			"-e", fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", database)},
+		Argv: []string{"mysql", "-h", "127.0.0.1", "-u", user, "-N", "-B", "-e", stmt},
 	})
 	if perr != nil {
 		return perr
@@ -275,6 +343,27 @@ func firstLine(b []byte) string {
 		s = s[:i]
 	}
 	// The message crosses the protocol as a JSON string and lands in
-	// evidence error fields: keep it single-line and quote-free.
-	return strings.ReplaceAll(s, `"`, "'")
+	// evidence error fields: keep it single-line, quote-free, and free of
+	// credentials.
+	return strings.ReplaceAll(scrubSecrets(s), `"`, "'")
+}
+
+// A users script carries every account's credentials — password hashes
+// (IDENTIFIED WITH ... AS 0x... or '$A$...'), possibly plaintext
+// (IDENTIFIED BY '...') — and the server quotes the offending source token
+// back in syntax errors ("near '...'"). Engine diagnostics are therefore a
+// live path from a backup's credentials into a signed evidence record,
+// which the schema forbids from carrying any (evidence schema §8).
+var (
+	identifiedLiteral = regexp.MustCompile(`(?i)identified\s+(?:with\s+\S+\s+)?(?:by|as)\s+(?:password\s+)?('[^']*'|0x[0-9A-Fa-f]+)`)
+	hashLiteral       = regexp.MustCompile(`'\$A\$[0-9]{3}\$[^']*'`)
+	hexLiteral        = regexp.MustCompile(`(?i)0x[0-9a-f]{12,}`)
+)
+
+// scrubSecrets removes credential material from text bound for a protocol
+// message.
+func scrubSecrets(s string) string {
+	s = identifiedLiteral.ReplaceAllString(s, "IDENTIFIED [redacted]")
+	s = hashLiteral.ReplaceAllString(s, "'[redacted]'")
+	return hexLiteral.ReplaceAllString(s, "0x[redacted]")
 }

@@ -380,3 +380,312 @@ func destroy(t *testing.T, sbx *docker.Sandbox) {
 		t.Errorf("destroy sandbox: %v", err)
 	}
 }
+
+const (
+	// usersFixturePassword seeds the application account the users-drill
+	// fixture exports; it exists only inside the test sandboxes. The
+	// exported script carries its password *hash*, so a successful
+	// authentication with this plaintext proves the hash round-tripped
+	// through the drill.
+	usersFixturePassword = "AppSeed!OnlyInSandbox1"
+)
+
+// TestUsersDrillEndToEnd reproduces issue #89 and proves the fix, and each
+// half is worthless without the others. MySQL accounts and grants live in
+// the mysql system schema, never in a single-database dump, so a plain
+// mysqldump drill passes while the application account cannot log in and
+// every SQL SECURITY DEFINER object fails at invocation. The
+// mysqldump_with_users kind replays an exported accounts-and-grants script
+// first and gates on the restored principal chain afterwards — including
+// the measured trap that grants are database-scoped, so the drill must
+// restore under the database name the script grants on.
+func TestUsersDrillEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	provider := docker.New(nil)
+	fixtureDir := makeAccountedFixture(t, ctx, provider)
+
+	runner, err := adapter.New("mysql", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+
+	t.Run("kind mysqldump still passes and leaves the gap", func(t *testing.T) {
+		assertDumpLeavesGap(t, ctx, provider, runner, fixtureDir)
+	})
+	t.Run("kind mysqldump_with_users restores the principal chain", func(t *testing.T) {
+		assertWithUsersRestoresChain(t, ctx, provider, runner, fixtureDir)
+	})
+	t.Run("under the wrong database name the reachability gate refuses", func(t *testing.T) {
+		assertWrongNameRefused(t, ctx, provider, runner, fixtureDir)
+	})
+	t.Run("an incomplete users script fails the drill", func(t *testing.T) {
+		assertIncompleteUsersScriptFails(t, ctx, provider, runner, fixtureDir)
+	})
+}
+
+// assertDumpLeavesGap is the reproduction half: the plain mysqldump drill
+// passes while the application account does not exist, the DEFINER view
+// fails at invocation, and the database default collation silently changed
+// — the premises of #89.
+func assertDumpLeavesGap(t *testing.T, ctx context.Context, provider *docker.Provider, runner *adapter.Runner, fixtureDir string) {
+	sbx, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "mysqldump", Path: filepath.Join(fixtureDir, "shop.sql")},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if rows := rootRows(t, ctx, sbx, "SELECT user FROM mysql.user WHERE user = 'app'"); len(rows) != 0 {
+		t.Errorf("app account = %v, want absent — the premise of #89", rows)
+	}
+	out := rootExec(t, ctx, sbx, "SELECT * FROM "+res.Connection.Database+".v_orders")
+	if out.ExitCode == 0 || !strings.Contains(string(out.Stderr), "definer") {
+		t.Errorf("definer view select = exit %d (%s), want the ERROR 1449 definer failure",
+			out.ExitCode, out.Stderr)
+	}
+	collation := rootRows(t, ctx, sbx,
+		"SELECT default_collation_name FROM information_schema.schemata WHERE schema_name = '"+res.Connection.Database+"'")
+	if len(collation) != 1 || collation[0] == "utf8mb4_bin" {
+		t.Errorf("restored collation = %v — the source was utf8mb4_bin, the loss is the premise", collation)
+	}
+}
+
+// assertWithUsersRestoresChain is the fix half, with the strongest proof
+// there is: the restored account authenticates with its original password
+// (the hash round-tripped), reads the granted table, the DEFINER view and
+// procedure work, and the pinned charset options preserve the source
+// collation.
+func assertWithUsersRestoresChain(t *testing.T, ctx context.Context, provider *docker.Provider, runner *adapter.Runner, fixtureDir string) {
+	sbx, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source: adapter.ProvisionSource{
+			Kind:   "mysqldump_with_users",
+			Path:   fixtureDir,
+			Params: map[string]string{"users": "users.sql", "dump": "shop.sql"},
+		},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+		Options: map[string]string{"database": "shop", "charset": "utf8mb4", "collation": "utf8mb4_bin"},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if res.Timings.RestoreSeconds <= 0 {
+		t.Errorf("timings = %+v, want real measurements", res.Timings)
+	}
+
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{
+		Argv: []string{"mysql", "-h", "127.0.0.1", "-u", "app", "-p" + usersFixturePassword,
+			"-D", "shop", "-N", "-B", "-e", "SELECT count(*) FROM orders"},
+	})
+	if err != nil {
+		t.Fatalf("app login exec: %v", err)
+	}
+	if count := strings.TrimSpace(string(out.Stdout)); out.ExitCode != 0 || count != "2" {
+		t.Errorf("app count = %q (exit %d, stderr %s), want 2 rows through the restored grant",
+			count, out.ExitCode, out.Stderr)
+	}
+
+	if rows := rootRows(t, ctx, sbx, "SELECT * FROM shop.v_orders"); len(rows) != 1 || rows[0] != "2" {
+		t.Errorf("definer view = %v, want the count through the restored definer", rows)
+	}
+	proc := rootExec(t, ctx, sbx, "CALL shop.p_count()")
+	if proc.ExitCode != 0 {
+		t.Errorf("definer procedure = exit %d (%s), want success through the restored EXECUTE grant",
+			proc.ExitCode, proc.Stderr)
+	}
+	collation := rootRows(t, ctx, sbx,
+		"SELECT default_collation_name FROM information_schema.schemata WHERE schema_name = 'shop'")
+	if len(collation) != 1 || collation[0] != "utf8mb4_bin" {
+		t.Errorf("restored collation = %v, want the pinned utf8mb4_bin", collation)
+	}
+}
+
+// assertWrongNameRefused proves the measured trap is caught loudly: grants
+// are database-scoped, so restored under the default name instead of the
+// name the script grants on, no account can reach the target — and the
+// gate's message says how to fix it.
+func assertWrongNameRefused(t *testing.T, ctx context.Context, provider *docker.Provider, runner *adapter.Runner, fixtureDir string) {
+	sbx, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	_, err = runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source: adapter.ProvisionSource{
+			Kind:   "mysqldump_with_users",
+			Path:   fixtureDir,
+			Params: map[string]string{"users": "users.sql", "dump": "shop.sql"},
+		},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	var aerr *adapter.Error
+	if err == nil || !errors.As(err, &aerr) || aerr.Code != "restore_failed" {
+		t.Fatalf("provision error = %v, want restore_failed from the reachability gate", err)
+	}
+	if !strings.Contains(aerr.Message, "no restored account can reach database") ||
+		!strings.Contains(aerr.Message, "options.database") {
+		t.Errorf("message = %q, want the teaching reachability verdict", aerr.Message)
+	}
+}
+
+// assertIncompleteUsersScriptFails proves the definer gate bites: a script
+// that loads cleanly but restores no accounts must fail the drill, or an
+// incomplete export would reintroduce the defect one level down.
+func assertIncompleteUsersScriptFails(t *testing.T, ctx context.Context, provider *docker.Provider, runner *adapter.Runner, fixtureDir string) {
+	incomplete := t.TempDir()
+	data, err := os.ReadFile(filepath.Join(fixtureDir, "shop.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(incomplete, "shop.sql"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(incomplete, "users.sql"), []byte("SELECT 1;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sbx, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	_, err = runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source: adapter.ProvisionSource{
+			Kind:   "mysqldump_with_users",
+			Path:   incomplete,
+			Params: map[string]string{"users": "users.sql", "dump": "shop.sql"},
+		},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+		Options: map[string]string{"database": "shop"},
+	}, sbx)
+	var aerr *adapter.Error
+	if err == nil || !errors.As(err, &aerr) || aerr.Code != "restore_failed" {
+		t.Fatalf("provision error = %v, want restore_failed from the definer gate", err)
+	}
+	if !strings.Contains(aerr.Message, "definers that do not exist") {
+		t.Errorf("message = %q, want the orphaned-definer verdict", aerr.Message)
+	}
+}
+
+// rootExec runs one statement through the drill engine as root.
+func rootExec(t *testing.T, ctx context.Context, sbx *docker.Sandbox, stmt string) *sandbox.ExecResult {
+	t.Helper()
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{
+		Argv: []string{"mysql", "-h", "127.0.0.1", "-u", "root", "-N", "-B", "-e", stmt},
+	})
+	if err != nil {
+		t.Fatalf("exec %q: %v", stmt, err)
+	}
+	return out
+}
+
+// rootRows runs one statement as root and returns its result rows,
+// failing the test if the statement itself errors.
+func rootRows(t *testing.T, ctx context.Context, sbx *docker.Sandbox, stmt string) []string {
+	t.Helper()
+	out := rootExec(t, ctx, sbx, stmt)
+	if out.ExitCode != 0 {
+		t.Fatalf("%q: exit %d: %s", stmt, out.ExitCode, out.Stderr)
+	}
+	var rows []string
+	for _, line := range strings.Split(string(out.Stdout), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			rows = append(rows, line)
+		}
+	}
+	return rows
+}
+
+// buildAdapterOnPath builds the adapter binary and puts it on PATH under
+// its protocol name.
+func buildAdapterOnPath(t *testing.T, ctx context.Context) {
+	t.Helper()
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-mysql"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// makeAccountedFixture seeds a throwaway engine with an application
+// account, a granted database (non-default collation), and DEFINER
+// objects; it extracts a real mysqldump (--routines, so the definer gate
+// has a routine in scope) plus an accounts-and-grants script exported the
+// way run-books do it — SHOW CREATE USER with the password hash printed as
+// hex, and SHOW GRANTS — into one source directory.
+func makeAccountedFixture(t *testing.T, ctx context.Context, provider *docker.Provider) string {
+	t.Helper()
+	dir := t.TempDir()
+	seed, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+	awaitReady(t, ctx, seed)
+
+	for _, stmt := range []string{
+		"CREATE USER 'app'@'%' IDENTIFIED BY '" + usersFixturePassword + "'",
+		"CREATE DATABASE shop CHARACTER SET utf8mb4 COLLATE utf8mb4_bin",
+		"CREATE TABLE shop.orders (id INT PRIMARY KEY, total DECIMAL(10,2))",
+		"INSERT INTO shop.orders VALUES (1, 10.50), (2, 20.00)",
+		"GRANT SELECT, EXECUTE ON shop.* TO 'app'@'%'",
+		"CREATE DEFINER='app'@'%' SQL SECURITY DEFINER VIEW shop.v_orders AS SELECT count(*) AS n FROM shop.orders",
+		"CREATE DEFINER='app'@'%' PROCEDURE shop.p_count() SQL SECURITY DEFINER SELECT count(*) FROM shop.orders",
+	} {
+		mustExec(t, ctx, seed, "mysql", "-h", "127.0.0.1", "-u", "root", "-e", stmt)
+	}
+	mustExec(t, ctx, seed, "mysqldump", "-h", "127.0.0.1", "-u", "root", "--routines",
+		"--result-file=/tmp/shop.sql", "shop")
+
+	// The password hash prints as hex so the script survives any encoding;
+	// this is what operators' export tooling does too.
+	createUser, err := seed.Exec(ctx, sandbox.ExecRequest{
+		Argv: []string{"mysql", "-h", "127.0.0.1", "-u", "root",
+			"--init-command=SET SESSION print_identified_with_as_hex = ON",
+			"-N", "-B", "-e", "SHOW CREATE USER 'app'@'%'"},
+	})
+	if err != nil || createUser.ExitCode != 0 {
+		t.Fatalf("export create user: %v (exit %d, stderr %s)", err, createUser.ExitCode, createUser.Stderr)
+	}
+	grants, err := seed.Exec(ctx, sandbox.ExecRequest{
+		Argv: []string{"mysql", "-h", "127.0.0.1", "-u", "root", "-N", "-B",
+			"-e", "SHOW GRANTS FOR 'app'@'%'"},
+	})
+	if err != nil || grants.ExitCode != 0 {
+		t.Fatalf("export grants: %v (exit %d, stderr %s)", err, grants.ExitCode, grants.Stderr)
+	}
+	var script strings.Builder
+	for _, line := range strings.Split(string(createUser.Stdout)+string(grants.Stdout), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			script.WriteString(line + ";\n")
+		}
+	}
+	if !strings.Contains(script.String(), "AS 0x") || !strings.Contains(script.String(), "GRANT SELECT") {
+		t.Fatalf("exported script lacks hash or grants: %s", script.String())
+	}
+	if err := os.WriteFile(filepath.Join(dir, "users.sql"), []byte(script.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.CommandContext(ctx, "docker", "cp", seed.ID()+":/tmp/shop.sql",
+		filepath.Join(dir, "shop.sql")).CombinedOutput(); err != nil {
+		t.Fatalf("extract fixture: %v: %s", err, out)
+	}
+	return dir
+}
