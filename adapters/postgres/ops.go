@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "postgres"
-	adapterVersion = "0.4.0"
+	adapterVersion = "0.5.0"
 
 	defaultUser     = "postgres"
 	defaultDatabase = "postgres"
@@ -80,7 +80,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		scratch = "/tmp"
 	}
 
-	src, perr := resolveSource(req.Source.Kind, req.Source.Path, req.Source.Params)
+	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path, req.Source.Params)
 	if perr != nil {
 		return nil, perr
 	}

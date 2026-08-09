@@ -13,6 +13,35 @@ always called out explicitly.
 
 ### Fixed
 
+- **A drill no longer races the backup job that is writing its source**
+  (postgres 0.5.0, mysql 0.4.0, mongodb 0.3.0, mssql 0.4.0; tracked in
+  #91). When a drill names a directory, the adapter picks the artifact
+  itself — and the newest file there is quite often the one a backup job
+  is writing right now. Measured on all four engines: the partial
+  artifact is picked, and restoring it fails in a different way per
+  engine (postgres "end of file"; mysql loads 24 036 rows then reports
+  `ERROR 1064`, which its classifier calls *corrupt*; mongodb "0
+  document(s) restored"; mssql fails at `RESTORE` — while
+  `RESTORE HEADERONLY` accepts the truncated backup without complaint,
+  so the #88 header probe cannot stand in for this).
+
+  The chosen artifact is now observed twice, a moment apart, and one that
+  changed in between fails the drill as `source_unreadable` with a
+  message naming the fix. It is deliberately **not** skipped in favour of
+  the previous backup: that would prove an older backup while the record
+  implied the newest, and the evidence could not say which one it was. An
+  artifact untouched for longer than the window is taken as finished
+  without any wait, so ordinary drills pay nothing. Artifacts the config
+  names outright are never second-guessed — the operator chose them.
+
+  All four adapter READMEs now also state what `created_at` means for a
+  directory source (the file's modification time, which `cp` without `-p`
+  resets — measured) and recommend the arrangement that removes the race
+  outright: write to a temporary name, rename on completion, so the
+  directory only ever shows finished files.
+
+### Fixed
+
 - **SQL Server drills no longer fail on a healthy backup set** (mssql
   adapter 0.3.0; tracked in #88). A real backup directory holds full,
   differential, and transaction log backups side by side, and the newest

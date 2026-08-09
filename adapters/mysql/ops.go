@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "mysql"
-	adapterVersion = "0.3.0"
+	adapterVersion = "0.4.0"
 
 	defaultUser     = "root"
 	defaultDatabase = "probavi"
@@ -91,7 +91,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	}
 	user, database, scratch := tgt.user, tgt.database, tgt.scratch
 
-	src, perr := resolveSource(req.Source.Kind, req.Source.Path, req.Source.Params)
+	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path, req.Source.Params)
 	if perr != nil {
 		return nil, perr
 	}

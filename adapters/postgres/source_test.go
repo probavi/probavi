@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,7 +30,7 @@ func TestResolveSourceKinds(t *testing.T) {
 	}
 
 	t.Run("pgdump file", func(t *testing.T) {
-		src, perr := resolveSource("pgdump", old, nil)
+		src, perr := resolveSource(context.Background(), "pgdump", old, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -42,7 +43,7 @@ func TestResolveSourceKinds(t *testing.T) {
 	})
 
 	t.Run("pgdump_dir picks newest and ignores directories", func(t *testing.T) {
-		src, perr := resolveSource("pgdump_dir", dir, nil)
+		src, perr := resolveSource(context.Background(), "pgdump_dir", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -55,7 +56,7 @@ func TestResolveSourceKinds(t *testing.T) {
 		tie := t.TempDir()
 		touch(t, tie, "alpha.dump", base)
 		zeta := touch(t, tie, "zeta.dump", base)
-		src, perr := resolveSource("pgdump_dir", tie, nil)
+		src, perr := resolveSource(context.Background(), "pgdump_dir", tie, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -133,9 +134,9 @@ func TestResolveSourceErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, perr := resolveSource(tt.kind, tt.path, tt.params)
+			_, perr := resolveSource(context.Background(), tt.kind, tt.path, tt.params)
 			if perr == nil || perr.Code != tt.wantCode {
-				t.Errorf("resolveSource(%s, %s) = %+v, want %s", tt.kind, tt.path, perr, tt.wantCode)
+				t.Errorf("resolveSource(context.Background(), %s, %s) = %+v, want %s", tt.kind, tt.path, perr, tt.wantCode)
 			}
 		})
 	}
@@ -166,7 +167,7 @@ func resolveSet(t *testing.T, globalsBody, dumpBody string) *resolvedSource {
 	dir := t.TempDir()
 	writeAt(t, dir, "globals.sql", globalsBody, globalsMtime)
 	writeAt(t, dir, "orders.dump", dumpBody, dumpMtime)
-	src, perr := resolveSource("pgdump_with_globals", dir, map[string]string{"globals": "globals.sql"})
+	src, perr := resolveSource(context.Background(), "pgdump_with_globals", dir, map[string]string{"globals": "globals.sql"})
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -235,7 +236,7 @@ func TestResolveWithGlobalsIgnoresSiblings(t *testing.T) {
 	writeAt(t, dir, "billing.dump", "OTHER", dumpMtime)
 	params := map[string]string{"globals": "globals.sql", "dump": "orders.dump"}
 
-	before, perr := resolveSource("pgdump_with_globals", dir, params)
+	before, perr := resolveSource(context.Background(), "pgdump_with_globals", dir, params)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -245,7 +246,7 @@ func TestResolveWithGlobalsIgnoresSiblings(t *testing.T) {
 	}
 
 	writeAt(t, dir, "billing.dump", "REDONE", dumpMtime)
-	after, perr := resolveSource("pgdump_with_globals", dir, params)
+	after, perr := resolveSource(context.Background(), "pgdump_with_globals", dir, params)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -265,7 +266,7 @@ func TestResolveWithGlobalsPicksNewestNonGlobals(t *testing.T) {
 	writeAt(t, dir, "old.dump", "OLD", dumpMtime)
 	writeAt(t, dir, "new.dump", "NEW", globalsMtime)
 
-	src, perr := resolveSource("pgdump_with_globals", dir, map[string]string{"globals": "globals.sql"})
+	src, perr := resolveSource(context.Background(), "pgdump_with_globals", dir, map[string]string{"globals": "globals.sql"})
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}

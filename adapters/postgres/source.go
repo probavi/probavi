@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -31,18 +32,18 @@ type resolvedSource struct {
 //	pgdump_with_globals — path is a directory holding a pg_dumpall
 //	                      --globals-only script (params.globals) and one dump
 //	pgbackrest          — path is a pgBackRest repository directory (filesystem repo)
-func resolveSource(kind, path string, params map[string]string) (*resolvedSource, *protoError) {
+func resolveSource(ctx context.Context, kind, path string, params map[string]string) (*resolvedSource, *protoError) {
 	switch kind {
 	case "pgdump":
 		return resolveFile(path)
 	case "pgdump_dir":
-		latest, perr := latestDumpIn(path)
+		latest, perr := latestDumpIn(ctx, path)
 		if perr != nil {
 			return nil, perr
 		}
 		return resolveFile(latest)
 	case "pgdump_with_globals":
-		return resolveWithGlobals(path, params)
+		return resolveWithGlobals(ctx, path, params)
 	case "pgbackrest":
 		return resolveRepo(path)
 	default:
@@ -73,7 +74,7 @@ func resolveSource(kind, path string, params map[string]string) (*resolvedSource
 // mirrors dirChecksum's framing (role NUL size NUL content, fixed order)
 // with the member's role in place of its relative path, so the same pair
 // always hashes the same and any change to either member changes the hash.
-func resolveWithGlobals(dir string, params map[string]string) (*resolvedSource, *protoError) {
+func resolveWithGlobals(ctx context.Context, dir string, params map[string]string) (*resolvedSource, *protoError) {
 	info, err := os.Stat(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -96,7 +97,7 @@ func resolveWithGlobals(dir string, params map[string]string) (*resolvedSource, 
 		return nil, perr
 	}
 
-	dumpPath, perr := chooseDump(dir, params["dump"], globalsName)
+	dumpPath, perr := chooseDump(ctx, dir, params["dump"], globalsName)
 	if perr != nil {
 		return nil, perr
 	}
@@ -161,7 +162,7 @@ func memberName(value, param string) (string, *protoError) {
 // chooseDump resolves which dump the drill restores: the one params.dump
 // names, or — so a drill against a rotating backup directory keeps working
 // unattended — the newest file that is not the globals script.
-func chooseDump(dir, requested, globalsName string) (string, *protoError) {
+func chooseDump(ctx context.Context, dir, requested, globalsName string) (string, *protoError) {
 	if requested != "" {
 		name, perr := memberName(requested, "dump")
 		if perr != nil {
@@ -180,6 +181,11 @@ func chooseDump(dir, requested, globalsName string) (string, *protoError) {
 	if newest == "" {
 		return "", protoErr("source_not_found", false,
 			"backup directory %s holds no dump beside the globals script %s", dir, globalsName)
+	}
+	// The adapter chose this file, not the operator: make sure a backup job
+	// is not still writing it (see settle.go).
+	if perr := assertSettled(ctx, newest, settleWindow); perr != nil {
+		return "", perr
 	}
 	return newest, nil
 }
@@ -320,13 +326,18 @@ func resolveFile(path string) (*resolvedSource, *protoError) {
 }
 
 // latestDumpIn picks the newest regular file in dir.
-func latestDumpIn(dir string) (string, *protoError) {
+func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
 	best, perr := newestFileIn(dir, "")
 	if perr != nil {
 		return "", perr
 	}
 	if best == "" {
 		return "", protoErr("source_not_found", false, "backup directory %s contains no files", dir)
+	}
+	// The adapter chose this file, not the operator: make sure a backup job
+	// is not still writing it (see settle.go).
+	if perr := assertSettled(ctx, best, settleWindow); perr != nil {
+		return "", perr
 	}
 	return best, nil
 }
