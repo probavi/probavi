@@ -28,7 +28,9 @@ func TestResolveSourceKinds(t *testing.T) {
 		if perr != nil {
 			t.Fatalf("resolve: %+v", perr)
 		}
-		if src.path != latest || src.sizeBytes != 3 || src.gzip || src.createdAt == nil {
+		// createdAt stays empty: a mongodump archive records no backup
+		// timestamp, and a file's mtime dates a copy rather than a backup.
+		if src.path != latest || src.sizeBytes != 3 || src.gzip || src.createdAt != nil {
 			t.Errorf("src = %+v", src)
 		}
 	})

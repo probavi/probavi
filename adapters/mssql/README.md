@@ -91,12 +91,6 @@ directory only ever shows finished files, and that is the arrangement
 worth having. An artifact the config names outright is never
 second-guessed this way: the operator chose that file.
 
-**`created_at` is the file's modification time**, not the time the backup
-was taken. Copying backups around without preserving timestamps (`cp`
-without `-p`, `rsync` without `-t`, most object-store downloads) resets
-it, and a stale artifact then looks like the newest one — preserve
-timestamps, or point the drill at a fixed path when it matters.
-
 Selection is not part of the measured recovery time. `transfer_seconds`
 counts the chosen artifact's transfer only — an operator recovering for
 real reads their backup catalogue instead of probing.
@@ -219,13 +213,56 @@ The declared `sql_runner` absorbs both SQL Server quirks declaratively
 
 Checks are plain T-SQL against the restored database.
 
+### When the backup was taken
+
+`created_at` in the evidence record is an absolute instant, and the honest
+answer is often "not derivable". A file's modification time is **not** the
+backup's creation time: copying a backup without preserving timestamps
+(`cp` without `-p`, `rsync` without `-t`, most object-store downloads)
+resets it, and a month-old artifact then looks like last night's. This
+adapter therefore never reports an mtime as a creation time.
+
+The backup header the adapter already reads to pick the right backup set
+(see above) also carries `BackupFinishDate`, and that is what dates the
+backup — the set that was actually restored, not the file that held it.
+
+What no backup format records is a UTC offset — the value is the wall
+clock of the host that took the backup, and reading it as UTC would be
+wrong by that host's offset (measured: a backup taken at 12:08 UTC on a
+host in `Asia/Tokyo` is written as `21:08`). The offset is a fact only you
+have, so the drill declares it:
+
+```yaml
+source:
+  kind: bak_dir
+  path: /backups/shop
+  params:
+    backup_timezone: Europe/Budapest    # IANA name, not an offset
+```
+
+A **zone name**, not a `+02:00`: the offset depends on the date of the
+backup, so a January backup in Budapest is `+01:00` and a July one
+`+02:00` — a fixed number in a config file would be wrong for half of
+every year. An unknown name fails the drill immediately rather than
+quietly dropping the timestamp it was meant to make exact. Zone data is
+compiled into the adapter, so no `/usr/share/zoneinfo` is needed on the
+host.
+
+Without the declaration, `backup.created_at` in the record is **null** —
+the evidence schema provides for that precisely because a backup's own
+creation time is not always derivable. One hour a year is genuinely
+ambiguous: when clocks go back, the same wall clock happens twice, and
+the earlier of the two is chosen.
+
 ## Backup identity
 
 - `checksum`: SHA-256 over the selected artifact's bytes — the file the
   engine identified as holding a full backup, not merely the newest file.
-- `created_at`: the artifact's modification time — the closest derivable
-  stand-in for the backup's creation time; treat it accordingly if you
-  copy backup files around without preserving timestamps.
+- `created_at`: the restored backup set's own `BackupFinishDate`, placed
+  in the zone the drill declares (see above); null when no zone was
+  declared. For `bak_with_logins` it dates the backup member: a logins
+  script carries no timestamp of its own, so the pair's freshness rests on
+  the member that can be dated.
 
 ## Drill config options
 

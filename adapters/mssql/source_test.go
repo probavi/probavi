@@ -164,7 +164,7 @@ func TestIdentityOfChosenArtifact(t *testing.T) {
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
-	src, perr := plan.identity(older)
+	src, perr := plan.identity(older, nil)
 	if perr != nil {
 		t.Fatalf("identity: %+v", perr)
 	}
@@ -174,13 +174,12 @@ func TestIdentityOfChosenArtifact(t *testing.T) {
 	if src.sizeBytes != int64(len("TAPE"+"FULL-PAYLOAD")) {
 		t.Errorf("sizeBytes = %d, want the chosen artifact's size", src.sizeBytes)
 	}
-	info, err := os.Stat(older)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := info.ModTime().UTC().Format("2006-01-02T15:04:05.000Z")
-	if src.createdAt == nil || *src.createdAt != want {
-		t.Errorf("createdAt = %v, want the chosen artifact's mtime %s", src.createdAt, want)
+	// Nothing dates the artifact here: the engine reported no completion
+	// time (identity was handed none), and the file's mtime is
+	// deliberately not used — copying a backup resets it while leaving a
+	// perfectly valid backup behind.
+	if src.createdAt != nil {
+		t.Errorf("createdAt = %v, want none — an mtime is not a backup timestamp", *src.createdAt)
 	}
 	if src.loginsPath != "" {
 		t.Errorf("loginsPath = %s, want empty for a plain directory", src.loginsPath)
@@ -279,7 +278,7 @@ func TestCompositeIdentity(t *testing.T) {
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
-	src, perr := plan.identity(chosen)
+	src, perr := plan.identity(chosen, nil)
 	if perr != nil {
 		t.Fatalf("identity: %+v", perr)
 	}
@@ -290,18 +289,15 @@ func TestCompositeIdentity(t *testing.T) {
 		t.Errorf("sizeBytes = %d, want the sum of both members", src.sizeBytes)
 	}
 
-	// created_at is the OLDER member's mtime: the set is only as current
-	// as its stalest member.
-	older, err := os.Stat(filepath.Join(dir, "logins.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := older.ModTime().UTC().Format("2006-01-02T15:04:05.000Z")
-	if src.createdAt == nil || *src.createdAt != want {
-		t.Errorf("createdAt = %v, want the older member's mtime %s", src.createdAt, want)
+	// Neither member is dated here: identity was handed no completion time,
+	// and a logins script is operator-authored and never carries one. The
+	// set's age used to be the older member's mtime, a rule that only ever
+	// worked while mtimes were trusted; nothing replaces it with a guess.
+	if src.createdAt != nil {
+		t.Errorf("createdAt = %v, want none", *src.createdAt)
 	}
 
-	again, perr := plan.identity(chosen)
+	again, perr := plan.identity(chosen, nil)
 	if perr != nil {
 		t.Fatalf("identity again: %+v", perr)
 	}
@@ -310,26 +306,23 @@ func TestCompositeIdentity(t *testing.T) {
 	}
 }
 
-func TestCompositeIdentityCreatedAtTracksStalestMember(t *testing.T) {
+// TestCompositeIdentityIsDatedByTheBackup proves what now dates a
+// two-member source: the completion time the engine read out of the
+// backup header, which is the only member that carries one at all.
+func TestCompositeIdentityIsDatedByTheBackup(t *testing.T) {
 	dir := withLoginsDir(t)
 	chosen := filepath.Join(dir, "orders.bak")
-	touch(t, chosen, 2*time.Hour)
-
 	plan, perr := resolveSource("bak_with_logins", dir, map[string]string{"logins": "logins.sql", "bak": "orders.bak"})
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
-	src, perr := plan.identity(chosen)
+	stamp := "2026-08-09T21:08:21.000+09:00"
+	src, perr := plan.identity(chosen, &stamp)
 	if perr != nil {
 		t.Fatalf("identity: %+v", perr)
 	}
-	info, err := os.Stat(chosen)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := info.ModTime().UTC().Format("2006-01-02T15:04:05.000Z")
-	if src.createdAt == nil || *src.createdAt != want {
-		t.Errorf("createdAt = %v, want the now-older backup mtime %s", src.createdAt, want)
+	if src.createdAt == nil || *src.createdAt != stamp {
+		t.Errorf("createdAt = %v, want the backup's own completion time", src.createdAt)
 	}
 }
 
@@ -341,7 +334,7 @@ func TestCompositeIdentityCoversBothMembers(t *testing.T) {
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
-	base, perr := plan.identity(chosen)
+	base, perr := plan.identity(chosen, nil)
 	if perr != nil {
 		t.Fatalf("identity: %+v", perr)
 	}
@@ -349,7 +342,7 @@ func TestCompositeIdentityCoversBothMembers(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "logins.sql"), []byte("CREATE LOGIM"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	loginsChanged, perr := plan.identity(chosen)
+	loginsChanged, perr := plan.identity(chosen, nil)
 	if perr != nil {
 		t.Fatalf("identity: %+v", perr)
 	}
@@ -363,7 +356,7 @@ func TestCompositeIdentityCoversBothMembers(t *testing.T) {
 	if err := os.WriteFile(chosen, []byte("TAPEBAK-BYTEZ"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	bakChanged, perr := plan.identity(chosen)
+	bakChanged, perr := plan.identity(chosen, nil)
 	if perr != nil {
 		t.Fatalf("identity: %+v", perr)
 	}
@@ -392,11 +385,11 @@ func TestCompositeIdentityIsUnambiguous(t *testing.T) {
 	}
 	planA, chosenA := newPlan(t, "A", "B")
 	planB, chosenB := newPlan(t, "AB", "")
-	a, perr := planA.identity(chosenA)
+	a, perr := planA.identity(chosenA, nil)
 	if perr != nil {
 		t.Fatalf("identity a: %+v", perr)
 	}
-	b, perr := planB.identity(chosenB)
+	b, perr := planB.identity(chosenB, nil)
 	if perr != nil {
 		t.Fatalf("identity b: %+v", perr)
 	}
@@ -412,7 +405,7 @@ func TestCompositeIdentityIgnoresSiblings(t *testing.T) {
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
-	base, perr := plan.identity(chosen)
+	base, perr := plan.identity(chosen, nil)
 	if perr != nil {
 		t.Fatalf("identity: %+v", perr)
 	}
@@ -421,7 +414,7 @@ func TestCompositeIdentityIgnoresSiblings(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "in-flight.tmp"), []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	after, perr := plan.identity(chosen)
+	after, perr := plan.identity(chosen, nil)
 	if perr != nil {
 		t.Fatalf("identity: %+v", perr)
 	}

@@ -73,13 +73,6 @@ was. A backup job that writes to a temporary name and renames on
 completion never trips this at all — the directory only ever shows
 finished files, and that is the arrangement worth having.
 
-**`created_at` is the file's modification time**, which is the closest
-thing available here, not the time the backup was taken. Copying backups
-around without preserving timestamps (`cp` without `-p`, `rsync` without
-`-t`, most object-store downloads) resets it, and a stale artifact then
-looks like the newest one. Preserve timestamps, or point the drill at a
-fixed path when it matters.
-
 An artifact the config names outright is never second-guessed this way:
 the operator chose that file, so the drill restores that file.
 
@@ -187,14 +180,29 @@ adapter — use raw expressions. This is the protocol's design working as
 intended: the engine dialect is absorbed by the adapter's declared
 template, and the core never learns it (§6.1).
 
+### When the backup was taken
+
+`created_at` in the evidence record is **always null** for this adapter,
+and that is deliberate. A mongodump archive records no backup timestamp —
+its header carries the archive format version, the server version and the
+tool version, and nothing else (measured against MongoDB 7). The file's
+modification time is not a substitute: copying a backup without
+preserving timestamps resets it, and a month-old artifact then looks like
+last night's, so reporting it as a creation time would put a claim in a
+signed record that the backup does not support.
+
+The `source.params.backup_timezone` key the other adapters use to place a
+backup's wall clock in a zone has nothing to act on here, and a config
+that sets it is **refused** rather than silently ignored — an operator who
+wrote it is expecting an accuracy this kind cannot deliver.
+
 ## Backup identity
 
 - `checksum`: SHA-256 over the selected artifact's bytes (for
   `mongodump_dir`, the chosen file). For gzip archives the hash covers the
   compressed bytes exactly as stored.
-- `created_at`: the artifact's modification time — the closest derivable
-  stand-in for the backup's creation time; treat it accordingly if you
-  copy backup files around without preserving timestamps.
+- `created_at`: always null — a mongodump archive records no backup
+  timestamp, and an mtime dates a copy rather than a backup (see above).
 
 ## Drill config options
 

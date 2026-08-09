@@ -37,8 +37,11 @@ func TestResolveSourceKinds(t *testing.T) {
 		if src.path != old || src.sizeBytes != int64(len("a-old.dump")) {
 			t.Errorf("src = %+v", src)
 		}
-		if src.createdAt == nil || *src.createdAt != "2026-07-30T12:00:00.000Z" {
-			t.Errorf("createdAt = %v, want the file mtime in RFC 3339 ms", src.createdAt)
+		// The fixture is not a custom-format archive, so nothing dates it:
+		// the file's mtime is deliberately not used, because copying a
+		// backup resets it while leaving a perfectly valid backup behind.
+		if src.createdAt != nil {
+			t.Errorf("createdAt = %v, want none — an mtime is not a backup timestamp", *src.createdAt)
 		}
 	})
 
@@ -185,12 +188,13 @@ func TestResolveWithGlobalsIdentity(t *testing.T) {
 	if want := int64(len("ROLES") + len("DUMP")); src.sizeBytes != want {
 		t.Errorf("sizeBytes = %d, want %d — both members count", src.sizeBytes, want)
 	}
-	// The older member dates the set: a set is only as current as its
-	// stalest part, and a globals script older than the dump is precisely
-	// the gap this kind exists to close. Here the globals are the *newer*
-	// member, so taking the newest would silently pass this.
-	if src.createdAt == nil || *src.createdAt != "2026-07-29T08:00:00.000Z" {
-		t.Errorf("createdAt = %v, want the older member's mtime", src.createdAt)
+	// Neither member is dated here: the fixture is not a real archive, and
+	// the globals script carries no timestamp of its own in any case
+	// (measured — pg_dumpall --globals-only writes none). The set's age
+	// used to be the older member's mtime, a rule that only ever worked
+	// while mtimes were trusted; nothing replaces it with a guess.
+	if src.createdAt != nil {
+		t.Errorf("createdAt = %v, want none", *src.createdAt)
 	}
 }
 

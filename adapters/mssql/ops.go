@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "mssql"
-	adapterVersion = "0.4.0"
+	adapterVersion = "0.5.0"
 
 	defaultUser     = "sa"
 	defaultDatabase = "probavi"
@@ -161,7 +161,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if perr != nil {
 		return nil, perr
 	}
-	src, perr := plan.identity(chosen.hostPath)
+	src, perr := plan.identity(chosen.hostPath, chosen.createdAt)
 	if perr != nil {
 		return nil, perr
 	}

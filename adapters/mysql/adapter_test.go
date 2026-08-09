@@ -299,7 +299,10 @@ func assertProvisionResult(t *testing.T, payload json.RawMessage) {
 	if res.SourceIdentity.Checksum != "sha256:"+hex.EncodeToString(sum[:]) {
 		t.Errorf("checksum = %s — must be a real measurement of the fixture bytes", res.SourceIdentity.Checksum)
 	}
-	if res.SourceIdentity.SizeBytes != 20 || res.SourceIdentity.CreatedAt == nil {
+	// The fixture carries no mysqldump trailer and the drill declares no
+	// backup zone, so there is no creation time to report — and none is
+	// invented from the file's mtime.
+	if res.SourceIdentity.SizeBytes != 20 || res.SourceIdentity.CreatedAt != nil {
 		t.Errorf("source_identity = %+v", res.SourceIdentity)
 	}
 	if res.Connection.Database != "orders" || res.Connection.User != "orders_admin" ||

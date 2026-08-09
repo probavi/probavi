@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // backupset.go decides which backup a drill restores, and from which set
@@ -48,6 +49,13 @@ const (
 	headerColumnCount = 6
 	headerTypeIndex   = 2
 	headerPositionIdx = 5
+	// BackupFinishDate sits far to the right of the two columns the
+	// selection needs, so a row that stops short of it still selects
+	// normally — it simply carries no date. Measured against SQL Server
+	// 2022, where a header row has 59 columns.
+	headerFinishIdx   = 18
+	headerFinishCount = 19
+	headerClockLayout = "2006-01-02 15:04:05.000"
 )
 
 // backupMediaMagic are the first four bytes of SQL Server backup media,
@@ -86,6 +94,11 @@ func looksLikeBackupMedia(path string) bool {
 type backupSet struct {
 	position   int
 	backupType int
+	// finishedAt is the wall clock the engine recorded when the backup
+	// completed, with no offset — SQL Server stores the backup server's
+	// local time (measured). Empty when the row does not reach that
+	// column.
+	finishedAt string
 }
 
 // probeBackupSets asks the engine what a transferred file holds. The path
@@ -136,7 +149,11 @@ func parseBackupSets(stdout []byte) ([]backupSet, *protoError) {
 			return nil, protoErr("source_corrupt", false,
 				"cannot read the backup header: backup set position is not a number")
 		}
-		sets = append(sets, backupSet{position: position, backupType: kind})
+		set := backupSet{position: position, backupType: kind}
+		if len(fields) >= headerFinishCount {
+			set.finishedAt = strings.TrimSpace(fields[headerFinishIdx])
+		}
+		sets = append(sets, set)
 	}
 	// No rows at all is not a verdict: the engine answered without
 	// classifying anything, which a real server does not do for media it
@@ -154,6 +171,30 @@ func knownBackupType(t int) bool {
 		return true
 	}
 	return false
+}
+
+// finishedAtOf returns the completion wall clock of one backup set.
+func finishedAtOf(sets []backupSet, position int) string {
+	for _, s := range sets {
+		if s.position == position {
+			return s.finishedAt
+		}
+	}
+	return ""
+}
+
+// backupFinishedAt turns a set's recorded wall clock into an instant using
+// the operator-declared zone. Nil whenever the answer would be a guess:
+// no zone declared, or no date in the header.
+func backupFinishedAt(clock string, loc *time.Location) *string {
+	if loc == nil || clock == "" {
+		return nil
+	}
+	t, err := time.ParseInLocation(headerClockLayout, clock, loc)
+	if err != nil {
+		return nil
+	}
+	return formatCreatedAt(t)
 }
 
 // newestFullPosition returns the position of the newest full database
@@ -218,9 +259,10 @@ const defaultBackupSet = 1
 
 // selection is the outcome of choosing what to restore.
 type selection struct {
-	hostPath string  // the artifact whose bytes become the backup identity
-	position int     // the backup set inside it (RESTORE ... WITH FILE = n)
-	transfer float64 // seconds spent transferring the chosen artifact
+	hostPath  string  // the artifact whose bytes become the backup identity
+	position  int     // the backup set inside it (RESTORE ... WITH FILE = n)
+	transfer  float64 // seconds spent transferring the chosen artifact
+	createdAt *string // the chosen set's own completion time, if derivable
 }
 
 // selectBackup transfers candidates into the sandbox newest-first and asks
@@ -233,7 +275,7 @@ type selection struct {
 // operator recovering for real reads their backup catalogue instead.
 func selectBackup(ctx context.Context, c *core, plan *sourcePlan, destPath string) (*selection, *protoError) {
 	if plan.fixed != "" {
-		return selectNamed(ctx, c, plan.fixed, destPath)
+		return selectNamed(ctx, c, plan.fixed, destPath, plan.loc)
 	}
 	rejected := make([]string, 0, len(plan.candidates))
 	for _, candidate := range plan.candidates {
@@ -265,7 +307,8 @@ func selectBackup(ctx context.Context, c *core, plan *sourcePlan, destPath strin
 			if perr := assertSettled(ctx, candidate, settleWindow); perr != nil {
 				return nil, perr
 			}
-			return &selection{hostPath: candidate, position: position, transfer: put.DurationSeconds}, nil
+			return &selection{hostPath: candidate, position: position, transfer: put.DurationSeconds,
+				createdAt: backupFinishedAt(finishedAtOf(sets, position), plan.loc)}, nil
 		}
 		rejected = append(rejected, fmt.Sprintf("%s: %s", filepath.Base(candidate), describeSets(sets)))
 	}
@@ -275,7 +318,7 @@ func selectBackup(ctx context.Context, c *core, plan *sourcePlan, destPath strin
 // selectNamed handles an artifact the drill config names outright: it is
 // transferred and probed like any other, but never skipped — the operator
 // asked for this file, so the answer is about this file.
-func selectNamed(ctx context.Context, c *core, hostPath, destPath string) (*selection, *protoError) {
+func selectNamed(ctx context.Context, c *core, hostPath, destPath string, loc *time.Location) (*selection, *protoError) {
 	put, perr := c.putFile(ctx, putFileArgs{SourcePath: hostPath, DestPath: destPath, Mode: "0600"})
 	if perr != nil {
 		return nil, perr
@@ -294,7 +337,8 @@ func selectNamed(ctx context.Context, c *core, hostPath, destPath string) (*sele
 				"point the drill at the full backup it builds on",
 			filepath.Base(hostPath), describeSets(sets))
 	}
-	return &selection{hostPath: hostPath, position: position, transfer: put.DurationSeconds}, nil
+	return &selection{hostPath: hostPath, position: position, transfer: put.DurationSeconds,
+		createdAt: backupFinishedAt(finishedAtOf(sets, position), loc)}, nil
 }
 
 // noFullBackup explains an exhausted directory scan: what was examined and

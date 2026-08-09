@@ -22,9 +22,9 @@ type resolvedSource struct {
 	// always match the actual bytes — a drill must not fail over a
 	// mislabeled but valid backup.
 	gzip bool
-	// createdAt is the artifact's modification time (RFC 3339 UTC,
-	// milliseconds) — the closest derivable stand-in for the backup's own
-	// creation time; nil if unavailable.
+	// createdAt is always nil for this adapter: a mongodump archive
+	// records no backup timestamp, and a file's mtime dates a copy rather
+	// than a backup (see zone.go).
 	createdAt *string
 }
 
@@ -74,13 +74,11 @@ func resolveFile(path string) (*resolvedSource, *protoError) {
 	if perr != nil {
 		return nil, perr
 	}
-	created := info.ModTime().UTC().Format("2006-01-02T15:04:05.000Z")
 	return &resolvedSource{
 		path:      path,
 		checksum:  checksum,
 		sizeBytes: info.Size(),
 		gzip:      gzip,
-		createdAt: &created,
 	}, nil
 }
 
