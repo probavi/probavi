@@ -32,25 +32,25 @@ func writeRepoFixture(t *testing.T) string {
 
 func TestDirChecksum(t *testing.T) {
 	repo := writeRepoFixture(t)
-	sum1, size, newest, perr := dirChecksum(repo)
+	sum1, size, perr := dirChecksum(repo)
 	if perr != nil {
 		t.Fatalf("dirChecksum: %+v", perr)
 	}
-	if size != int64(len("backup-info")+len("wal-bytes")) || newest.IsZero() {
-		t.Errorf("size=%d newest=%v", size, newest)
+	if size != int64(len("backup-info")+len("wal-bytes")) {
+		t.Errorf("size=%d", size)
 	}
-	sum2, _, _, _ := dirChecksum(repo)
+	sum2, _, _ := dirChecksum(repo)
 	if sum1 != sum2 {
 		t.Error("dirChecksum is not deterministic")
 	}
 	if err := os.WriteFile(filepath.Join(repo, "archive/demo/wal-001"), []byte("tampered!"), 0o600); err != nil {
 		t.Fatalf("tamper: %v", err)
 	}
-	if sum3, _, _, _ := dirChecksum(repo); sum3 == sum1 {
+	if sum3, _, _ := dirChecksum(repo); sum3 == sum1 {
 		t.Error("content change must change the tree hash")
 	}
 
-	if _, _, _, perr := dirChecksum(t.TempDir()); perr == nil || perr.Code != "source_not_found" {
+	if _, _, perr := dirChecksum(t.TempDir()); perr == nil || perr.Code != "source_not_found" {
 		t.Errorf("empty dir: %+v, want source_not_found", perr)
 	}
 }
@@ -61,8 +61,8 @@ func TestResolveRepo(t *testing.T) {
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
-	if !strings.HasPrefix(src.checksum, "sha256:") || src.createdAt == nil {
-		t.Errorf("src = %+v", src)
+	if !strings.HasPrefix(src.checksum, "sha256:") || src.createdAt != nil {
+		t.Errorf("src = %+v — a repository's mtimes date copies, not backups", src)
 	}
 
 	file := filepath.Join(t.TempDir(), "f.dump")
@@ -323,21 +323,22 @@ func TestPITRRequestHandling(t *testing.T) {
 	})
 }
 
-func TestRepoNewestMtimeIsCreatedAt(t *testing.T) {
+// TestRepoReportsNoCreationTime pins the deliberate absence: a
+// repository's newest file dates a copy, not a backup, so this kind
+// claims no creation time at all rather than an mtime dressed up as one.
+// pgBackRest records real timestamps in backup.info; reading them is
+// separate work.
+func TestRepoReportsNoCreationTime(t *testing.T) {
 	repo := writeRepoFixture(t)
 	newest := time.Date(2026, 7, 30, 6, 0, 0, 0, time.UTC)
 	if err := os.Chtimes(filepath.Join(repo, "archive/demo/wal-001"), newest, newest); err != nil {
-		t.Fatalf("chtimes: %v", err)
-	}
-	old := newest.Add(-24 * time.Hour)
-	if err := os.Chtimes(filepath.Join(repo, "backup/demo/backup.info"), old, old); err != nil {
 		t.Fatalf("chtimes: %v", err)
 	}
 	src, perr := resolveSource(context.Background(), "pgbackrest", repo, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
-	if *src.createdAt != "2026-07-30T06:00:00.000Z" {
-		t.Errorf("createdAt = %s, want the newest file's mtime", *src.createdAt)
+	if src.createdAt != nil {
+		t.Errorf("createdAt = %s, want none — an mtime is not the backup's creation time", *src.createdAt)
 	}
 }

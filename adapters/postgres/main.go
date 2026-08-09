@@ -7,6 +7,11 @@
 package main
 
 import (
+	// Zone names resolve from an embedded database, so a drill never
+	// fails because the host image ships no /usr/share/zoneinfo
+	// (see zone.go). Standard library; costs ~450 KB of binary.
+	_ "time/tzdata"
+
 	"context"
 	"io"
 	"log/slog"

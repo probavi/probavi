@@ -129,15 +129,53 @@ was. A backup job that writes to a temporary name and renames on
 completion never trips this at all — the directory only ever shows
 finished files, and that is the arrangement worth having.
 
-**`created_at` is the file's modification time**, which is the closest
-thing available here, not the time the backup was taken. Copying backups
-around without preserving timestamps (`cp` without `-p`, `rsync` without
-`-t`, most object-store downloads) resets it, and a stale artifact then
-looks like the newest one. Preserve timestamps, or point the drill at a
-fixed path when it matters.
-
 An artifact the config names outright is never second-guessed this way:
 the operator chose that file, so the drill restores that file.
+
+### When the backup was taken
+
+`created_at` in the evidence record is an absolute instant, and the honest
+answer is often "not derivable". A file's modification time is **not** the
+backup's creation time: copying a backup without preserving timestamps
+(`cp` without `-p`, `rsync` without `-t`, most object-store downloads)
+resets it, and a month-old artifact then looks like last night's. This
+adapter therefore never reports an mtime as a creation time.
+
+A `pg_dump` custom-format archive carries its own creation time in its
+header, and that is what this adapter reads (archive versions 1.14 and
+1.15/1.16 store it at different offsets; both are handled, and a header
+this parser does not recognise yields no timestamp rather than a wrong
+one). A `pgbackrest` repository is dated by nothing this adapter reads
+today — its own `backup.info` records real timestamps, which is separate
+work.
+
+What no backup format records is a UTC offset — the value is the wall
+clock of the host that took the backup, and reading it as UTC would be
+wrong by that host's offset (measured: a backup taken at 12:08 UTC on a
+host in `Asia/Tokyo` is written as `21:08`). The offset is a fact only you
+have, so the drill declares it:
+
+```yaml
+source:
+  kind: pgdump_dir
+  path: /backups/orders
+  params:
+    backup_timezone: Europe/Budapest    # IANA name, not an offset
+```
+
+A **zone name**, not a `+02:00`: the offset depends on the date of the
+backup, so a January backup in Budapest is `+01:00` and a July one
+`+02:00` — a fixed number in a config file would be wrong for half of
+every year. An unknown name fails the drill immediately rather than
+quietly dropping the timestamp it was meant to make exact. Zone data is
+compiled into the adapter, so no `/usr/share/zoneinfo` is needed on the
+host.
+
+Without the declaration, `backup.created_at` in the record is **null** —
+the evidence schema provides for that precisely because a backup's own
+creation time is not always derivable. One hour a year is genuinely
+ambiguous: when clocks go back, the same wall clock happens twice, and
+the earlier of the two is chosen.
 
 ## Backup identity
 
@@ -150,13 +188,11 @@ the operator chose that file, so the drill restores that file.
   `"dump" NUL size NUL content`. Both members are restored, so both are in
   the identity; nothing else in the directory is, because a drill's backup
   identity must cover what that drill restored and no more.
-- `created_at`: the artifact's modification time (for repositories: the
-  newest file's mtime) — the closest derivable stand-in for the backup's
-  creation time; treat it accordingly if you copy backup files around
-  without preserving timestamps. For `pgdump_with_globals` it is the
-  **older** of the two members: a set is only as current as its stalest
-  part, and a globals script older than the dump is precisely the gap this
-  kind exists to close.
+- `created_at`: the backup's own creation time, read from the artifact and
+  placed in the zone the drill declares (see above); null when the backup
+  carries none or no zone was declared. For `pgdump_with_globals` it dates
+  the dump member: a globals script carries no timestamp of its own, so
+  the pair's freshness rests on the member that can be dated.
 
 ## Drill config options
 

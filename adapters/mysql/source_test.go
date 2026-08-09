@@ -20,7 +20,10 @@ func TestResolveSourceFile(t *testing.T) {
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
-	if !strings.HasPrefix(src.checksum, "sha256:") || src.sizeBytes != 7 || src.createdAt == nil {
+	// The fixture carries no mysqldump trailer, so nothing dates it: the
+	// file's mtime is deliberately not used, because copying a backup
+	// resets it while leaving a perfectly valid backup behind.
+	if !strings.HasPrefix(src.checksum, "sha256:") || src.sizeBytes != 7 || src.createdAt != nil {
 		t.Errorf("src = %+v", src)
 	}
 
@@ -179,15 +182,13 @@ func TestResolveWithUsersIdentity(t *testing.T) {
 		t.Errorf("sizeBytes = %d, want the sum of both members", src.sizeBytes)
 	}
 
-	// created_at is the OLDER member's mtime: the set is only as current
-	// as its stalest member.
-	older, err := os.Stat(filepath.Join(dir, "users.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := older.ModTime().UTC().Format("2006-01-02T15:04:05.000Z")
-	if src.createdAt == nil || *src.createdAt != want {
-		t.Errorf("createdAt = %v, want the older member's mtime %s", src.createdAt, want)
+	// Neither member is dated here: the fixture carries no mysqldump
+	// trailer, and an accounts script is operator-authored and never
+	// carries one. The set's age used to be the older member's mtime, a
+	// rule that only ever worked while mtimes were trusted; nothing
+	// replaces it with a guess.
+	if src.createdAt != nil {
+		t.Errorf("createdAt = %v, want none", *src.createdAt)
 	}
 
 	again, perr := resolveSource(context.Background(), "mysqldump_with_users", dir, params)
@@ -199,23 +200,22 @@ func TestResolveWithUsersIdentity(t *testing.T) {
 	}
 }
 
-func TestResolveWithUsersCreatedAtTracksStalestMember(t *testing.T) {
+// TestResolveWithUsersIsDatedByTheDump proves what now dates a two-member
+// source: the dump's own trailer, which is the only member that carries a
+// timestamp at all.
+func TestResolveWithUsersIsDatedByTheDump(t *testing.T) {
 	dir := withUsersDir(t)
-	older := time.Now().Add(-2 * time.Hour)
-	if err := os.Chtimes(filepath.Join(dir, "orders.sql"), older, older); err != nil {
+	dump := filepath.Join(dir, "orders.sql")
+	if err := os.WriteFile(dump, []byte("INSERT ...\n-- Dump completed on 2026-08-09 21:08:17\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	src, perr := resolveSource(context.Background(), "mysqldump_with_users", dir, map[string]string{"users": "users.sql", "dump": "orders.sql"})
+	src, perr := resolveSource(context.Background(), "mysqldump_with_users", dir,
+		map[string]string{"users": "users.sql", "dump": "orders.sql", backupTimezoneParam: "Asia/Tokyo"})
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
-	info, err := os.Stat(filepath.Join(dir, "orders.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := info.ModTime().UTC().Format("2006-01-02T15:04:05.000Z")
-	if src.createdAt == nil || *src.createdAt != want {
-		t.Errorf("createdAt = %v, want the now-older dump mtime %s", src.createdAt, want)
+	if src.createdAt == nil || *src.createdAt != "2026-08-09T21:08:17.000+09:00" {
+		t.Errorf("createdAt = %v, want the dump's own completion time in the declared zone", src.createdAt)
 	}
 }
 

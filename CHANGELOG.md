@@ -11,6 +11,46 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Changed
+
+- **`backup.created_at` now comes from the backup, not from the file's
+  modification time** (postgres 0.5.0, mysql 0.5.0, mongodb 0.4.0, mssql
+  0.5.0; tracked in #91). An mtime dates a copy: `cp` without `-p` resets
+  it (measured), and a month-old artifact then looks like last night's
+  while restoring perfectly — a signed record would carry a fresh-looking
+  timestamp for a stale backup. No adapter reports an mtime as a creation
+  time any more.
+
+  Each format is read where it has something to say: a `pg_dump`
+  custom-format archive stores its creation time in the header (archive
+  1.14 and 1.15/1.16 place it at different offsets — measured across
+  servers 13, 14, 16 and 17, and a header this parser does not recognise
+  yields no timestamp rather than a wrong one), `mysqldump` signs off with
+  `-- Dump completed on ...`, and SQL Server's `BackupFinishDate` comes
+  free with the header probe added in #88. A mongodump archive carries no
+  timestamp at all (measured), so that adapter reports none.
+
+  **What no format records is a UTC offset.** All three store the backup
+  host's wall clock: a backup taken at 12:08 UTC on a host in Asia/Tokyo
+  is written as 21:08, and reading it as UTC would put an instant in the
+  record that is wrong by nine hours. The offset is a fact only the
+  operator has, so a drill declares it with the new
+  `source.params.backup_timezone` — an **IANA zone name**, because the
+  offset depends on the date of the backup: a January backup in
+  Europe/Budapest is +01:00 and a July one +02:00, and a fixed number in a
+  config file would be wrong for half of every year. Zone data is compiled
+  into the adapters, so no `/usr/share/zoneinfo` is needed on the host; an
+  unknown name fails the drill instead of quietly dropping the timestamp;
+  and the mongodb adapter refuses the key outright rather than accept a
+  declaration it cannot honour.
+
+  **Without the declaration `backup.created_at` is null**, which the
+  evidence schema provides for ("the backup's own creation time if
+  derivable"). Two-member sources are dated by the member that carries a
+  timestamp — the companion script never does — and the pgbackrest and
+  xtrabackup kinds report none for now; their own metadata files record
+  real timestamps, which is separate work.
+
 ### Fixed
 
 - **A drill no longer races the backup job that is writing its source**

@@ -33,17 +33,21 @@ type resolvedSource struct {
 //	                      --globals-only script (params.globals) and one dump
 //	pgbackrest          — path is a pgBackRest repository directory (filesystem repo)
 func resolveSource(ctx context.Context, kind, path string, params map[string]string) (*resolvedSource, *protoError) {
+	loc, perr := backupLocation(params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "pgdump":
-		return resolveFile(path)
+		return resolveFile(path, loc)
 	case "pgdump_dir":
 		latest, perr := latestDumpIn(ctx, path)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveFile(latest)
+		return resolveFile(latest, loc)
 	case "pgdump_with_globals":
-		return resolveWithGlobals(ctx, path, params)
+		return resolveWithGlobals(ctx, path, params, loc)
 	case "pgbackrest":
 		return resolveRepo(path)
 	default:
@@ -74,7 +78,7 @@ func resolveSource(ctx context.Context, kind, path string, params map[string]str
 // mirrors dirChecksum's framing (role NUL size NUL content, fixed order)
 // with the member's role in place of its relative path, so the same pair
 // always hashes the same and any change to either member changes the hash.
-func resolveWithGlobals(ctx context.Context, dir string, params map[string]string) (*resolvedSource, *protoError) {
+func resolveWithGlobals(ctx context.Context, dir string, params map[string]string, loc *time.Location) (*resolvedSource, *protoError) {
 	info, err := os.Stat(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -121,22 +125,15 @@ func resolveWithGlobals(ctx context.Context, dir string, params map[string]strin
 		}
 	}
 
-	// The older mtime, not the newer: a two-member set is only as current
-	// as its stalest member. Stale globals are precisely the failure this
-	// kind exists to surface — a role added after the globals were taken is
-	// missing, and the restore fails on its grants. (The pgbackrest kind
-	// takes the newest mtime for the opposite and equally deliberate
-	// reason: a repository's newest file is its latest backup.)
-	created := globals.ModTime()
-	if dump.ModTime().Before(created) {
-		created = dump.ModTime()
-	}
-	stamp := created.UTC().Format("2006-01-02T15:04:05.000Z")
+	// The dump's own header dates this source. The globals script carries
+	// no timestamp of its own (measured: pg_dumpall --globals-only writes
+	// none), so the pair's freshness rests on the member that can be
+	// dated — the README says so rather than letting the field imply more.
 	return &resolvedSource{
 		path:        dumpPath,
 		checksum:    fmt.Sprintf("sha256:%s", hex.EncodeToString(h.Sum(nil))),
 		sizeBytes:   globals.Size() + dump.Size(),
-		createdAt:   &stamp,
+		createdAt:   archiveCreatedAt(dumpPath, loc),
 		globalsPath: globalsPath,
 	}, nil
 }
@@ -235,22 +232,25 @@ func resolveRepo(dir string) (*resolvedSource, *protoError) {
 		return nil, protoErr("invalid_request", false,
 			"source path %s is a file; the pgbackrest kind expects a repository directory", dir)
 	}
-	checksum, size, newest, perr := dirChecksum(dir)
+	checksum, size, perr := dirChecksum(dir)
 	if perr != nil {
 		return nil, perr
 	}
-	created := newest.UTC().Format("2006-01-02T15:04:05.000Z")
-	return &resolvedSource{path: dir, checksum: checksum, sizeBytes: size, createdAt: &created}, nil
+	// A pgBackRest repository records its own backup timestamps in
+	// backup.info; reading them is separate work, so until then this kind
+	// reports no creation time rather than the newest file's mtime, which
+	// dates a copy rather than a backup.
+	return &resolvedSource{path: dir, checksum: checksum, sizeBytes: size}, nil
 }
 
 // dirChecksum hashes a directory tree canonically: entries sorted by
 // relative path; regular files contribute path, size, and content bytes,
 // symlinks contribute path and target. The same tree always hashes the
 // same, any content change changes the hash.
-func dirChecksum(root string) (string, int64, time.Time, *protoError) {
+func dirChecksum(root string) (string, int64, *protoError) {
 	h := sha256.New()
 	var total int64
-	var newest time.Time
+	var files int
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -259,18 +259,18 @@ func dirChecksum(root string) (string, int64, time.Time, *protoError) {
 		if err != nil {
 			return err
 		}
-		return hashEntry(h, path, rel, d, &total, &newest)
+		return hashEntry(h, path, rel, d, &total, &files)
 	})
 	if err != nil {
-		return "", 0, time.Time{}, protoErr("source_unreadable", false, "read backup repository: %v", err)
+		return "", 0, protoErr("source_unreadable", false, "read backup repository: %v", err)
 	}
-	if newest.IsZero() {
-		return "", 0, time.Time{}, protoErr("source_not_found", false, "backup repository %s contains no files", root)
+	if files == 0 {
+		return "", 0, protoErr("source_not_found", false, "backup repository %s contains no files", root)
 	}
-	return fmt.Sprintf("sha256:%s", hex.EncodeToString(h.Sum(nil))), total, newest, nil
+	return fmt.Sprintf("sha256:%s", hex.EncodeToString(h.Sum(nil))), total, nil
 }
 
-func hashEntry(h io.Writer, path, rel string, d os.DirEntry, total *int64, newest *time.Time) error {
+func hashEntry(h io.Writer, path, rel string, d os.DirEntry, total *int64, files *int) error {
 	switch {
 	case d.Type().IsRegular():
 		info, err := d.Info()
@@ -278,9 +278,7 @@ func hashEntry(h io.Writer, path, rel string, d os.DirEntry, total *int64, newes
 			return err
 		}
 		*total += info.Size()
-		if info.ModTime().After(*newest) {
-			*newest = info.ModTime()
-		}
+		*files++
 		fmt.Fprintf(h, "%s\x00%d\x00", rel, info.Size())
 		f, err := os.Open(path)
 		if err != nil {
@@ -301,7 +299,7 @@ func hashEntry(h io.Writer, path, rel string, d os.DirEntry, total *int64, newes
 	return nil
 }
 
-func resolveFile(path string) (*resolvedSource, *protoError) {
+func resolveFile(path string, loc *time.Location) (*resolvedSource, *protoError) {
 	info, err := os.Stat(path)
 	switch {
 	case os.IsNotExist(err):
@@ -316,12 +314,11 @@ func resolveFile(path string) (*resolvedSource, *protoError) {
 	if perr != nil {
 		return nil, perr
 	}
-	created := info.ModTime().UTC().Format("2006-01-02T15:04:05.000Z")
 	return &resolvedSource{
 		path:      path,
 		checksum:  checksum,
 		sizeBytes: info.Size(),
-		createdAt: &created,
+		createdAt: archiveCreatedAt(path, loc),
 	}, nil
 }
 

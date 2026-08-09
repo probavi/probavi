@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 )
 
 // resolvedSource is the backup identity of what a drill actually restored.
@@ -36,6 +37,9 @@ type sourcePlan struct {
 	skipped    []string // entries that are not backup media, for diagnostics
 	dir        string   // the configured directory, for diagnostics
 	loginsPath string   // bak_with_logins only
+	// loc is the zone the operator declared the backup host was in; nil
+	// when none was declared, in which case no creation time is reported.
+	loc *time.Location
 }
 
 // resolveSource maps a source kind to a plan for finding one restorable
@@ -46,20 +50,24 @@ type sourcePlan struct {
 //	bak_with_logins — path is a directory holding a server-logins T-SQL
 //	                  script (params.logins) and one or more .bak files
 func resolveSource(kind, path string, params map[string]string) (*sourcePlan, *protoError) {
+	loc, perr := backupLocation(params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "bak":
 		if perr := mustBeFile(path); perr != nil {
 			return nil, perr
 		}
-		return &sourcePlan{fixed: path}, nil
+		return &sourcePlan{fixed: path, loc: loc}, nil
 	case "bak_dir":
 		candidates, skipped, perr := candidatesIn(path, "")
 		if perr != nil {
 			return nil, perr
 		}
-		return &sourcePlan{candidates: candidates, skipped: skipped, dir: path}, nil
+		return &sourcePlan{candidates: candidates, skipped: skipped, dir: path, loc: loc}, nil
 	case "bak_with_logins":
-		return planWithLogins(path, params)
+		return planWithLogins(path, params, loc)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: bak, bak_dir, bak_with_logins)", kind)
@@ -78,7 +86,7 @@ func resolveSource(kind, path string, params map[string]string) (*sourcePlan, *p
 // change what a drill proves. The backup member may be named too; without
 // it the directory is scanned like bak_dir, so a drill against a rotating
 // directory keeps working unattended.
-func planWithLogins(dir string, params map[string]string) (*sourcePlan, *protoError) {
+func planWithLogins(dir string, params map[string]string, loc *time.Location) (*sourcePlan, *protoError) {
 	info, err := os.Stat(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -100,7 +108,7 @@ func planWithLogins(dir string, params map[string]string) (*sourcePlan, *protoEr
 		return nil, perr
 	}
 
-	plan := &sourcePlan{dir: dir, loginsPath: loginsPath}
+	plan := &sourcePlan{dir: dir, loginsPath: loginsPath, loc: loc}
 	if requested := params["bak"]; requested != "" {
 		name, perr := memberName(requested, "bak")
 		if perr != nil {
@@ -128,7 +136,7 @@ func planWithLogins(dir string, params map[string]string) (*sourcePlan, *protoEr
 
 // identity measures the backup identity of the artifact the engine chose.
 // It runs on the host, over the same bytes the sandbox received.
-func (p *sourcePlan) identity(chosen string) (*resolvedSource, *protoError) {
+func (p *sourcePlan) identity(chosen string, createdAt *string) (*resolvedSource, *protoError) {
 	if p.loginsPath == "" {
 		info, perr := statRegularFile(chosen, "backup source")
 		if perr != nil {
@@ -138,15 +146,14 @@ func (p *sourcePlan) identity(chosen string) (*resolvedSource, *protoError) {
 		if perr != nil {
 			return nil, perr
 		}
-		created := info.ModTime().UTC().Format("2006-01-02T15:04:05.000Z")
 		return &resolvedSource{
 			path:      chosen,
 			checksum:  checksum,
 			sizeBytes: info.Size(),
-			createdAt: &created,
+			createdAt: createdAt,
 		}, nil
 	}
-	return p.compositeIdentity(chosen)
+	return p.compositeIdentity(chosen, createdAt)
 }
 
 // compositeIdentity is the two-member identity of the bak_with_logins
@@ -160,7 +167,7 @@ func (p *sourcePlan) identity(chosen string) (*resolvedSource, *protoError) {
 // mirrors the postgres adapter's two-member framing (role NUL size NUL
 // content, fixed order), so the same pair always hashes the same and any
 // change to either member changes the hash.
-func (p *sourcePlan) compositeIdentity(chosen string) (*resolvedSource, *protoError) {
+func (p *sourcePlan) compositeIdentity(chosen string, createdAt *string) (*resolvedSource, *protoError) {
 	logins, perr := statRegularFile(p.loginsPath, "logins script")
 	if perr != nil {
 		return nil, perr
@@ -185,20 +192,15 @@ func (p *sourcePlan) compositeIdentity(chosen string) (*resolvedSource, *protoEr
 		}
 	}
 
-	// The older mtime, not the newer: a two-member set is only as current
-	// as its stalest member. Stale logins are precisely the failure this
-	// kind exists to surface — a login created after the script was taken
-	// is missing, and its restored database user is orphaned.
-	created := logins.ModTime()
-	if bak.ModTime().Before(created) {
-		created = bak.ModTime()
-	}
-	stamp := created.UTC().Format("2006-01-02T15:04:05.000Z")
+	// The backup's own header dates this source. A logins script is
+	// operator-authored and carries no timestamp, so the pair's freshness
+	// rests on the member that can be dated — the README says so rather
+	// than letting the field imply more.
 	return &resolvedSource{
 		path:       chosen,
 		checksum:   fmt.Sprintf("sha256:%s", hex.EncodeToString(h.Sum(nil))),
 		sizeBytes:  logins.Size() + bak.Size(),
-		createdAt:  &stamp,
+		createdAt:  createdAt,
 		loginsPath: p.loginsPath,
 	}, nil
 }

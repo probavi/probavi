@@ -31,25 +31,25 @@ func writeBackupFixture(t *testing.T) string {
 
 func TestDirChecksum(t *testing.T) {
 	backup := writeBackupFixture(t)
-	sum1, size, newest, perr := dirChecksum(backup)
+	sum1, size, perr := dirChecksum(backup)
 	if perr != nil {
 		t.Fatalf("dirChecksum: %+v", perr)
 	}
-	if size != int64(len("backup_type = full-backuped\n")+len("innodb-bytes")) || newest.IsZero() {
-		t.Errorf("size=%d newest=%v", size, newest)
+	if size != int64(len("backup_type = full-backuped\n")+len("innodb-bytes")) {
+		t.Errorf("size=%d", size)
 	}
-	sum2, _, _, _ := dirChecksum(backup)
+	sum2, _, _ := dirChecksum(backup)
 	if sum1 != sum2 {
 		t.Error("dirChecksum is not deterministic")
 	}
 	if err := os.WriteFile(filepath.Join(backup, "ibdata1"), []byte("tampered!"), 0o600); err != nil {
 		t.Fatalf("tamper: %v", err)
 	}
-	if sum3, _, _, _ := dirChecksum(backup); sum3 == sum1 {
+	if sum3, _, _ := dirChecksum(backup); sum3 == sum1 {
 		t.Error("content change must change the tree hash")
 	}
 
-	if _, _, _, perr := dirChecksum(t.TempDir()); perr == nil || perr.Code != "source_not_found" {
+	if _, _, perr := dirChecksum(t.TempDir()); perr == nil || perr.Code != "source_not_found" {
 		t.Errorf("empty dir: %+v, want source_not_found", perr)
 	}
 }
@@ -60,8 +60,8 @@ func TestResolveXtraBackupSource(t *testing.T) {
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
-	if !strings.HasPrefix(src.checksum, "sha256:") || src.createdAt == nil {
-		t.Errorf("src = %+v", src)
+	if !strings.HasPrefix(src.checksum, "sha256:") || src.createdAt != nil {
+		t.Errorf("src = %+v — a backup directory's mtimes date copies, not backups", src)
 	}
 
 	file := filepath.Join(t.TempDir(), "f.sql")
@@ -87,22 +87,23 @@ func TestResolveXtraBackupSource(t *testing.T) {
 	}
 }
 
-func TestBackupNewestMtimeIsCreatedAt(t *testing.T) {
+// TestBackupReportsNoCreationTime pins the deliberate absence: a backup
+// directory's newest file dates a copy, not a backup, so this kind claims
+// no creation time at all rather than an mtime dressed up as one.
+// XtraBackup records real timestamps in xtrabackup_info; reading them is
+// separate work.
+func TestBackupReportsNoCreationTime(t *testing.T) {
 	backup := writeBackupFixture(t)
 	newest := time.Date(2026, 7, 30, 6, 0, 0, 0, time.UTC)
-	if err := os.Chtimes(filepath.Join(backup, "ibdata1"), newest, newest); err != nil {
-		t.Fatalf("chtimes: %v", err)
-	}
-	old := newest.Add(-24 * time.Hour)
-	if err := os.Chtimes(filepath.Join(backup, "xtrabackup_checkpoints"), old, old); err != nil {
+	if err := os.Chtimes(filepath.Join(backup, "xtrabackup_checkpoints"), newest, newest); err != nil {
 		t.Fatalf("chtimes: %v", err)
 	}
 	src, perr := resolveSource(context.Background(), "xtrabackup", backup, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
-	if *src.createdAt != "2026-07-30T06:00:00.000Z" {
-		t.Errorf("createdAt = %s, want the newest file's mtime", *src.createdAt)
+	if src.createdAt != nil {
+		t.Errorf("createdAt = %s, want none — an mtime is not the backup's creation time", *src.createdAt)
 	}
 }
 

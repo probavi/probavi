@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "mongodb"
-	adapterVersion = "0.3.0"
+	adapterVersion = "0.4.0"
 
 	// defaultDatabase is the connection database when the drill config
 	// does not name one: admin always exists, so healthchecks and the
@@ -94,23 +94,10 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if err := json.Unmarshal(payload, req); err != nil {
 		return nil, protoErr("invalid_request", false, "malformed provision payload")
 	}
-	if req.PITR != nil {
-		return nil, protoErr("invalid_request", false, "this adapter does not support pitr")
-	}
-	database := option(req.Options, "database", defaultDatabase)
-	if !databasePattern.MatchString(database) {
-		return nil, protoErr("invalid_request", false,
-			"database name %s must contain only letters, digits, underscores, and hyphens", database)
-	}
-	plan, perr := planRestore(req.Source.Kind, database, req.Options["database"] != "")
+	database, scratch, plan, perr := parseProvisionTarget(req)
 	if perr != nil {
 		return nil, perr
 	}
-	scratch := req.Sandbox.ScratchDir
-	if scratch == "" {
-		scratch = "/tmp"
-	}
-
 	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path)
 	if perr != nil {
 		return nil, perr
@@ -166,6 +153,33 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		},
 		"state": map[string]any{"database": database, "archive_path": archiveInSandbox},
 	}, nil
+}
+
+// parseProvisionTarget validates everything the request supplies before
+// any sandbox call: the connection database, the declared backup zone
+// (which this adapter cannot honour at all), and the replay plan the
+// source kind implies.
+func parseProvisionTarget(req *provisionRequest) (database, scratch string, plan *restorePlan, perr *protoError) {
+	if req.PITR != nil {
+		return "", "", nil, protoErr("invalid_request", false, "this adapter does not support pitr")
+	}
+	database = option(req.Options, "database", defaultDatabase)
+	if !databasePattern.MatchString(database) {
+		return "", "", nil, protoErr("invalid_request", false,
+			"database name %s must contain only letters, digits, underscores, and hyphens", database)
+	}
+	if perr := rejectBackupTimezone(req.Source.Params); perr != nil {
+		return "", "", nil, perr
+	}
+	plan, perr = planRestore(req.Source.Kind, database, req.Options["database"] != "")
+	if perr != nil {
+		return "", "", nil, perr
+	}
+	scratch = req.Sandbox.ScratchDir
+	if scratch == "" {
+		scratch = "/tmp"
+	}
+	return database, scratch, plan, nil
 }
 
 // restorePlan says how the archive must be replayed, derived from the

@@ -16,9 +16,9 @@ type resolvedSource struct {
 	path      string
 	checksum  string // "sha256:<hex>" over the artifact bytes
 	sizeBytes int64
-	// createdAt is the artifact's modification time (RFC 3339 UTC,
-	// milliseconds) — the closest derivable stand-in for the backup's own
-	// creation time; nil if unavailable.
+	// createdAt is the backup's own creation time, read from the artifact
+	// and placed in the operator-declared zone (see timestamp.go); nil
+	// when the backup does not carry one or no zone was declared.
 	createdAt *string
 	// usersPath is the accounts-and-grants script to replay before the
 	// dump, for the mysqldump_with_users kind; empty for every other kind.
@@ -33,17 +33,21 @@ type resolvedSource struct {
 //	                       script (params.users) and one dump
 //	xtrabackup           — path is an XtraBackup full-backup directory
 func resolveSource(ctx context.Context, kind, path string, params map[string]string) (*resolvedSource, *protoError) {
+	loc, perr := backupLocation(params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "mysqldump":
-		return resolveFile(path)
+		return resolveFile(path, loc)
 	case "mysqldump_dir":
 		latest, perr := latestDumpIn(ctx, path)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveFile(latest)
+		return resolveFile(latest, loc)
 	case "mysqldump_with_users":
-		return resolveWithUsers(ctx, path, params)
+		return resolveWithUsers(ctx, path, params, loc)
 	case "xtrabackup":
 		src, perr := resolveRepo(path)
 		if perr != nil {
@@ -85,7 +89,7 @@ func resolveSource(ctx context.Context, kind, path string, params map[string]str
 // construction mirrors the other in-repo adapters' two-member framing
 // (role NUL size NUL content, fixed order), so the same pair always hashes
 // the same and any change to either member changes the hash.
-func resolveWithUsers(ctx context.Context, dir string, params map[string]string) (*resolvedSource, *protoError) {
+func resolveWithUsers(ctx context.Context, dir string, params map[string]string, loc *time.Location) (*resolvedSource, *protoError) {
 	info, err := os.Stat(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -132,23 +136,15 @@ func resolveWithUsers(ctx context.Context, dir string, params map[string]string)
 		}
 	}
 
-	// The older mtime, not the newer: a two-member set is only as current
-	// as its stalest member. A stale users script is precisely the failure
-	// this kind exists to surface — an account created after the script was
-	// exported is missing, and the restored objects that depend on it are
-	// unusable. (mysqldump_dir takes the newest file for the opposite and
-	// equally deliberate reason: a rotation directory's newest file is its
-	// latest backup.)
-	created := users.ModTime()
-	if dump.ModTime().Before(created) {
-		created = dump.ModTime()
-	}
-	stamp := created.UTC().Format("2006-01-02T15:04:05.000Z")
+	// The dump's own trailer dates this source. An accounts-and-grants
+	// script is operator-authored and carries no timestamp, so the pair's
+	// freshness rests on the member that can be dated — the README says so
+	// rather than letting the field imply more.
 	return &resolvedSource{
 		path:      dumpPath,
 		checksum:  fmt.Sprintf("sha256:%s", hex.EncodeToString(h.Sum(nil))),
 		sizeBytes: users.Size() + dump.Size(),
-		createdAt: &stamp,
+		createdAt: dumpCompletedAt(dumpPath, loc),
 		usersPath: usersPath,
 	}, nil
 }
@@ -231,22 +227,25 @@ func resolveRepo(dir string) (*resolvedSource, *protoError) {
 		return nil, protoErr("invalid_request", false,
 			"source path %s is a file; the xtrabackup kind expects a backup directory", dir)
 	}
-	checksum, size, newest, perr := dirChecksum(dir)
+	checksum, size, perr := dirChecksum(dir)
 	if perr != nil {
 		return nil, perr
 	}
-	created := newest.UTC().Format("2006-01-02T15:04:05.000Z")
-	return &resolvedSource{path: dir, checksum: checksum, sizeBytes: size, createdAt: &created}, nil
+	// An XtraBackup directory records its own timestamps in
+	// xtrabackup_info; reading them is separate work, so until then this
+	// kind reports no creation time rather than the newest file's mtime,
+	// which dates a copy rather than a backup.
+	return &resolvedSource{path: dir, checksum: checksum, sizeBytes: size}, nil
 }
 
 // dirChecksum hashes a directory tree canonically: entries sorted by
 // relative path; regular files contribute path, size, and content bytes,
 // symlinks contribute path and target. The same tree always hashes the
 // same, any content change changes the hash.
-func dirChecksum(root string) (string, int64, time.Time, *protoError) {
+func dirChecksum(root string) (string, int64, *protoError) {
 	h := sha256.New()
 	var total int64
-	var newest time.Time
+	var files int
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -255,18 +254,18 @@ func dirChecksum(root string) (string, int64, time.Time, *protoError) {
 		if err != nil {
 			return err
 		}
-		return hashEntry(h, path, rel, d, &total, &newest)
+		return hashEntry(h, path, rel, d, &total, &files)
 	})
 	if err != nil {
-		return "", 0, time.Time{}, protoErr("source_unreadable", false, "read backup directory: %v", err)
+		return "", 0, protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	if newest.IsZero() {
-		return "", 0, time.Time{}, protoErr("source_not_found", false, "backup directory %s contains no files", root)
+	if files == 0 {
+		return "", 0, protoErr("source_not_found", false, "backup directory %s contains no files", root)
 	}
-	return fmt.Sprintf("sha256:%s", hex.EncodeToString(h.Sum(nil))), total, newest, nil
+	return fmt.Sprintf("sha256:%s", hex.EncodeToString(h.Sum(nil))), total, nil
 }
 
-func hashEntry(h io.Writer, path, rel string, d os.DirEntry, total *int64, newest *time.Time) error {
+func hashEntry(h io.Writer, path, rel string, d os.DirEntry, total *int64, files *int) error {
 	switch {
 	case d.Type().IsRegular():
 		info, err := d.Info()
@@ -274,9 +273,7 @@ func hashEntry(h io.Writer, path, rel string, d os.DirEntry, total *int64, newes
 			return err
 		}
 		*total += info.Size()
-		if info.ModTime().After(*newest) {
-			*newest = info.ModTime()
-		}
+		*files++
 		fmt.Fprintf(h, "%s\x00%d\x00", rel, info.Size())
 		f, err := os.Open(path)
 		if err != nil {
@@ -297,7 +294,7 @@ func hashEntry(h io.Writer, path, rel string, d os.DirEntry, total *int64, newes
 	return nil
 }
 
-func resolveFile(path string) (*resolvedSource, *protoError) {
+func resolveFile(path string, loc *time.Location) (*resolvedSource, *protoError) {
 	info, err := os.Stat(path)
 	switch {
 	case os.IsNotExist(err):
@@ -312,12 +309,11 @@ func resolveFile(path string) (*resolvedSource, *protoError) {
 	if perr != nil {
 		return nil, perr
 	}
-	created := info.ModTime().UTC().Format("2006-01-02T15:04:05.000Z")
 	return &resolvedSource{
 		path:      path,
 		checksum:  checksum,
 		sizeBytes: info.Size(),
-		createdAt: &created,
+		createdAt: dumpCompletedAt(path, loc),
 	}, nil
 }
 

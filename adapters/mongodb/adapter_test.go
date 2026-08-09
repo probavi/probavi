@@ -323,7 +323,11 @@ func assertProvisionResult(t *testing.T, payload json.RawMessage) {
 	if res.SourceIdentity.Checksum != "sha256:"+hex.EncodeToString(sum[:]) {
 		t.Errorf("checksum = %s — must be a real measurement of the fixture bytes", res.SourceIdentity.Checksum)
 	}
-	if res.SourceIdentity.SizeBytes != 20 || res.SourceIdentity.CreatedAt == nil {
+	// A mongodump archive records no backup timestamp (measured), and a
+	// file's mtime dates a copy rather than a backup — so this adapter
+	// reports no creation time at all rather than one it cannot stand
+	// behind.
+	if res.SourceIdentity.SizeBytes != 20 || res.SourceIdentity.CreatedAt != nil {
 		t.Errorf("source_identity = %+v", res.SourceIdentity)
 	}
 	if res.Connection.Database != "orders" || res.Connection.User != "" ||

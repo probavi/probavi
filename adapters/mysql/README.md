@@ -171,13 +171,6 @@ was. A backup job that writes to a temporary name and renames on
 completion never trips this at all — the directory only ever shows
 finished files, and that is the arrangement worth having.
 
-**`created_at` is the file's modification time**, which is the closest
-thing available here, not the time the backup was taken. Copying backups
-around without preserving timestamps (`cp` without `-p`, `rsync` without
-`-t`, most object-store downloads) resets it, and a stale artifact then
-looks like the newest one. Preserve timestamps, or point the drill at a
-fixed path when it matters.
-
 An artifact the config names outright is never second-guessed this way:
 the operator chose that file, so the drill restores that file.
 
@@ -221,6 +214,50 @@ engine dialect is absorbed by the adapter's declaration — the core stays
 engine-free, which is exactly what the protocol's sql_runner template
 exists for (§6.1).
 
+### When the backup was taken
+
+`created_at` in the evidence record is an absolute instant, and the honest
+answer is often "not derivable". A file's modification time is **not** the
+backup's creation time: copying a backup without preserving timestamps
+(`cp` without `-p`, `rsync` without `-t`, most object-store downloads)
+resets it, and a month-old artifact then looks like last night's. This
+adapter therefore never reports an mtime as a creation time.
+
+A `mysqldump` file signs itself off with `-- Dump completed on ...`, and
+that is what this adapter reads. Dumps taken with `--skip-dump-date` or
+`--compact` carry no date, and then there is nothing to read — which is
+not a defect, just an absence. An `xtrabackup` directory is dated by
+nothing this adapter reads today; its own `xtrabackup_info` records
+timestamps, which is separate work.
+
+What no backup format records is a UTC offset — the value is the wall
+clock of the host that took the backup, and reading it as UTC would be
+wrong by that host's offset (measured: a backup taken at 12:08 UTC on a
+host in `Asia/Tokyo` is written as `21:08`). The offset is a fact only you
+have, so the drill declares it:
+
+```yaml
+source:
+  kind: mysqldump_dir
+  path: /backups/orders
+  params:
+    backup_timezone: Europe/Budapest    # IANA name, not an offset
+```
+
+A **zone name**, not a `+02:00`: the offset depends on the date of the
+backup, so a January backup in Budapest is `+01:00` and a July one
+`+02:00` — a fixed number in a config file would be wrong for half of
+every year. An unknown name fails the drill immediately rather than
+quietly dropping the timestamp it was meant to make exact. Zone data is
+compiled into the adapter, so no `/usr/share/zoneinfo` is needed on the
+host.
+
+Without the declaration, `backup.created_at` in the record is **null** —
+the evidence schema provides for that precisely because a backup's own
+creation time is not always derivable. One hour a year is genuinely
+ambiguous: when clocks go back, the same wall clock happens twice, and
+the earlier of the two is chosen.
+
 ## Backup identity
 
 - `checksum`: SHA-256 over the selected artifact's bytes (for
@@ -228,10 +265,11 @@ exists for (§6.1).
   canonical tree hash — entries sorted by relative path; each regular file
   contributes `relpath NUL size NUL content`, each symlink
   `relpath NUL "L" target NUL`.
-- `created_at`: the artifact's modification time (for backup directories:
-  the newest file's mtime) — the closest derivable stand-in for the
-  backup's creation time; treat it accordingly if you copy backup files
-  around without preserving timestamps.
+- `created_at`: the backup's own creation time, read from the artifact and
+  placed in the zone the drill declares (see above); null when the backup
+  carries none or no zone was declared. For `mysqldump_with_users` it
+  dates the dump member: an accounts script carries no timestamp of its
+  own, so the pair's freshness rests on the member that can be dated.
 
 ## Drill config options
 
