@@ -11,6 +11,29 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **The two physical backup kinds now date themselves** (postgres 0.7.0,
+  mysql 0.6.0; closes #99). `pgbackrest` and `xtrabackup` were the only
+  kinds left reporting no `backup.created_at` after the timestamp work in
+  0.5.0, and both formats keep metadata that answers the question.
+
+  **pgBackRest is the exception in this project, and a welcome one:**
+  `backup.info` records `backup-timestamp-start`/`-stop` as **epoch
+  seconds** — measured, a repository written on a host in Asia/Tokyo
+  stores `1786289869`, which is 15:37:49 UTC, and pgbackrest's own info
+  output renders the same instant as 00:37:49+09. An epoch value carries
+  no zone question, so that kind reports an exact creation time **without
+  any `source.params.backup_timezone` declaration**. The newest backup in
+  the repository dates it, because that is the one a restore without a
+  target uses; an encrypted manifest cannot be read and leaves the field
+  null rather than guessed.
+
+  XtraBackup writes a bare wall clock (`end_time = 2026-08-10 00:50:25`
+  for a backup taken at 15:50:25 UTC — measured), so that kind joins the
+  existing mechanism: with a declared zone it reports the completion
+  instant, without one it reports nothing.
+
 ## [0.5.0] - 2026-08-09
 
 ### Changed

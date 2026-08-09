@@ -87,23 +87,41 @@ func TestResolveXtraBackupSource(t *testing.T) {
 	}
 }
 
-// TestBackupReportsNoCreationTime pins the deliberate absence: a backup
-// directory's newest file dates a copy, not a backup, so this kind claims
-// no creation time at all rather than an mtime dressed up as one.
-// XtraBackup records real timestamps in xtrabackup_info; reading them is
-// separate work.
-func TestBackupReportsNoCreationTime(t *testing.T) {
+// TestBackupWithoutMetadata pins the fail-closed half: this fixture
+// carries no xtrabackup_info, so nothing dates the backup and nothing is
+// invented from the newest file's mtime, which dates a copy. The readable
+// case lives in backuptime_test.go.
+func TestBackupWithoutMetadata(t *testing.T) {
 	backup := writeBackupFixture(t)
 	newest := time.Date(2026, 7, 30, 6, 0, 0, 0, time.UTC)
 	if err := os.Chtimes(filepath.Join(backup, "xtrabackup_checkpoints"), newest, newest); err != nil {
 		t.Fatalf("chtimes: %v", err)
 	}
-	src, perr := resolveSource(context.Background(), "xtrabackup", backup, nil)
+	src, perr := resolveSource(context.Background(), "xtrabackup", backup,
+		map[string]string{backupTimezoneParam: "Asia/Tokyo"})
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
 	if src.createdAt != nil {
 		t.Errorf("createdAt = %s, want none — an mtime is not the backup's creation time", *src.createdAt)
+	}
+}
+
+// TestBackupIsDatedByItsMetadata proves the wiring: the completion time in
+// xtrabackup_info, placed in the declared zone.
+func TestBackupIsDatedByItsMetadata(t *testing.T) {
+	backup := writeBackupFixture(t)
+	if err := os.WriteFile(filepath.Join(backup, xtrabackupInfoName),
+		[]byte("tool_name = xtrabackup\nstart_time = 2026-08-10 00:50:23\nend_time = 2026-08-10 00:50:25\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src, perr := resolveSource(context.Background(), "xtrabackup", backup,
+		map[string]string{backupTimezoneParam: "Asia/Tokyo"})
+	if perr != nil {
+		t.Fatalf("resolveSource: %+v", perr)
+	}
+	if src.createdAt == nil || *src.createdAt != "2026-08-10T00:50:25.000+09:00" {
+		t.Errorf("createdAt = %v, want the backup's own completion time in the declared zone", src.createdAt)
 	}
 }
 

@@ -145,9 +145,16 @@ A `pg_dump` custom-format archive carries its own creation time in its
 header, and that is what this adapter reads (archive versions 1.14 and
 1.15/1.16 store it at different offsets; both are handled, and a header
 this parser does not recognise yields no timestamp rather than a wrong
-one). A `pgbackrest` repository is dated by nothing this adapter reads
-today — its own `backup.info` records real timestamps, which is separate
-work.
+one).
+
+A `pgbackrest` repository is the exception in this project: its
+`backup.info` records **epoch seconds**, which are an instant already, so
+that kind reports an exact creation time **with no zone declaration at
+all** — measured, a repository written on a host in `Asia/Tokyo` stores
+`1786289869`, which is `15:37:49` UTC. The newest backup in the
+repository dates it, because that is the one a restore without a target
+uses. An encrypted manifest (`repo1-cipher-type`) cannot be read, and
+then the field is null rather than guessed.
 
 What no backup format records is a UTC offset — the value is the wall
 clock of the host that took the backup, and reading it as UTC would be
@@ -202,7 +209,7 @@ Set under `source.params` in the drill config.
 |-------------------|-----------------------|-----------------------------------------------------|
 | `globals`         | `pgdump_with_globals` | **Required.** Bare filename of the cluster-globals script inside the source directory. |
 | `dump`            | `pgdump_with_globals` | Optional. Bare filename of the dump; without it the newest non-globals file is used. |
-| `backup_timezone` | all                   | Optional. IANA zone name of the host that took the backup (e.g. `Europe/Budapest`). Without it `backup.created_at` is null — see above. |
+| `backup_timezone` | `pgdump*`             | Optional. IANA zone name of the host that took the backup (e.g. `Europe/Budapest`). Without it `backup.created_at` is null — see above. Not needed for `pgbackrest`, whose repository records absolute timestamps. |
 
 ## Drill config options
 

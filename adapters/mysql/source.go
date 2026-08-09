@@ -49,7 +49,7 @@ func resolveSource(ctx context.Context, kind, path string, params map[string]str
 	case "mysqldump_with_users":
 		return resolveWithUsers(ctx, path, params, loc)
 	case "xtrabackup":
-		src, perr := resolveRepo(path)
+		src, perr := resolveRepo(path, loc)
 		if perr != nil {
 			return nil, perr
 		}
@@ -216,7 +216,7 @@ func statRegularFile(path, what string) (os.FileInfo, *protoError) {
 // resolveRepo resolves a directory source: the checksum is a canonical hash
 // over the whole tree (documented in the adapter README), created_at is the
 // newest file's mtime.
-func resolveRepo(dir string) (*resolvedSource, *protoError) {
+func resolveRepo(dir string, loc *time.Location) (*resolvedSource, *protoError) {
 	info, err := os.Stat(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -231,11 +231,14 @@ func resolveRepo(dir string) (*resolvedSource, *protoError) {
 	if perr != nil {
 		return nil, perr
 	}
-	// An XtraBackup directory records its own timestamps in
-	// xtrabackup_info; reading them is separate work, so until then this
-	// kind reports no creation time rather than the newest file's mtime,
-	// which dates a copy rather than a backup.
-	return &resolvedSource{path: dir, checksum: checksum, sizeBytes: size}, nil
+	// The backup dates itself through xtrabackup_info, in the declared
+	// zone (see backuptime.go).
+	return &resolvedSource{
+		path:      dir,
+		checksum:  checksum,
+		sizeBytes: size,
+		createdAt: backupCreatedAt(dir, loc),
+	}, nil
 }
 
 // dirChecksum hashes a directory tree canonically: entries sorted by

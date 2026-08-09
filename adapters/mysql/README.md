@@ -226,9 +226,9 @@ adapter therefore never reports an mtime as a creation time.
 A `mysqldump` file signs itself off with `-- Dump completed on ...`, and
 that is what this adapter reads. Dumps taken with `--skip-dump-date` or
 `--compact` carry no date, and then there is nothing to read — which is
-not a defect, just an absence. An `xtrabackup` directory is dated by
-nothing this adapter reads today; its own `xtrabackup_info` records
-timestamps, which is separate work.
+not a defect, just an absence. An `xtrabackup` directory is dated by the
+`end_time` in its own `xtrabackup_info` — the moment the backup finished
+and became consistent.
 
 What no backup format records is a UTC offset — the value is the wall
 clock of the host that took the backup, and reading it as UTC would be
