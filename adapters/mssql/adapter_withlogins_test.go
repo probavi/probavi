@@ -68,12 +68,14 @@ func withLoginsExec(t *testing.T, call verbCall, b withLoginsBehavior) any {
 		return okExec(0)
 	case "probe":
 		return servingExec()
+	case "headeronly":
+		return fullHeaderExec()
 	case "logins":
 		assertLoginsArgv(t, args)
 		return execValue{ExitCode: b.loginsExit, DurationSeconds: 0.5,
 			StderrB64: base64.StdEncoding.EncodeToString([]byte(b.loginsStderr))}
 	case "restore":
-		want := []string{"sh", "-c", restoreScript, "sh", "/scratch/probavi-restore.bak", "orders"}
+		want := []string{"sh", "-c", restoreScript, "sh", "/scratch/probavi-restore.bak", "orders", "1"}
 		if strings.Join(args.Argv, "\x00") != strings.Join(want, "\x00") {
 			t.Errorf("restore argv = %v", args.Argv)
 		}
@@ -130,10 +132,11 @@ func TestProvisionWithLogins(t *testing.T) {
 	if !f.OK {
 		t.Fatalf("final = %+v", f)
 	}
-	// initfile, probe(ok), put_file(logins), replay, put_file(bak),
-	// restore, orphan check
-	if len(calls) != 7 {
-		t.Errorf("calls = %d, want 7", len(calls))
+	// initfile, probe(ok), put_file(bak), headeronly, put_file(logins),
+	// replay, restore, orphan check — the backup is transferred first
+	// because choosing it is what asks the engine to identify it.
+	if len(calls) != 8 {
+		t.Errorf("calls = %d, want 8", len(calls))
 	}
 	res := provisionWire{}
 	if err := json.Unmarshal(f.Payload, &res); err != nil {
@@ -143,11 +146,11 @@ func TestProvisionWithLogins(t *testing.T) {
 	// The identity covers both members with size framing, in load order.
 	h := sha256.New()
 	fmt.Fprintf(h, "logins\x00%d\x00%s", len("CREATE LOGIN"), "CREATE LOGIN")
-	fmt.Fprintf(h, "bak\x00%d\x00%s", len("BAK-BYTES"), "BAK-BYTES")
+	fmt.Fprintf(h, "bak\x00%d\x00%s", len("TAPEBAK-BYTES"), "TAPEBAK-BYTES")
 	if want := "sha256:" + hex.EncodeToString(h.Sum(nil)); res.SourceIdentity.Checksum != want {
 		t.Errorf("checksum = %s, want the two-member composite %s", res.SourceIdentity.Checksum, want)
 	}
-	if res.SourceIdentity.SizeBytes != int64(len("CREATE LOGIN")+len("BAK-BYTES")) {
+	if res.SourceIdentity.SizeBytes != int64(len("CREATE LOGIN")+len("TAPEBAK-BYTES")) {
 		t.Errorf("size_bytes = %d, want the sum of both members", res.SourceIdentity.SizeBytes)
 	}
 
@@ -188,19 +191,19 @@ func TestProvisionWithLoginsFailures(t *testing.T) {
 	}{
 		{"application login collision",
 			withLoginsBehavior{loginsStderr: "Msg 15025, Level 16, State 1, Server x, Line 1\nThe server principal 'app_login' already exists."},
-			"app_login", 4},
+			"app_login", 6},
 		{"replay client failure",
 			withLoginsBehavior{loginsExit: 1, loginsStderr: "Sqlcmd: '/scratch/probavi-logins.sql': Invalid filename."},
-			"Invalid filename", 4},
+			"Invalid filename", 6},
 		{"replay refused with silent stderr",
 			withLoginsBehavior{loginsExit: 1},
-			"sqlcmd exited 1", 4},
+			"sqlcmd exited 1", 6},
 		{"orphaned users flagged",
 			withLoginsBehavior{orphanStdout: "app_user\nreport_user\n"},
-			"app_user, report_user", 7},
+			"app_user; report_user", 8},
 		{"orphan check breaks",
 			withLoginsBehavior{orphanExit: 1, orphanStderr: "Msg 916, Level 14, State 2, Server x, Line 1\nThe server principal is not able to access the database under the current security context."},
-			"orphaned-user check failed", 7},
+			"orphaned-user check failed", 8},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -245,7 +248,7 @@ func TestProvisionWithLoginsSandboxFailure(t *testing.T) {
 	if exit != 0 || f.OK || f.Error.Code != "sandbox_error" {
 		t.Fatalf("exit=%d final=%+v, want the sandbox error to pass through untranslated", exit, f)
 	}
-	// initfile, probe, put_file(logins) — nothing after the dead sandbox
+	// initfile, probe, put_file(bak) — nothing after the dead sandbox
 	if len(calls) != 3 {
 		t.Errorf("calls = %d, want 3", len(calls))
 	}

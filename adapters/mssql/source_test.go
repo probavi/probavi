@@ -7,38 +7,42 @@ import (
 	"time"
 )
 
+// touch sets a file's mtime so candidate ordering is deterministic.
+func touch(t *testing.T, path string, ago time.Duration) {
+	t.Helper()
+	when := time.Now().Add(-ago)
+	if err := os.Chtimes(path, when, when); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestResolveSourceKinds(t *testing.T) {
 	dir := t.TempDir()
-	old := filepath.Join(dir, "a-old.archive")
-	latest := filepath.Join(dir, "b-latest.archive")
-	if err := os.WriteFile(old, []byte("OLD"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(latest, []byte("NEW"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	past := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(old, past, past); err != nil {
-		t.Fatal(err)
-	}
+	old := writeMedia(t, dir, "a-old.bak", "OLD")
+	latest := writeMedia(t, dir, "b-latest.bak", "NEW")
+	touch(t, old, time.Hour)
 
-	t.Run("bak file", func(t *testing.T) {
-		src, perr := resolveSource("bak", latest, nil)
+	t.Run("bak names one artifact outright", func(t *testing.T) {
+		plan, perr := resolveSource("bak", latest, nil)
 		if perr != nil {
 			t.Fatalf("resolve: %+v", perr)
 		}
-		if src.path != latest || src.sizeBytes != 3 || src.createdAt == nil {
-			t.Errorf("src = %+v", src)
+		if plan.fixed != latest || len(plan.candidates) != 0 {
+			t.Errorf("plan = %+v, want the named artifact and no scan", plan)
 		}
 	})
 
-	t.Run("bak_dir picks the newest", func(t *testing.T) {
-		src, perr := resolveSource("bak_dir", dir, nil)
+	t.Run("bak_dir offers candidates newest first", func(t *testing.T) {
+		plan, perr := resolveSource("bak_dir", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolve: %+v", perr)
 		}
-		if src.path != latest {
-			t.Errorf("path = %s, want the newest file %s", src.path, latest)
+		if plan.fixed != "" {
+			t.Errorf("plan.fixed = %s, want a scan", plan.fixed)
+		}
+		want := []string{latest, old}
+		if len(plan.candidates) != 2 || plan.candidates[0] != want[0] || plan.candidates[1] != want[1] {
+			t.Errorf("candidates = %v, want newest first %v", plan.candidates, want)
 		}
 	})
 
@@ -47,6 +51,67 @@ func TestResolveSourceKinds(t *testing.T) {
 			t.Errorf("perr = %+v, want unsupported_source", perr)
 		}
 	})
+}
+
+// TestCandidateOrder pins the two rules a scan must follow: newest first,
+// and — because mtimes collide on copied backup sets — the
+// lexicographically larger name breaks a tie, so the choice never depends
+// on directory iteration order.
+func TestCandidateOrder(t *testing.T) {
+	dir := t.TempDir()
+	same := time.Now().Add(-time.Minute)
+	for _, name := range []string{"a.bak", "b.bak"} {
+		path := writeMedia(t, dir, name, name)
+		if err := os.Chtimes(path, same, same); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newest := writeMedia(t, dir, "0-newest.bak", "n")
+
+	plan, perr := resolveSource("bak_dir", dir, nil)
+	if perr != nil {
+		t.Fatalf("resolve: %+v", perr)
+	}
+	want := []string{newest, filepath.Join(dir, "b.bak"), filepath.Join(dir, "a.bak")}
+	for i := range want {
+		if plan.candidates[i] != want[i] {
+			t.Fatalf("candidates = %v, want %v", plan.candidates, want)
+		}
+	}
+}
+
+// TestCandidateScanSkipsNonMedia covers the sidecar problem: a checksum
+// file or a log beside the backups must not be transferred and probed —
+// measured, the engine answers "the volume ... is empty" for one, which
+// would look exactly like a corrupt backup.
+func TestCandidateScanSkipsNonMedia(t *testing.T) {
+	dir := t.TempDir()
+	backup := writeMedia(t, dir, "full.bak", "payload")
+	touch(t, backup, time.Hour)
+	for _, name := range []string{"SHA256SUMS", "backup.log"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("not a backup at all"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A compressed backup starts with a different magic; it is still media.
+	compressed := filepath.Join(dir, "compressed.bak")
+	if err := os.WriteFile(compressed, []byte("MSSQpayload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, perr := resolveSource("bak_dir", dir, nil)
+	if perr != nil {
+		t.Fatalf("resolve: %+v", perr)
+	}
+	if len(plan.candidates) != 2 {
+		t.Errorf("candidates = %v, want both backup media files", plan.candidates)
+	}
+	if plan.candidates[0] != compressed {
+		t.Errorf("candidates = %v, want the compressed backup first (newest)", plan.candidates)
+	}
+	if len(plan.skipped) != 2 {
+		t.Errorf("skipped = %v, want the two non-media files named for diagnostics", plan.skipped)
+	}
 }
 
 func TestResolveSourceErrors(t *testing.T) {
@@ -87,6 +152,41 @@ func TestResolveSourceErrors(t *testing.T) {
 	})
 }
 
+// TestIdentityOfChosenArtifact proves the backup identity describes what
+// the engine chose, not what the host guessed first.
+func TestIdentityOfChosenArtifact(t *testing.T) {
+	dir := t.TempDir()
+	older := writeMedia(t, dir, "full.bak", "FULL-PAYLOAD")
+	touch(t, older, time.Hour)
+	writeMedia(t, dir, "newest.trn", "LOG-PAYLOAD")
+
+	plan, perr := resolveSource("bak_dir", dir, nil)
+	if perr != nil {
+		t.Fatalf("resolve: %+v", perr)
+	}
+	src, perr := plan.identity(older)
+	if perr != nil {
+		t.Fatalf("identity: %+v", perr)
+	}
+	if src.path != older {
+		t.Errorf("path = %s, want the chosen artifact", src.path)
+	}
+	if src.sizeBytes != int64(len("TAPE"+"FULL-PAYLOAD")) {
+		t.Errorf("sizeBytes = %d, want the chosen artifact's size", src.sizeBytes)
+	}
+	info, err := os.Stat(older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := info.ModTime().UTC().Format("2006-01-02T15:04:05.000Z")
+	if src.createdAt == nil || *src.createdAt != want {
+		t.Errorf("createdAt = %v, want the chosen artifact's mtime %s", src.createdAt, want)
+	}
+	if src.loginsPath != "" {
+		t.Errorf("loginsPath = %s, want empty for a plain directory", src.loginsPath)
+	}
+}
+
 // withLoginsDir builds a two-member source directory: logins.sql (older)
 // and orders.bak (newer).
 func withLoginsDir(t *testing.T) string {
@@ -95,17 +195,12 @@ func withLoginsDir(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(dir, "logins.sql"), []byte("CREATE LOGIN"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "orders.bak"), []byte("BAK-BYTES"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	past := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(filepath.Join(dir, "logins.sql"), past, past); err != nil {
-		t.Fatal(err)
-	}
+	writeMedia(t, dir, "orders.bak", "BAK-BYTES")
+	touch(t, filepath.Join(dir, "logins.sql"), time.Hour)
 	return dir
 }
 
-func TestResolveWithLoginsErrors(t *testing.T) {
+func TestPlanWithLoginsErrors(t *testing.T) {
 	dir := withLoginsDir(t)
 	file := filepath.Join(t.TempDir(), "plain.bak")
 	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
@@ -142,33 +237,56 @@ func TestResolveWithLoginsErrors(t *testing.T) {
 			}
 		})
 	}
+}
 
-	t.Run("no bak beside the logins script", func(t *testing.T) {
-		lone := t.TempDir()
-		if err := os.WriteFile(filepath.Join(lone, "logins.sql"), []byte("x"), 0o600); err != nil {
-			t.Fatal(err)
+func TestPlanWithLoginsScansForTheBackup(t *testing.T) {
+	dir := withLoginsDir(t)
+
+	t.Run("named backup skips the scan", func(t *testing.T) {
+		plan, perr := resolveSource("bak_with_logins", dir, map[string]string{"logins": "logins.sql", "bak": "orders.bak"})
+		if perr != nil {
+			t.Fatalf("resolve: %+v", perr)
 		}
-		if _, perr := resolveSource("bak_with_logins", lone, map[string]string{"logins": "logins.sql"}); perr == nil || perr.Code != "source_not_found" {
-			t.Errorf("perr = %+v, want source_not_found", perr)
+		if plan.fixed != filepath.Join(dir, "orders.bak") || len(plan.candidates) != 0 {
+			t.Errorf("plan = %+v, want the named backup", plan)
+		}
+	})
+
+	t.Run("without one the directory is scanned, logins excluded", func(t *testing.T) {
+		plan, perr := resolveSource("bak_with_logins", dir, map[string]string{"logins": "logins.sql"})
+		if perr != nil {
+			t.Fatalf("resolve: %+v", perr)
+		}
+		if len(plan.candidates) != 1 || plan.candidates[0] != filepath.Join(dir, "orders.bak") {
+			t.Errorf("candidates = %v, want the backup alone", plan.candidates)
+		}
+		// The logins script is not backup media, but it is excluded by
+		// name before that ever matters — it must not be reported skipped.
+		for _, s := range plan.skipped {
+			if s == "logins.sql" {
+				t.Errorf("skipped = %v, want the named logins member excluded silently", plan.skipped)
+			}
 		}
 	})
 }
 
-func TestResolveWithLoginsIdentity(t *testing.T) {
+func TestCompositeIdentity(t *testing.T) {
 	dir := withLoginsDir(t)
 	params := map[string]string{"logins": "logins.sql", "bak": "orders.bak"}
+	chosen := filepath.Join(dir, "orders.bak")
 
-	src, perr := resolveSource("bak_with_logins", dir, params)
+	plan, perr := resolveSource("bak_with_logins", dir, params)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
-	if src.path != filepath.Join(dir, "orders.bak") {
-		t.Errorf("path = %s, want the bak member", src.path)
+	src, perr := plan.identity(chosen)
+	if perr != nil {
+		t.Fatalf("identity: %+v", perr)
 	}
-	if src.loginsPath != filepath.Join(dir, "logins.sql") {
-		t.Errorf("loginsPath = %s", src.loginsPath)
+	if src.path != chosen || src.loginsPath != filepath.Join(dir, "logins.sql") {
+		t.Errorf("src = %+v", src)
 	}
-	if src.sizeBytes != int64(len("CREATE LOGIN")+len("BAK-BYTES")) {
+	if src.sizeBytes != int64(len("CREATE LOGIN")+len("TAPEBAK-BYTES")) {
 		t.Errorf("sizeBytes = %d, want the sum of both members", src.sizeBytes)
 	}
 
@@ -183,51 +301,57 @@ func TestResolveWithLoginsIdentity(t *testing.T) {
 		t.Errorf("createdAt = %v, want the older member's mtime %s", src.createdAt, want)
 	}
 
-	again, perr := resolveSource("bak_with_logins", dir, params)
+	again, perr := plan.identity(chosen)
 	if perr != nil {
-		t.Fatalf("resolve again: %+v", perr)
+		t.Fatalf("identity again: %+v", perr)
 	}
 	if again.checksum != src.checksum {
 		t.Errorf("checksum not deterministic: %s vs %s", again.checksum, src.checksum)
 	}
 }
 
-func TestResolveWithLoginsCreatedAtTracksStalestMember(t *testing.T) {
-	// Same two members, but now the bak is the older one — created_at
-	// must follow it, not the logins script.
+func TestCompositeIdentityCreatedAtTracksStalestMember(t *testing.T) {
 	dir := withLoginsDir(t)
-	older := time.Now().Add(-2 * time.Hour)
-	if err := os.Chtimes(filepath.Join(dir, "orders.bak"), older, older); err != nil {
-		t.Fatal(err)
-	}
-	src, perr := resolveSource("bak_with_logins", dir, map[string]string{"logins": "logins.sql", "bak": "orders.bak"})
+	chosen := filepath.Join(dir, "orders.bak")
+	touch(t, chosen, 2*time.Hour)
+
+	plan, perr := resolveSource("bak_with_logins", dir, map[string]string{"logins": "logins.sql", "bak": "orders.bak"})
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
-	info, err := os.Stat(filepath.Join(dir, "orders.bak"))
+	src, perr := plan.identity(chosen)
+	if perr != nil {
+		t.Fatalf("identity: %+v", perr)
+	}
+	info, err := os.Stat(chosen)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := info.ModTime().UTC().Format("2006-01-02T15:04:05.000Z")
 	if src.createdAt == nil || *src.createdAt != want {
-		t.Errorf("createdAt = %v, want the now-older bak mtime %s", src.createdAt, want)
+		t.Errorf("createdAt = %v, want the now-older backup mtime %s", src.createdAt, want)
 	}
 }
 
-func TestResolveWithLoginsChecksumCoversBothMembers(t *testing.T) {
+func TestCompositeIdentityCoversBothMembers(t *testing.T) {
 	dir := withLoginsDir(t)
 	params := map[string]string{"logins": "logins.sql", "bak": "orders.bak"}
-	base, perr := resolveSource("bak_with_logins", dir, params)
+	chosen := filepath.Join(dir, "orders.bak")
+	plan, perr := resolveSource("bak_with_logins", dir, params)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
+	}
+	base, perr := plan.identity(chosen)
+	if perr != nil {
+		t.Fatalf("identity: %+v", perr)
 	}
 
 	if err := os.WriteFile(filepath.Join(dir, "logins.sql"), []byte("CREATE LOGIM"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	loginsChanged, perr := resolveSource("bak_with_logins", dir, params)
+	loginsChanged, perr := plan.identity(chosen)
 	if perr != nil {
-		t.Fatalf("resolve: %+v", perr)
+		t.Fatalf("identity: %+v", perr)
 	}
 	if loginsChanged.checksum == base.checksum {
 		t.Error("checksum ignored a logins change — the identity must cover both members")
@@ -236,108 +360,72 @@ func TestResolveWithLoginsChecksumCoversBothMembers(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "logins.sql"), []byte("CREATE LOGIN"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "orders.bak"), []byte("BAK-BYTEZ"), 0o600); err != nil {
+	if err := os.WriteFile(chosen, []byte("TAPEBAK-BYTEZ"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	bakChanged, perr := resolveSource("bak_with_logins", dir, params)
+	bakChanged, perr := plan.identity(chosen)
 	if perr != nil {
-		t.Fatalf("resolve: %+v", perr)
+		t.Fatalf("identity: %+v", perr)
 	}
 	if bakChanged.checksum == base.checksum {
-		t.Error("checksum ignored a bak change — the identity must cover both members")
+		t.Error("checksum ignored a backup change — the identity must cover both members")
 	}
 }
 
-func TestResolveWithLoginsChecksumIsUnambiguous(t *testing.T) {
+func TestCompositeIdentityIsUnambiguous(t *testing.T) {
 	// "A"+"B" and "AB"+"" concatenate identically; the size framing must
 	// keep their identities apart.
-	dirA := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dirA, "logins.sql"), []byte("A"), 0o600); err != nil {
-		t.Fatal(err)
+	newPlan := func(t *testing.T, logins, bak string) (*sourcePlan, string) {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "logins.sql"), []byte(logins), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "x.bak"), []byte(bak), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		plan, perr := resolveSource("bak_with_logins", dir, map[string]string{"logins": "logins.sql", "bak": "x.bak"})
+		if perr != nil {
+			t.Fatalf("resolve: %+v", perr)
+		}
+		return plan, filepath.Join(dir, "x.bak")
 	}
-	if err := os.WriteFile(filepath.Join(dirA, "x.bak"), []byte("B"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	dirB := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dirB, "logins.sql"), []byte("AB"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dirB, "x.bak"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	params := map[string]string{"logins": "logins.sql", "bak": "x.bak"}
-	a, perr := resolveSource("bak_with_logins", dirA, params)
+	planA, chosenA := newPlan(t, "A", "B")
+	planB, chosenB := newPlan(t, "AB", "")
+	a, perr := planA.identity(chosenA)
 	if perr != nil {
-		t.Fatalf("resolve a: %+v", perr)
+		t.Fatalf("identity a: %+v", perr)
 	}
-	b, perr := resolveSource("bak_with_logins", dirB, params)
+	b, perr := planB.identity(chosenB)
 	if perr != nil {
-		t.Fatalf("resolve b: %+v", perr)
+		t.Fatalf("identity b: %+v", perr)
 	}
 	if a.checksum == b.checksum {
 		t.Error("checksum collides across member boundaries — framing must include sizes")
 	}
 }
 
-func TestResolveWithLoginsIgnoresSiblings(t *testing.T) {
+func TestCompositeIdentityIgnoresSiblings(t *testing.T) {
 	dir := withLoginsDir(t)
-	params := map[string]string{"logins": "logins.sql", "bak": "orders.bak"}
-	base, perr := resolveSource("bak_with_logins", dir, params)
+	chosen := filepath.Join(dir, "orders.bak")
+	plan, perr := resolveSource("bak_with_logins", dir, map[string]string{"logins": "logins.sql", "bak": "orders.bak"})
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
+	}
+	base, perr := plan.identity(chosen)
+	if perr != nil {
+		t.Fatalf("identity: %+v", perr)
 	}
 	// A half-written temp file beside the members must not change the
 	// drill's backup identity.
 	if err := os.WriteFile(filepath.Join(dir, "in-flight.tmp"), []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	after, perr := resolveSource("bak_with_logins", dir, params)
+	after, perr := plan.identity(chosen)
 	if perr != nil {
-		t.Fatalf("resolve: %+v", perr)
+		t.Fatalf("identity: %+v", perr)
 	}
 	if after.checksum != base.checksum {
 		t.Error("a sibling file changed the checksum — only the two members are the backup")
-	}
-}
-
-func TestResolveWithLoginsPicksNewestNonLogins(t *testing.T) {
-	dir := withLoginsDir(t)
-	// Make the logins script the newest file in the directory: the
-	// implicit bak choice must still skip it.
-	now := time.Now()
-	if err := os.Chtimes(filepath.Join(dir, "logins.sql"), now, now); err != nil {
-		t.Fatal(err)
-	}
-	past := now.Add(-time.Minute)
-	if err := os.Chtimes(filepath.Join(dir, "orders.bak"), past, past); err != nil {
-		t.Fatal(err)
-	}
-	src, perr := resolveSource("bak_with_logins", dir, map[string]string{"logins": "logins.sql"})
-	if perr != nil {
-		t.Fatalf("resolve: %+v", perr)
-	}
-	if src.path != filepath.Join(dir, "orders.bak") {
-		t.Errorf("path = %s, want the newest non-logins file", src.path)
-	}
-}
-
-func TestLatestDumpTieBreak(t *testing.T) {
-	dir := t.TempDir()
-	now := time.Now()
-	for _, name := range []string{"a.archive", "b.archive"} {
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte(name), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chtimes(path, now, now); err != nil {
-			t.Fatal(err)
-		}
-	}
-	latest, perr := latestDumpIn(dir)
-	if perr != nil {
-		t.Fatalf("latestDumpIn: %+v", perr)
-	}
-	if filepath.Base(latest) != "b.archive" {
-		t.Errorf("latest = %s, want the lexicographically larger name on an mtime tie", latest)
 	}
 }

@@ -79,7 +79,7 @@
       "id": "mssql",
       "name": "SQL Server",
       "status": "experimental",
-      "adapter_version": "0.2.0",
+      "adapter_version": "0.3.0",
       "engine": {
         "id": "sqlserver",
         "name": "Microsoft SQL Server"
@@ -101,7 +101,7 @@
         },
         {
           "id": "bak_dir",
-          "name": "A directory of .bak files; the newest is restored",
+          "name": "A directory of backup files; the newest full backup is restored",
           "pitr": false
         },
         {

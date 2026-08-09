@@ -11,7 +11,7 @@
   ],
   "sources": {
     "bak": "One native SQL Server .bak backup file",
-    "bak_dir": "A directory of .bak files; the newest is restored",
+    "bak_dir": "A directory of backup files; the newest full backup is restored",
     "bak_with_logins": "A directory holding one .bak and a server-logins T-SQL script, restored together"
   }
 }

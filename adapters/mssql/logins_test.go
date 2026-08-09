@@ -126,13 +126,3 @@ func TestScrubSecrets(t *testing.T) {
 		}
 	})
 }
-
-func TestNameList(t *testing.T) {
-	if got := nameList([]string{"a", "b"}, 5); got != "a, b" {
-		t.Errorf("nameList = %q", got)
-	}
-	got := nameList([]string{"a", "b", "c", "d", "e", "f", "g"}, 5)
-	if got != "a, b, c, d, e and 2 more" {
-		t.Errorf("nameList = %q, want the capped form", got)
-	}
-}

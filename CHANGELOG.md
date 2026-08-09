@@ -11,6 +11,35 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **SQL Server drills no longer fail on a healthy backup set** (mssql
+  adapter 0.3.0; tracked in #88). A real backup directory holds full,
+  differential, and transaction log backups side by side, and the newest
+  file is typically a log backup — which cannot create a database. The
+  old "newest file wins" rule therefore reported `restore_failed` on a
+  perfectly restorable set: a false alarm, the direction that costs an
+  operator's trust rather than merely withholding it.
+
+  Nothing outside the engine can tell the types apart — measured: the
+  `.bak`/`.trn` extensions are convention SQL Server ignores, and all
+  three types share one media format, so `RESTORE FILELISTONLY` (which
+  the adapter already ran) returns the same answer for each. Candidates
+  are now transferred newest-first and identified with
+  `RESTORE HEADERONLY`; the first holding a full backup is restored.
+  Files that are not backup media (checksum sidecars, log files) are
+  skipped before transfer and named in the failure message; a backup file
+  the engine cannot read fails the drill rather than falling back to an
+  older one. A directory with no full backup now says exactly that,
+  instead of quoting Msg 3118 at the operator.
+
+  Two related fixes came with it: backup media holding several appended
+  sets is restored from its **newest full set** (`WITH FILE = n`) instead
+  of the engine's default first set — the oldest backup on the file — and
+  the same type-aware choice covers `bak_with_logins` when its
+  `params.bak` is omitted. Selection is not counted in the measured
+  recovery time: `transfer_seconds` covers the chosen artifact only.
+
 ### Added
 
 - **`mongodump_with_users` and `mongodump_with_oplog`, two MongoDB source

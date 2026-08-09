@@ -7,10 +7,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
+	"sort"
 )
 
-// resolvedSource is a concrete backup artifact chosen for restore.
+// resolvedSource is the backup identity of what a drill actually restored.
 type resolvedSource struct {
 	path      string
 	checksum  string // "sha256:<hex>" over the artifact bytes
@@ -24,53 +24,61 @@ type resolvedSource struct {
 	loginsPath string
 }
 
-// resolveSource maps a source kind to one restorable artifact.
+// sourcePlan is everything the host can decide on its own. Which file in a
+// directory is a full backup is not among them — only the engine can say
+// that (see backupset.go) — so a directory source contributes candidates
+// in the order they should be tried, and the choice happens in the sandbox.
+type sourcePlan struct {
+	// fixed is the artifact the drill config names outright; when it is
+	// empty the candidates are scanned instead.
+	fixed      string
+	candidates []string // newest first
+	skipped    []string // entries that are not backup media, for diagnostics
+	dir        string   // the configured directory, for diagnostics
+	loginsPath string   // bak_with_logins only
+}
+
+// resolveSource maps a source kind to a plan for finding one restorable
+// artifact.
 //
 //	bak             — path is a native BACKUP DATABASE file
-//	bak_dir         — path is a directory; the newest regular file is chosen
+//	bak_dir         — path is a directory of backup files
 //	bak_with_logins — path is a directory holding a server-logins T-SQL
-//	                  script (params.logins) and one .bak
-func resolveSource(kind, path string, params map[string]string) (*resolvedSource, *protoError) {
+//	                  script (params.logins) and one or more .bak files
+func resolveSource(kind, path string, params map[string]string) (*sourcePlan, *protoError) {
 	switch kind {
 	case "bak":
-		return resolveFile(path)
+		if perr := mustBeFile(path); perr != nil {
+			return nil, perr
+		}
+		return &sourcePlan{fixed: path}, nil
 	case "bak_dir":
-		latest, perr := latestDumpIn(path)
+		candidates, skipped, perr := candidatesIn(path, "")
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveFile(latest)
+		return &sourcePlan{candidates: candidates, skipped: skipped, dir: path}, nil
 	case "bak_with_logins":
-		return resolveWithLogins(path, params)
+		return planWithLogins(path, params)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: bak, bak_dir, bak_with_logins)", kind)
 	}
 }
 
-// resolveWithLogins resolves the two-member source of the bak_with_logins
-// kind: a server-logins script and one .bak, both named inside one source
-// directory.
+// planWithLogins plans the two-member source of the bak_with_logins kind:
+// a server-logins script and one backup, both inside one source directory.
 //
 // One directory rather than two independent paths because the core only
 // hands an adapter files belonging to the drill's configured backup source
 // (protocol §4.2) — a guard that exists so an adapter, which is a
 // third-party binary, cannot copy arbitrary host files into a sandbox it
-// controls. The members are named explicitly in params rather than
+// controls. The logins member is named explicitly in params rather than
 // recognised by filename pattern: renaming a backup file must not silently
-// change what a drill proves.
-//
-// Both members are restored, so both must be in the backup identity — a
-// checksum covering only the .bak would let the logins change without the
-// evidence record noticing, and the logins are exactly what this kind
-// exists to prove present. Only the two chosen members are hashed, not the
-// whole directory: one directory may hold the logins script beside several
-// databases' backups, each drilled separately, and a drill's identity must
-// cover what that drill restored and nothing else. The construction
-// mirrors the postgres adapter's two-member framing (role NUL size NUL
-// content, fixed order), so the same pair always hashes the same and any
-// change to either member changes the hash.
-func resolveWithLogins(dir string, params map[string]string) (*resolvedSource, *protoError) {
+// change what a drill proves. The backup member may be named too; without
+// it the directory is scanned like bak_dir, so a drill against a rotating
+// directory keeps working unattended.
+func planWithLogins(dir string, params map[string]string) (*sourcePlan, *protoError) {
 	info, err := os.Stat(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -88,16 +96,76 @@ func resolveWithLogins(dir string, params map[string]string) (*resolvedSource, *
 		return nil, perr
 	}
 	loginsPath := filepath.Join(dir, loginsName)
-	logins, perr := statRegularFile(loginsPath, "logins script")
-	if perr != nil {
+	if _, perr := statRegularFile(loginsPath, "logins script"); perr != nil {
 		return nil, perr
 	}
 
-	bakPath, perr := chooseBak(dir, params["bak"], loginsName)
+	plan := &sourcePlan{dir: dir, loginsPath: loginsPath}
+	if requested := params["bak"]; requested != "" {
+		name, perr := memberName(requested, "bak")
+		if perr != nil {
+			return nil, perr
+		}
+		if name == loginsName {
+			return nil, protoErr("invalid_request", false,
+				"source.params.bak and source.params.logins both name %s", name)
+		}
+		bakPath := filepath.Join(dir, name)
+		if _, perr := statRegularFile(bakPath, "backup source"); perr != nil {
+			return nil, perr
+		}
+		plan.fixed = bakPath
+		return plan, nil
+	}
+
+	candidates, skipped, perr := candidatesIn(dir, loginsName)
 	if perr != nil {
 		return nil, perr
 	}
-	bak, perr := statRegularFile(bakPath, "backup source")
+	plan.candidates, plan.skipped = candidates, skipped
+	return plan, nil
+}
+
+// identity measures the backup identity of the artifact the engine chose.
+// It runs on the host, over the same bytes the sandbox received.
+func (p *sourcePlan) identity(chosen string) (*resolvedSource, *protoError) {
+	if p.loginsPath == "" {
+		info, perr := statRegularFile(chosen, "backup source")
+		if perr != nil {
+			return nil, perr
+		}
+		checksum, perr := fileChecksum(chosen)
+		if perr != nil {
+			return nil, perr
+		}
+		created := info.ModTime().UTC().Format("2006-01-02T15:04:05.000Z")
+		return &resolvedSource{
+			path:      chosen,
+			checksum:  checksum,
+			sizeBytes: info.Size(),
+			createdAt: &created,
+		}, nil
+	}
+	return p.compositeIdentity(chosen)
+}
+
+// compositeIdentity is the two-member identity of the bak_with_logins
+// kind. Both members are restored, so both must be in it — a checksum
+// covering only the backup would let the logins change without the
+// evidence record noticing, and the logins are exactly what that kind
+// exists to prove present. Only the two chosen members are hashed, not the
+// whole directory: one directory may hold the logins script beside several
+// databases' backups, each drilled separately, and a drill's identity must
+// cover what that drill restored and nothing else. The construction
+// mirrors the postgres adapter's two-member framing (role NUL size NUL
+// content, fixed order), so the same pair always hashes the same and any
+// change to either member changes the hash.
+func (p *sourcePlan) compositeIdentity(chosen string) (*resolvedSource, *protoError) {
+	logins, perr := statRegularFile(p.loginsPath, "logins script")
+	if perr != nil {
+		return nil, perr
+	}
+	bak, perr := statRegularFile(chosen, "backup source")
 	if perr != nil {
 		return nil, perr
 	}
@@ -108,8 +176,8 @@ func resolveWithLogins(dir string, params map[string]string) (*resolvedSource, *
 		path string
 		info os.FileInfo
 	}{
-		{"logins", loginsPath, logins},
-		{"bak", bakPath, bak},
+		{"logins", p.loginsPath, logins},
+		{"bak", chosen, bak},
 	} {
 		fmt.Fprintf(h, "%s\x00%d\x00", m.role, m.info.Size())
 		if perr := copyInto(h, m.path); perr != nil {
@@ -120,20 +188,18 @@ func resolveWithLogins(dir string, params map[string]string) (*resolvedSource, *
 	// The older mtime, not the newer: a two-member set is only as current
 	// as its stalest member. Stale logins are precisely the failure this
 	// kind exists to surface — a login created after the script was taken
-	// is missing, and its restored database user is orphaned. (bak_dir
-	// takes the newest file for the opposite and equally deliberate
-	// reason: a rotation directory's newest file is its latest backup.)
+	// is missing, and its restored database user is orphaned.
 	created := logins.ModTime()
 	if bak.ModTime().Before(created) {
 		created = bak.ModTime()
 	}
 	stamp := created.UTC().Format("2006-01-02T15:04:05.000Z")
 	return &resolvedSource{
-		path:       bakPath,
+		path:       chosen,
 		checksum:   fmt.Sprintf("sha256:%s", hex.EncodeToString(h.Sum(nil))),
 		sizeBytes:  logins.Size() + bak.Size(),
 		createdAt:  &stamp,
-		loginsPath: loginsPath,
+		loginsPath: p.loginsPath,
 	}, nil
 }
 
@@ -155,30 +221,19 @@ func memberName(value, param string) (string, *protoError) {
 	return value, nil
 }
 
-// chooseBak resolves which backup the drill restores: the one params.bak
-// names, or — so a drill against a rotating backup directory keeps working
-// unattended — the newest file that is not the logins script.
-func chooseBak(dir, requested, loginsName string) (string, *protoError) {
-	if requested != "" {
-		name, perr := memberName(requested, "bak")
-		if perr != nil {
-			return "", perr
-		}
-		if name == loginsName {
-			return "", protoErr("invalid_request", false,
-				"source.params.bak and source.params.logins both name %s", name)
-		}
-		return filepath.Join(dir, name), nil
+// mustBeFile refuses a directory for a kind that names one artifact.
+func mustBeFile(path string) *protoError {
+	info, err := os.Stat(path)
+	switch {
+	case os.IsNotExist(err):
+		return protoErr("source_not_found", false, "backup source does not exist: %s", path)
+	case err != nil:
+		return protoErr("source_unreadable", false, "stat backup source: %v", err)
+	case info.IsDir():
+		return protoErr("invalid_request", false,
+			"source path %s is a directory; use kind bak_dir for directories", path)
 	}
-	newest, perr := newestFileIn(dir, loginsName)
-	if perr != nil {
-		return "", perr
-	}
-	if newest == "" {
-		return "", protoErr("source_not_found", false,
-			"backup directory %s holds no backup beside the logins script %s", dir, loginsName)
-	}
-	return newest, nil
+	return nil
 }
 
 // statRegularFile stats a source member that must exist as a plain file;
@@ -196,73 +251,54 @@ func statRegularFile(path, what string) (os.FileInfo, *protoError) {
 	return info, nil
 }
 
-func resolveFile(path string) (*resolvedSource, *protoError) {
-	info, err := os.Stat(path)
-	switch {
-	case os.IsNotExist(err):
-		return nil, protoErr("source_not_found", false, "backup source does not exist: %s", path)
-	case err != nil:
-		return nil, protoErr("source_unreadable", false, "stat backup source: %v", err)
-	case info.IsDir():
-		return nil, protoErr("invalid_request", false,
-			"source path %s is a directory; use kind bak_dir for directories", path)
-	}
-	checksum, perr := fileChecksum(path)
-	if perr != nil {
-		return nil, perr
-	}
-	created := info.ModTime().UTC().Format("2006-01-02T15:04:05.000Z")
-	return &resolvedSource{
-		path:      path,
-		checksum:  checksum,
-		sizeBytes: info.Size(),
-		createdAt: &created,
-	}, nil
-}
-
-// latestDumpIn picks the newest regular file in dir.
-func latestDumpIn(dir string) (string, *protoError) {
-	best, perr := newestFileIn(dir, "")
-	if perr != nil {
-		return "", perr
-	}
-	if best == "" {
-		return "", protoErr("source_not_found", false, "backup directory %s contains no files", dir)
-	}
-	return best, nil
-}
-
-// newestFileIn returns the newest regular file in dir, skipping the entry
-// named except; ties break toward the lexicographically larger name so the
-// choice is deterministic. An empty result means the directory is readable
-// but holds no candidate — the caller says what that means.
-func newestFileIn(dir, except string) (string, *protoError) {
+// candidatesIn lists a directory's backup media newest first, skipping the
+// entry named except; ties break toward the lexicographically larger name
+// so the order is deterministic. Files that do not start like backup media
+// are returned separately rather than dropped, so a failure can say what
+// it passed over.
+func candidatesIn(dir, except string) (candidates, skipped []string, perr *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
-		return "", protoErr("source_not_found", false, "backup directory does not exist: %s", dir)
+		return nil, nil, protoErr("source_not_found", false, "backup directory does not exist: %s", dir)
 	case err != nil:
-		return "", protoErr("source_unreadable", false, "read backup directory: %v", err)
+		return nil, nil, protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var (
-		best     string
-		bestTime time.Time
-	)
+
+	type entry struct {
+		name  string
+		mtime int64
+	}
+	files := make([]entry, 0, len(entries))
 	for _, e := range entries {
 		if !e.Type().IsRegular() || e.Name() == except {
 			continue
 		}
 		info, err := e.Info()
 		if err != nil {
-			return "", protoErr("source_unreadable", false, "stat %s: %v", e.Name(), err)
+			return nil, nil, protoErr("source_unreadable", false, "stat %s: %v", e.Name(), err)
 		}
-		if best == "" || info.ModTime().After(bestTime) ||
-			(info.ModTime().Equal(bestTime) && e.Name() > filepath.Base(best)) {
-			best = filepath.Join(dir, e.Name())
-			bestTime = info.ModTime()
-		}
+		files = append(files, entry{name: e.Name(), mtime: info.ModTime().UnixNano()})
 	}
-	return best, nil
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].mtime != files[j].mtime {
+			return files[i].mtime > files[j].mtime
+		}
+		return files[i].name > files[j].name
+	})
+
+	for _, f := range files {
+		path := filepath.Join(dir, f.name)
+		if looksLikeBackupMedia(path) {
+			candidates = append(candidates, path)
+			continue
+		}
+		skipped = append(skipped, f.name)
+	}
+	if len(candidates) == 0 && len(skipped) == 0 {
+		return nil, nil, protoErr("source_not_found", false, "backup directory %s contains no files", dir)
+	}
+	return candidates, skipped, nil
 }
 
 // copyInto streams a file's bytes into h.
