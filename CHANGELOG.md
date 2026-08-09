@@ -13,6 +13,30 @@ always called out explicitly.
 
 ### Added
 
+- **`bak_chain`, a SQL Server source kind that restores the whole backup
+  set rather than just its newest full** (mssql adapter 0.6.0; closes
+  #98). A backup set is a chain — full, then differentials, then
+  transaction log backups — and `bak_dir` restores the full and stops.
+  Measured on a directory holding one full, two differentials and four
+  logs: the full alone recovers 1 row, the chain recovers all 7.
+
+  The chain is built from the log sequence numbers in each backup header,
+  not from file names: every differential and log carries the checkpoint
+  of the full it builds on, which separates two fulls' chains inside one
+  directory, and the logs cover contiguous ranges the restore follows by
+  carrying a redo point forward. Members restore `WITH NORECOVERY` and
+  the last one `WITH RECOVERY`, so the database becomes usable exactly
+  once. `backup.checksum` covers every member in restore order and
+  `created_at` is the last member's completion time.
+
+  A gap in the log sequence fails the drill, naming the point reached and
+  the log that starts too late; a directory holding several databases
+  needs `source.params.database_name`. Point-in-time recovery stays out
+  and the probe still declares `pitr: false` — measured, `RESTORE LOG …
+  WITH STOPAT` beyond the available logs exits successfully while leaving
+  the database in the restoring state, which would look like a passing
+  drill on a database nobody can open.
+
 - **The two physical backup kinds now date themselves** (postgres 0.7.0,
   mysql 0.6.0; closes #99). `pgbackrest` and `xtrabackup` were the only
   kinds left reporting no `backup.created_at` after the timestamp work in

@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "mssql"
-	adapterVersion = "0.5.0"
+	adapterVersion = "0.6.0"
 
 	defaultUser     = "sa"
 	defaultDatabase = "probavi"
@@ -64,6 +64,21 @@ const (
 	// (\047) before they enter the T-SQL string; the set number is an
 	// integer the adapter parsed from the backup header. All parsing
 	// happens inside the sandbox; the adapter only sees the exit code.
+	// chainRestoreScript restores one member of a backup chain: $1 file,
+	// $2 database, $3 backup set, $4 DATABASE or LOG, $5 NORECOVERY or
+	// RECOVERY, $6 whether to relocate the data files. Only the full
+	// backup that opens a chain creates files and needs the MOVEs; every
+	// later member lands on the ones it made. Arguments travel as
+	// positional parameters, and each was validated before it could reach
+	// T-SQL text.
+	chainRestoreScript = `set -e
+sqlcmd=/opt/mssql-tools18/bin/sqlcmd
+moves=""
+if [ "$6" = "1" ]; then
+  moves=$("$sqlcmd" -S 127.0.0.1,1433 -U sa -C -b -l 5 -h -1 -W -s "|" -r 1 -Q "SET NOCOUNT ON; RESTORE FILELISTONLY FROM DISK = N'$1' WITH FILE = $3" | awk -F"|" 'NF >= 3 { name = $1; gsub("\047", "\047\047", name); printf ", MOVE N\047%s\047 TO N\047/var/opt/mssql/data/probavi_restore_%d.dat\047", name, NR }')
+fi
+"$sqlcmd" -S 127.0.0.1,1433 -U sa -C -b -l 5 -r 1 -Q "RESTORE $4 [$2] FROM DISK = N'$1' WITH FILE = $3, $5$moves"`
+
 	restoreScript = `set -e
 sqlcmd=/opt/mssql-tools18/bin/sqlcmd
 moves=$("$sqlcmd" -S 127.0.0.1,1433 -U sa -C -b -l 5 -h -1 -W -s "|" -r 1 -Q "SET NOCOUNT ON; RESTORE FILELISTONLY FROM DISK = N'$1' WITH FILE = $3" | awk -F"|" 'NF >= 3 { name = $1; gsub("\047", "\047\047", name); printf ", MOVE N\047%s\047 TO N\047/var/opt/mssql/data/probavi_restore_%d.dat\047", name, NR }')
@@ -87,6 +102,7 @@ func probePayload() any {
 			{"kind": "bak", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "bak_dir", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "bak_with_logins", "capabilities": map[string]bool{"pitr": false}},
+			{"kind": "bak_chain", "capabilities": map[string]bool{"pitr": false}},
 		},
 		"sql_runner": map[string]any{
 			// -I turns on QUOTED_IDENTIFIER, so the SQL-standard
@@ -152,6 +168,10 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		return nil, perr
 	}
 	logger.Info("engine ready", "seconds", readySeconds)
+
+	if req.Source.Kind == "bak_chain" {
+		return provisionChain(ctx, c, plan, database, scratch, readySeconds, logger)
+	}
 
 	// Which file is a full backup — and which set inside it — is a question
 	// only the engine can answer, so the choice happens here rather than on

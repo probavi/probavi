@@ -12,6 +12,7 @@
   "sources": {
     "bak": "One native SQL Server .bak backup file",
     "bak_dir": "A directory of backup files; the newest full backup is restored",
-    "bak_with_logins": "A directory holding one .bak and a server-logins T-SQL script, restored together"
+    "bak_with_logins": "A directory holding one .bak and a server-logins T-SQL script, restored together",
+    "bak_chain": "A directory of backups replayed as a chain: the newest full, its newest differential, and the log backups that follow"
   }
 }

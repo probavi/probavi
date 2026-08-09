@@ -39,9 +39,9 @@ func TestParseBackupSetsToleratesAShortRow(t *testing.T) {
 
 func TestFinishedAtOf(t *testing.T) {
 	sets := []backupSet{
-		{1, backupTypeFull, "2026-08-08 03:00:00.000"},
-		{2, backupTypeLog, "2026-08-09 03:00:00.000"},
-		{3, backupTypeFull, "2026-08-09 21:08:21.000"},
+		{position: 1, backupType: backupTypeFull, finishedAt: "2026-08-08 03:00:00.000"},
+		{position: 2, backupType: backupTypeLog, finishedAt: "2026-08-09 03:00:00.000"},
+		{position: 3, backupType: backupTypeFull, finishedAt: "2026-08-09 21:08:21.000"},
 	}
 	if got := finishedAtOf(sets, 3); got != "2026-08-09 21:08:21.000" {
 		t.Errorf("finishedAtOf(3) = %q, want the chosen set's own clock", got)

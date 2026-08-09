@@ -12,6 +12,7 @@ in-repo adapters, it is written from the protocol document alone.
 | `bak`     | One native `BACKUP DATABASE ... TO DISK` file.                |
 | `bak_dir` | A directory of backup files; the newest **full** backup is restored (see below). |
 | `bak_with_logins` | A directory holding a server-logins T-SQL script (`params.logins`) and one `.bak`; the logins are replayed first, and the drill fails if any restored SQL user is left without a matching server login. |
+| `bak_chain` | A directory of backups replayed as a **chain**: the newest full, its newest differential, and the log backups that follow — the state the backup set can actually recover to. |
 
 ## Sandbox image: start it idle
 
@@ -94,6 +95,74 @@ second-guessed this way: the operator chose that file.
 Selection is not part of the measured recovery time. `transfer_seconds`
 counts the chosen artifact's transfer only — an operator recovering for
 real reads their backup catalogue instead of probing.
+
+## The bak_chain kind (the whole backup set, not just the full)
+
+A SQL Server backup set is a chain: a full backup, then differentials,
+then transaction log backups. `bak_dir` restores the newest **full** and
+stops there, which is honest but proves less than the recovery it stands
+for — measured on a directory holding one full, two differentials and
+four logs, the full alone recovers **1 row** and the chain recovers all
+**7**.
+
+```yaml
+source:
+  kind: bak_chain
+  path: /backups/shop
+  params:
+    database_name: shop     # only when the directory holds more than one database
+```
+
+### How the chain is built
+
+Not from file names — those are convention SQL Server ignores — but from
+the log sequence numbers in each backup's header, and the relationships
+were measured rather than assumed:
+
+- every differential and log carries the **checkpoint of the full it
+  builds on**, which is what ties one chain together and keeps two fulls'
+  chains apart, even in the same directory;
+- log backups cover **contiguous ranges**, each one starting where the
+  previous ended, so the chain is followed by carrying a redo point
+  forward rather than by sorting on file times.
+
+The order is: the newest full, its newest differential (if any), then the
+logs from there. Every member restores `WITH NORECOVERY` and the last one
+`WITH RECOVERY`, so the database becomes usable exactly once, at the end.
+Intermediate logs the differential already covers are not replayed.
+
+### What fails the drill
+
+- **A gap in the log sequence.** The failure names the point the restore
+  reaches and the log that starts too late, so the missing backup is
+  identifiable. Stopping quietly at the last reachable log would leave
+  the record claiming a chain restore that ended early.
+- **Several databases with no `database_name`.** One directory can hold
+  backups of many; picking for you would mean a record naming a database
+  nobody chose.
+- **Backup media the engine cannot read**, exactly as for the other
+  kinds — falling back would build a chain out of whatever happened to
+  parse.
+
+### Costs and limits
+
+Every candidate is transferred once to be identified, through a single
+scratch path the next probe overwrites, so the sandbox never holds the
+whole directory. The chain's own members are then transferred to stay —
+and **all of them count as the measured recovery**, unlike the probing,
+because replaying them is the recovery this drill performs.
+
+`backup.checksum` covers **every member in restore order**; a checksum
+blind to the logs would let the data the drill actually recovered change
+without the record noticing. `created_at` is the last member's completion
+time — a chain is only as current as the log it ends on.
+
+Point-in-time recovery is **not** part of this kind, and the reason is
+measured: `RESTORE LOG ... WITH STOPAT` beyond the available logs exits
+successfully while leaving the database in the restoring state, which
+would look like a passing drill on a database nobody can open. `STOPAT`
+belongs to a design that handles that outcome explicitly; the probe still
+declares `pitr: false`.
 
 ## Restore behavior
 
@@ -270,6 +339,7 @@ Set under `source.params` in the drill config.
 
 | Param             | Kinds             | Meaning                                                 |
 |-------------------|-------------------|---------------------------------------------------------|
+| `database_name`   | `bak_chain`       | Required only when the directory holds backups of more than one database; names the one to restore. |
 | `logins`          | `bak_with_logins` | **Required.** Bare filename of the server-logins script inside the source directory. |
 | `bak`             | `bak_with_logins` | Optional. Bare filename of the backup; without it the directory is scanned for the newest full backup. |
 | `backup_timezone` | all               | Optional. IANA zone name of the host that took the backup (e.g. `Europe/Budapest`). Without it `backup.created_at` is null — see above. |

@@ -154,6 +154,8 @@ func classify(t *testing.T, call verbCall) (execArgs, string) {
 			return args, "start"
 		case restoreScript:
 			return args, "restore"
+		case chainRestoreScript:
+			return args, "chain"
 		}
 	}
 	t.Fatalf("unexpected exec: %v", args.Argv)

@@ -56,6 +56,16 @@ const (
 	headerFinishIdx   = 18
 	headerFinishCount = 19
 	headerClockLayout = "2006-01-02 15:04:05.000"
+
+	// The columns a restore chain is built from. Their positions were read
+	// off a real header row (59 columns on SQL Server 2022): the database
+	// a backup belongs to, and the log sequence numbers that say what it
+	// covers and what it builds on.
+	headerDatabaseIdx    = 9
+	headerFirstLSNIdx    = 13
+	headerLastLSNIdx     = 14
+	headerCheckpointIdx  = 15
+	headerDatabaseLSNIdx = 16
 )
 
 // backupMediaMagic are the first four bytes of SQL Server backup media,
@@ -99,6 +109,17 @@ type backupSet struct {
 	// local time (measured). Empty when the row does not reach that
 	// column.
 	finishedAt string
+
+	// The chain fields. database names the backup's own database, which
+	// is how one directory can hold several; the log sequence numbers say
+	// what the set covers (first..last), where it starts from
+	// (checkpoint), and which full it builds on (databaseLSN equals that
+	// full's checkpoint — measured). Empty when the row stops short.
+	database    string
+	firstLSN    string
+	lastLSN     string
+	checkpoint  string
+	databaseLSN string
 }
 
 // probeBackupSets asks the engine what a transferred file holds. The path
@@ -152,6 +173,11 @@ func parseBackupSets(stdout []byte) ([]backupSet, *protoError) {
 		set := backupSet{position: position, backupType: kind}
 		if len(fields) >= headerFinishCount {
 			set.finishedAt = strings.TrimSpace(fields[headerFinishIdx])
+			set.database = strings.TrimSpace(fields[headerDatabaseIdx])
+			set.firstLSN = strings.TrimSpace(fields[headerFirstLSNIdx])
+			set.lastLSN = strings.TrimSpace(fields[headerLastLSNIdx])
+			set.checkpoint = strings.TrimSpace(fields[headerCheckpointIdx])
+			set.databaseLSN = strings.TrimSpace(fields[headerDatabaseLSNIdx])
 		}
 		sets = append(sets, set)
 	}

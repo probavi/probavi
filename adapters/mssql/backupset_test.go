@@ -102,17 +102,17 @@ func TestNewestFullPosition(t *testing.T) {
 		want     int
 		wantHave bool
 	}{
-		{"one full", []backupSet{{1, backupTypeFull, ""}}, 1, true},
-		{"full then log", []backupSet{{1, backupTypeFull, ""}, {2, backupTypeLog, ""}}, 1, true},
+		{"one full", []backupSet{{position: 1, backupType: backupTypeFull}}, 1, true},
+		{"full then log", []backupSet{{position: 1, backupType: backupTypeFull}, {position: 2, backupType: backupTypeLog}}, 1, true},
 		{"the newest full wins",
-			[]backupSet{{1, backupTypeFull, ""}, {2, backupTypeLog, ""}, {3, backupTypeFull, ""}}, 3, true},
+			[]backupSet{{position: 1, backupType: backupTypeFull}, {position: 2, backupType: backupTypeLog}, {position: 3, backupType: backupTypeFull}}, 3, true},
 		{"positions out of order",
-			[]backupSet{{3, backupTypeFull, ""}, {1, backupTypeFull, ""}}, 3, true},
-		{"only a log", []backupSet{{1, backupTypeLog, ""}}, 0, false},
-		{"only a differential", []backupSet{{1, backupTypeDifferential, ""}}, 0, false},
-		{"log and differential", []backupSet{{1, backupTypeDifferential, ""}, {2, backupTypeLog, ""}}, 0, false},
-		{"a partial backup is not a full", []backupSet{{1, backupTypePartial, ""}}, 0, false},
-		{"a file backup is not a full", []backupSet{{1, backupTypeFile, ""}}, 0, false},
+			[]backupSet{{position: 3, backupType: backupTypeFull}, {position: 1, backupType: backupTypeFull}}, 3, true},
+		{"only a log", []backupSet{{position: 1, backupType: backupTypeLog}}, 0, false},
+		{"only a differential", []backupSet{{position: 1, backupType: backupTypeDifferential}}, 0, false},
+		{"log and differential", []backupSet{{position: 1, backupType: backupTypeDifferential}, {position: 2, backupType: backupTypeLog}}, 0, false},
+		{"a partial backup is not a full", []backupSet{{position: 1, backupType: backupTypePartial}}, 0, false},
+		{"a file backup is not a full", []backupSet{{position: 1, backupType: backupTypeFile}}, 0, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -130,10 +130,10 @@ func TestDescribeSets(t *testing.T) {
 		sets []backupSet
 		want string
 	}{
-		{"one log", []backupSet{{1, backupTypeLog, ""}}, "transaction log backup"},
-		{"one differential", []backupSet{{1, backupTypeDifferential, ""}}, "differential backup"},
-		{"several logs", []backupSet{{1, backupTypeLog, ""}, {2, backupTypeLog, ""}}, "2 transaction log backups"},
-		{"mixed", []backupSet{{1, backupTypeDifferential, ""}, {2, backupTypeLog, ""}},
+		{"one log", []backupSet{{position: 1, backupType: backupTypeLog}}, "transaction log backup"},
+		{"one differential", []backupSet{{position: 1, backupType: backupTypeDifferential}}, "differential backup"},
+		{"several logs", []backupSet{{position: 1, backupType: backupTypeLog}, {position: 2, backupType: backupTypeLog}}, "2 transaction log backups"},
+		{"mixed", []backupSet{{position: 1, backupType: backupTypeDifferential}, {position: 2, backupType: backupTypeLog}},
 			"differential backup, transaction log backup"},
 	}
 	for _, tt := range tests {
