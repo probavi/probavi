@@ -49,7 +49,7 @@ func resolveSource(ctx context.Context, kind, path string, params map[string]str
 	case "pgdump_with_globals":
 		return resolveWithGlobals(ctx, path, params, loc)
 	case "pgbackrest":
-		return resolveRepo(path)
+		return resolveRepo(path, params["stanza"])
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: pgdump, pgdump_dir, pgdump_with_globals, pgbackrest)", kind)
@@ -221,7 +221,7 @@ func copyInto(h io.Writer, path string) *protoError {
 // resolveRepo resolves a directory source: the checksum is a canonical hash
 // over the whole tree (documented in the adapter README), created_at is the
 // newest file's mtime.
-func resolveRepo(dir string) (*resolvedSource, *protoError) {
+func resolveRepo(dir, stanza string) (*resolvedSource, *protoError) {
 	info, err := os.Stat(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -236,11 +236,15 @@ func resolveRepo(dir string) (*resolvedSource, *protoError) {
 	if perr != nil {
 		return nil, perr
 	}
-	// A pgBackRest repository records its own backup timestamps in
-	// backup.info; reading them is separate work, so until then this kind
-	// reports no creation time rather than the newest file's mtime, which
-	// dates a copy rather than a backup.
-	return &resolvedSource{path: dir, checksum: checksum, sizeBytes: size}, nil
+	// The repository dates itself: backup.info records epoch seconds, so
+	// this is the one kind here that needs no declared zone (see
+	// repotime.go).
+	return &resolvedSource{
+		path:      dir,
+		checksum:  checksum,
+		sizeBytes: size,
+		createdAt: repoCreatedAt(dir, stanza),
+	}, nil
 }
 
 // dirChecksum hashes a directory tree canonically: entries sorted by

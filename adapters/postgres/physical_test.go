@@ -323,22 +323,41 @@ func TestPITRRequestHandling(t *testing.T) {
 	})
 }
 
-// TestRepoReportsNoCreationTime pins the deliberate absence: a
-// repository's newest file dates a copy, not a backup, so this kind
-// claims no creation time at all rather than an mtime dressed up as one.
-// pgBackRest records real timestamps in backup.info; reading them is
-// separate work.
-func TestRepoReportsNoCreationTime(t *testing.T) {
+// TestRepoWithAnUnreadableManifest pins the fail-closed half: this
+// fixture's backup.info is a placeholder rather than a real manifest, so
+// nothing dates the repository and nothing is invented from the newest
+// file's mtime, which dates a copy. The readable case — epoch seconds
+// straight out of a real manifest — lives in repotime_test.go.
+func TestRepoWithAnUnreadableManifest(t *testing.T) {
 	repo := writeRepoFixture(t)
 	newest := time.Date(2026, 7, 30, 6, 0, 0, 0, time.UTC)
 	if err := os.Chtimes(filepath.Join(repo, "archive/demo/wal-001"), newest, newest); err != nil {
 		t.Fatalf("chtimes: %v", err)
 	}
-	src, perr := resolveSource(context.Background(), "pgbackrest", repo, nil)
+	src, perr := resolveSource(context.Background(), "pgbackrest", repo, map[string]string{"stanza": "demo"})
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
 	if src.createdAt != nil {
 		t.Errorf("createdAt = %s, want none — an mtime is not the backup's creation time", *src.createdAt)
+	}
+}
+
+// TestRepoIsDatedByItsManifest proves the wiring: a repository carrying a
+// real manifest dates itself, and — unlike every other kind here — needs
+// no declared zone, because pgBackRest records epoch seconds.
+func TestRepoIsDatedByItsManifest(t *testing.T) {
+	repo := writeRepoFixture(t)
+	manifest := "[backup:current]\n" +
+		`20260810-003749F={"backup-timestamp-start":1786289869,"backup-timestamp-stop":1786289873}` + "\n"
+	if err := os.WriteFile(filepath.Join(repo, "backup/demo/backup.info"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src, perr := resolveSource(context.Background(), "pgbackrest", repo, map[string]string{"stanza": "demo"})
+	if perr != nil {
+		t.Fatalf("resolveSource: %+v", perr)
+	}
+	if src.createdAt == nil || *src.createdAt != "2026-08-09T15:37:53.000Z" {
+		t.Errorf("createdAt = %v, want the repository's own completion instant", src.createdAt)
 	}
 }
