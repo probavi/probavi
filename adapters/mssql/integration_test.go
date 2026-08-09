@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +33,10 @@ const (
 	// successful authentication with this plaintext proves the hash and
 	// SID round-tripped through the drill.
 	appLoginPassword = "AppSeed!OnlyInSandbox1"
+
+	// engineMemoryLimit caps every engine this suite starts. SQL Server
+	// refuses to start below 2 GB, and the fixtures never need more.
+	engineMemoryLimit = "2g"
 )
 
 // orphanedUsersSQL is this test's own statement of the defect — kept
@@ -62,8 +67,18 @@ func verifiedImage(t *testing.T) string {
 // image starts idle (SQL Server cannot run without a superuser password,
 // and a password in sandbox params would enter the signed evidence record
 // — so the adapter starts and owns the engine).
+//
+// The memory limit is not incidental. Left unbounded, SQL Server sizes its
+// buffer pool against the whole host and several engines in one suite run
+// can push a developer's machine into swapping or the OOM killer; the
+// fixtures here are a handful of rows, so the documented minimum is
+// plenty and keeps the suite's footprint predictable.
 func sandboxParams(t *testing.T) map[string]string {
-	return map[string]string{"image": verifiedImage(t), "command": "sleep infinity"}
+	return map[string]string{
+		"image":   verifiedImage(t),
+		"command": "sleep infinity",
+		"memory":  engineMemoryLimit,
+	}
 }
 
 // TestEndToEndRestoreDrill proves the fourth engine through the unchanged
@@ -746,4 +761,139 @@ func copyFixture(t *testing.T, ctx context.Context, sbx *docker.Sandbox, contain
 	if out, err := exec.CommandContext(ctx, "docker", "cp", sbx.ID()+":"+containerPath, dest).CombinedOutput(); err != nil {
 		t.Fatalf("extract fixture: %v: %s", err, out)
 	}
+}
+
+// TestChainDrillEndToEnd reproduces issue #98 and proves the fix. A SQL
+// Server backup set is a chain — a full backup, then differentials, then
+// transaction log backups — and restoring only the full proves the state
+// the database was in when that full was taken, not the state the backups
+// can actually recover to. Both halves run against the same directory, so
+// the difference is the drill's, not the fixture's.
+func TestChainDrillEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	provider := docker.New(nil)
+	dir := makeChainFixture(t, ctx, provider)
+
+	runner, err := adapter.New("mssql", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+
+	t.Run("bak_dir restores the full backup and stops there", func(t *testing.T) {
+		sbx := freshSandbox(t, ctx, provider)
+		res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+			Source:  adapter.ProvisionSource{Kind: "bak_dir", Path: dir},
+			Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+		}, sbx)
+		if err != nil {
+			t.Fatalf("provision: %v", err)
+		}
+		if rows := queryScalar(t, ctx, sbx, res.Connection.Database, "SELECT count(*) FROM dbo.t"); rows != "1" {
+			t.Errorf("rows = %s, want 1 — everything after the full backup is outside this drill", rows)
+		}
+	})
+
+	t.Run("bak_chain replays the whole chain", func(t *testing.T) {
+		sbx := freshSandbox(t, ctx, provider)
+		res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+			Source:  adapter.ProvisionSource{Kind: "bak_chain", Path: dir},
+			Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+		}, sbx)
+		if err != nil {
+			t.Fatalf("provision: %v", err)
+		}
+		// Seven rows: one before the full backup and six committed after
+		// it, recovered through the differential and the logs.
+		if rows := queryScalar(t, ctx, sbx, res.Connection.Database, "SELECT count(*) FROM dbo.t"); rows != "7" {
+			t.Errorf("rows = %s, want 7 — the chain must recover what the logs carry", rows)
+		}
+		// The database is usable, which is what the final RECOVERY buys:
+		// a chain left mid-restore answers nothing.
+		health, err := runner.Healthcheck(ctx, &res.Connection, res.State, sbx)
+		if err != nil || !health.Healthy {
+			t.Errorf("healthcheck = %+v, %v — the chain must end recovered", health, err)
+		}
+		if res.SourceIdentity.SizeBytes == 0 || !strings.HasPrefix(res.SourceIdentity.Checksum, "sha256:") {
+			t.Errorf("source identity = %+v", res.SourceIdentity)
+		}
+	})
+
+	t.Run("a gap in the log sequence fails the drill", func(t *testing.T) {
+		gapped := t.TempDir()
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			// Drop the log that bridges the differential to the last one.
+			if e.Name() == "06-log.trn" {
+				continue
+			}
+			copyFile(t, filepath.Join(dir, e.Name()), filepath.Join(gapped, e.Name()))
+		}
+		sbx := freshSandbox(t, ctx, provider)
+		_, err = runner.Provision(ctx, &adapter.ProvisionRequest{
+			Source:  adapter.ProvisionSource{Kind: "bak_chain", Path: gapped},
+			Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+		}, sbx)
+		var aerr *adapter.Error
+		if err == nil || !errors.As(err, &aerr) || aerr.Code != "source_not_found" {
+			t.Fatalf("provision error = %v, want source_not_found from the chain builder", err)
+		}
+		if !strings.Contains(aerr.Message, "gap") {
+			t.Errorf("message = %q, want the gap named", aerr.Message)
+		}
+	})
+}
+
+// makeChainFixture seeds a database in full recovery model and takes a
+// real chain: a full backup, a log, a differential, a log, a second
+// differential and two more logs — one row committed before each. A
+// second database's full backup lands in the same directory, because a
+// real backup directory holds more than one.
+func makeChainFixture(t *testing.T, ctx context.Context, provider *docker.Provider) string {
+	t.Helper()
+	seed, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+	startEngine(t, ctx, seed, seedPassword)
+	awaitReady(t, ctx, seed, seedPassword)
+
+	mustSQL(t, ctx, seed, seedPassword, "CREATE DATABASE shop")
+	mustSQL(t, ctx, seed, seedPassword, "ALTER DATABASE shop SET RECOVERY FULL")
+	mustSQL(t, ctx, seed, seedPassword, "CREATE TABLE shop.dbo.t (id INT PRIMARY KEY)")
+	mustSQL(t, ctx, seed, seedPassword, "CREATE DATABASE other")
+
+	// Each row is committed before the backup that must carry it, so a
+	// chain that stops early shows up as a missing row rather than as a
+	// timing coincidence.
+	for _, step := range []struct {
+		row    int
+		backup string
+	}{
+		{1, "BACKUP DATABASE shop TO DISK = N'/tmp/01-full.bak'"},
+		{2, "BACKUP LOG shop TO DISK = N'/tmp/02-log.trn'"},
+		{3, "BACKUP DATABASE shop TO DISK = N'/tmp/03-diff.bak' WITH DIFFERENTIAL"},
+		{4, "BACKUP LOG shop TO DISK = N'/tmp/04-log.trn'"},
+		{5, "BACKUP DATABASE shop TO DISK = N'/tmp/05-diff.bak' WITH DIFFERENTIAL"},
+		{6, "BACKUP LOG shop TO DISK = N'/tmp/06-log.trn'"},
+		{7, "BACKUP LOG shop TO DISK = N'/tmp/07-log.trn'"},
+	} {
+		mustSQL(t, ctx, seed, seedPassword,
+			fmt.Sprintf("INSERT INTO shop.dbo.t VALUES (%d)", step.row))
+		mustSQL(t, ctx, seed, seedPassword, step.backup)
+	}
+	mustSQL(t, ctx, seed, seedPassword, "BACKUP DATABASE other TO DISK = N'/tmp/99-other.bak'")
+
+	dir := t.TempDir()
+	for _, name := range []string{"01-full.bak", "02-log.trn", "03-diff.bak", "04-log.trn",
+		"05-diff.bak", "06-log.trn", "07-log.trn"} {
+		copyFixture(t, ctx, seed, "/tmp/"+name, filepath.Join(dir, name))
+	}
+	return dir
 }

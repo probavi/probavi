@@ -79,7 +79,7 @@
       "id": "mssql",
       "name": "SQL Server",
       "status": "experimental",
-      "adapter_version": "0.5.0",
+      "adapter_version": "0.6.0",
       "engine": {
         "id": "sqlserver",
         "name": "Microsoft SQL Server"
@@ -97,6 +97,11 @@
         {
           "id": "bak",
           "name": "One native SQL Server .bak backup file",
+          "pitr": false
+        },
+        {
+          "id": "bak_chain",
+          "name": "A directory of backups replayed as a chain: the newest full, its newest differential, and the log backups that follow",
           "pitr": false
         },
         {

@@ -37,6 +37,9 @@ type sourcePlan struct {
 	skipped    []string // entries that are not backup media, for diagnostics
 	dir        string   // the configured directory, for diagnostics
 	loginsPath string   // bak_with_logins only
+	// databaseName is the database a bak_chain drill restores, when the
+	// directory holds backups of more than one and the config says which.
+	databaseName string
 	// loc is the zone the operator declared the backup host was in; nil
 	// when none was declared, in which case no creation time is reported.
 	loc *time.Location
@@ -49,6 +52,9 @@ type sourcePlan struct {
 //	bak_dir         — path is a directory of backup files
 //	bak_with_logins — path is a directory holding a server-logins T-SQL
 //	                  script (params.logins) and one or more .bak files
+//	bak_chain       — path is a directory of backups replayed as a chain:
+//	                  the newest full, its newest differential, and the
+//	                  log backups that follow (see chain.go)
 func resolveSource(kind, path string, params map[string]string) (*sourcePlan, *protoError) {
 	loc, perr := backupLocation(params)
 	if perr != nil {
@@ -66,11 +72,22 @@ func resolveSource(kind, path string, params map[string]string) (*sourcePlan, *p
 			return nil, perr
 		}
 		return &sourcePlan{candidates: candidates, skipped: skipped, dir: path, loc: loc}, nil
+	case "bak_chain":
+		candidates, skipped, perr := candidatesIn(path, "")
+		if perr != nil {
+			return nil, perr
+		}
+		name := params["database_name"]
+		if name != "" && !databasePattern.MatchString(name) {
+			return nil, protoErr("invalid_request", false,
+				"source.params.database_name %s must contain only letters, digits, underscores, and hyphens", name)
+		}
+		return &sourcePlan{candidates: candidates, skipped: skipped, dir: path, loc: loc, databaseName: name}, nil
 	case "bak_with_logins":
 		return planWithLogins(path, params, loc)
 	default:
 		return nil, protoErr("unsupported_source", false,
-			"unsupported source kind: %s (supported: bak, bak_dir, bak_with_logins)", kind)
+			"unsupported source kind: %s (supported: bak, bak_dir, bak_with_logins, bak_chain)", kind)
 	}
 }
 
@@ -328,4 +345,44 @@ func fileChecksum(path string) (string, *protoError) {
 		return "", perr
 	}
 	return fmt.Sprintf("sha256:%s", hex.EncodeToString(h.Sum(nil))), nil
+}
+
+// chainIdentity is the backup identity of a restore chain: every artifact
+// the chain replays, hashed in restore order with the same framing the
+// two-member kinds use (role NUL size NUL content), so the same chain
+// always hashes the same and a change to any member changes the hash.
+//
+// The whole chain is the backup here — a checksum covering only the full
+// would let a log backup change without the evidence record noticing,
+// while the drill's result depends on every one of them. Files outside
+// the chain are not in it, for the same reason a directory's other
+// databases are not: a drill's identity covers what that drill restored
+// and nothing else.
+//
+// A chain is only as current as its last member, and that member is what
+// dates it: the log backup the recovery ends on.
+func (p *sourcePlan) chainIdentity(sel *chainSelection, loc *time.Location) (*resolvedSource, *protoError) {
+	h := sha256.New()
+	var total int64
+	// One artifact can contribute more than one set to a chain (appended
+	// media), and its bytes are then hashed once per member — the member
+	// list is what the identity describes, not the file list.
+	for i, node := range sel.nodes {
+		info, perr := statRegularFile(node.hostPath, "backup source")
+		if perr != nil {
+			return nil, perr
+		}
+		fmt.Fprintf(h, "%d:%s\x00%d\x00", i, backupTypeName(node.set.backupType), info.Size())
+		if perr := copyInto(h, node.hostPath); perr != nil {
+			return nil, perr
+		}
+		total += info.Size()
+	}
+	last := sel.nodes[len(sel.nodes)-1]
+	return &resolvedSource{
+		path:      last.hostPath,
+		checksum:  fmt.Sprintf("sha256:%s", hex.EncodeToString(h.Sum(nil))),
+		sizeBytes: total,
+		createdAt: backupFinishedAt(last.set.finishedAt, loc),
+	}, nil
 }
