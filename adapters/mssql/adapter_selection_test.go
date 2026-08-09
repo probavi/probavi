@@ -11,16 +11,24 @@ import (
 	"time"
 )
 
-// scanHandler drives a directory scan: every candidate lands on the same
-// sandbox path, so the fake core remembers which file was transferred last
-// and answers the following HEADERONLY probe for that file.
+// restorePath is where the drill's restore reads from; candidates are
+// probed through the scratch path beside it.
+const restorePath = "/scratch/probavi-restore.bak"
+
+// scanHandler drives a directory scan: every candidate is probed through
+// one sandbox path, so the fake core remembers which file was transferred
+// last and answers the following HEADERONLY probe for that file. What
+// lands on the restore path is the artifact the drill chose.
 type scanHandler struct {
 	t *testing.T
 	// headers maps a candidate's base name to the rows its probe returns.
 	headers map[string]string
 	// probeFails maps a candidate's base name to a HEADERONLY stderr; the
 	// probe then exits non-zero.
-	probeFails  map[string]string
+	probeFails map[string]string
+	// probed is every candidate the scan examined, in order; transferred is
+	// what was moved into place for the restore.
+	probed      []string
 	transferred []string
 	lastPut     string
 	restoreArgv []string
@@ -32,7 +40,11 @@ func (h *scanHandler) handle(call verbCall) (any, *protoError) {
 		if err := json.Unmarshal(call.Args, &args); err != nil {
 			h.t.Fatalf("put_file args: %v", err)
 		}
-		if args.DestPath == "/scratch/probavi-restore.bak" {
+		switch args.DestPath {
+		case restorePath + probeSuffix:
+			h.lastPut = filepath.Base(args.SourcePath)
+			h.probed = append(h.probed, h.lastPut)
+		case restorePath:
 			h.lastPut = filepath.Base(args.SourcePath)
 			h.transferred = append(h.transferred, h.lastPut)
 		}
@@ -87,8 +99,11 @@ func TestScanSkipsNonFullCandidates(t *testing.T) {
 		t.Fatalf("exit=%d final=%+v — a directory with a full backup must restore", exit, f)
 	}
 	want := []string{"z-log.trn", "m-diff.bak", "a-full.bak"}
-	if strings.Join(h.transferred, ",") != strings.Join(want, ",") {
-		t.Errorf("transferred = %v, want newest-first until the full backup %v", h.transferred, want)
+	if strings.Join(h.probed, ",") != strings.Join(want, ",") {
+		t.Errorf("probed = %v, want every candidate examined, newest file first %v", h.probed, want)
+	}
+	if strings.Join(h.transferred, ",") != "a-full.bak" {
+		t.Errorf("transferred = %v, want only the chosen full backup moved into place", h.transferred)
 	}
 
 	// The identity must describe the artifact the engine chose, not the
@@ -131,8 +146,11 @@ func TestScanRefusesCorruptCandidate(t *testing.T) {
 	if f.Error.Code != "source_corrupt" {
 		t.Errorf("code = %s (%s), want source_corrupt", f.Error.Code, f.Error.Message)
 	}
-	if len(h.transferred) != 1 {
-		t.Errorf("transferred = %v, want the scan to stop at the unreadable newest backup", h.transferred)
+	if len(h.probed) != 1 {
+		t.Errorf("probed = %v, want the scan to stop at the unreadable newest backup", h.probed)
+	}
+	if len(h.transferred) != 0 {
+		t.Errorf("transferred = %v, want nothing restored after a refusal", h.transferred)
 	}
 }
 
@@ -272,8 +290,126 @@ func TestSelectionTimeIsNotRecoveryTime(t *testing.T) {
 	if err := json.Unmarshal(f.Payload, &res); err != nil {
 		t.Fatalf("payload: %v", err)
 	}
-	// Two transfers happened at 0.5 s each; only the chosen one counts.
+	// Three transfers happened at 0.5 s each — two probes and the chosen
+	// artifact's — and only the last one is recovery.
 	if res.Timings.Transfer != 0.5 {
 		t.Errorf("transfer_seconds = %v, want the chosen artifact's transfer alone", res.Timings.Transfer)
+	}
+}
+
+// TestScanRanksByTheHeaderNotTheFileTime is issue #100 for this adapter:
+// the newest *file* is an older backup that was copied into the directory
+// afterwards, and the drill must restore the backup the server finished
+// last. Both candidates are full backups, so nothing but the recorded
+// completion time can tell them apart.
+func TestScanRanksByTheHeaderNotTheFileTime(t *testing.T) {
+	dir := t.TempDir()
+	fresh := writeMedia(t, dir, "a-fresh.bak", "FRESH-BYTES")
+	stale := writeMedia(t, dir, "z-stale-copy.bak", "STALE")
+	touch(t, fresh, 2*time.Hour) // taken last, but copied in first
+	touch(t, stale, time.Minute) // copied in last, so it looks newest
+
+	h := &scanHandler{t: t, headers: map[string]string{
+		"z-stale-copy.bak": headerRowWithDate("2026-08-01 03:00:00.000") + "\n",
+		"a-fresh.bak":      headerRowWithDate("2026-08-09 03:00:00.000") + "\n",
+	}}
+	line, _, exit := driveOp(t, "provision", dirPayload(dir), h.handle)
+	f := parseFinal(t, line)
+	if exit != 0 || !f.OK {
+		t.Fatalf("exit=%d final=%+v", exit, f)
+	}
+	if strings.Join(h.transferred, ",") != "a-fresh.bak" {
+		t.Errorf("transferred = %v, want the backup the server finished last — a copy's file time must not decide",
+			h.transferred)
+	}
+	res := provisionWire{}
+	if err := json.Unmarshal(f.Payload, &res); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if res.SourceIdentity.SizeBytes != int64(len("TAPEFRESH-BYTES")) {
+		t.Errorf("size_bytes = %d, want the chosen backup's size", res.SourceIdentity.SizeBytes)
+	}
+}
+
+// TestScanRanksUndatedMediaByFileTime keeps the old rule where the new one
+// has nothing to work with: headers that carry no completion date leave the
+// scan order — newest file first — deciding, and a backup that can be dated
+// outranks one that cannot.
+func TestScanRanksUndatedMediaByFileTime(t *testing.T) {
+	t.Run("no header carries a date", func(t *testing.T) {
+		dir := t.TempDir()
+		older := writeMedia(t, dir, "a-older.bak", "OLD")
+		newest := writeMedia(t, dir, "z-newest.bak", "NEW")
+		touch(t, older, 2*time.Hour)
+		touch(t, newest, time.Minute)
+
+		h := &scanHandler{t: t, headers: map[string]string{
+			"a-older.bak":  headerRow(backupTypeFull, 1) + "\n",
+			"z-newest.bak": headerRow(backupTypeFull, 1) + "\n",
+		}}
+		line, _, _ := driveOp(t, "provision", dirPayload(dir), h.handle)
+		if f := parseFinal(t, line); !f.OK {
+			t.Fatalf("final = %+v", f)
+		}
+		if strings.Join(h.transferred, ",") != "z-newest.bak" {
+			t.Errorf("transferred = %v, want the newest file when no header can rank them", h.transferred)
+		}
+	})
+
+	t.Run("a dated backup outranks an undated one", func(t *testing.T) {
+		dir := t.TempDir()
+		dated := writeMedia(t, dir, "a-dated.bak", "DATED")
+		undated := writeMedia(t, dir, "z-undated.bak", "PLAIN")
+		touch(t, dated, 2*time.Hour)
+		touch(t, undated, time.Minute)
+
+		h := &scanHandler{t: t, headers: map[string]string{
+			"a-dated.bak":   headerRowWithDate("2026-08-01 03:00:00.000") + "\n",
+			"z-undated.bak": headerRow(backupTypeFull, 1) + "\n",
+		}}
+		line, _, _ := driveOp(t, "provision", dirPayload(dir), h.handle)
+		if f := parseFinal(t, line); !f.OK {
+			t.Fatalf("final = %+v", f)
+		}
+		if strings.Join(h.transferred, ",") != "a-dated.bak" {
+			t.Errorf("transferred = %v, want the backup the drill can also date", h.transferred)
+		}
+	})
+}
+
+// TestMediaRankingIsATotalOrder pins the tie-breaking that keeps the choice
+// from depending on directory iteration order.
+func TestMediaRankingIsATotalOrder(t *testing.T) {
+	early := time.Date(2026, 8, 9, 10, 0, 0, 0, time.UTC)
+	late := early.Add(time.Hour)
+	tests := []struct {
+		name string
+		a, b mediaRank
+	}{
+		{"later completion wins",
+			mediaRank{clock: late, dated: true, index: 3},
+			mediaRank{clock: early, dated: true, index: 0}},
+		{"dated beats undated even when older",
+			mediaRank{clock: early, dated: true, index: 3},
+			mediaRank{index: 0}},
+		{"the same completion falls through to the scan order",
+			mediaRank{clock: late, dated: true, index: 0},
+			mediaRank{clock: late, dated: true, index: 1}},
+		{"undated media falls through to the scan order",
+			mediaRank{index: 0}, mediaRank{index: 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.a.beats(tt.b) {
+				t.Error("a.beats(b) = false, want a to win")
+			}
+			if tt.b.beats(tt.a) {
+				t.Error("b.beats(a) too — the ranking must be a strict order")
+			}
+		})
+	}
+	same := mediaRank{clock: late, dated: true, index: 2}
+	if same.beats(same) {
+		t.Error("a rank beats itself — the ranking is not strict")
 	}
 }

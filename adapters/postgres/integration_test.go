@@ -19,6 +19,12 @@ import (
 	"github.com/probavi/probavi/internal/sandbox/docker"
 )
 
+// engineMemoryLimit caps every engine container this suite starts. The
+// fixtures are a few rows each, and an unbounded engine sizing its caches
+// against the whole host makes a suite run compete with everything else on
+// a developer's machine.
+const engineMemoryLimit = "1g"
+
 // verifiedImage is the engine image adapter.json declares this adapter
 // verified against. The manifest and this suite read the same value, so
 // docs/capabilities.json can never claim an engine version CI does not
@@ -52,7 +58,8 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	provider := docker.New(nil)
-	params := map[string]string{"image": verifiedImage(t), "env.POSTGRES_HOST_AUTH_METHOD": "trust"}
+	params := map[string]string{"image": verifiedImage(t), "env.POSTGRES_HOST_AUTH_METHOD": "trust",
+		"memory": engineMemoryLimit}
 
 	// Phase A: seed a database and take a real pg_dump fixture.
 	fixture := filepath.Join(t.TempDir(), "orders.dump")
@@ -147,6 +154,7 @@ func TestCorruptDumpVerdict(t *testing.T) {
 	provider := docker.New(nil)
 	sbx, err := provider.Create(ctx, map[string]string{
 		"image": verifiedImage(t), "env.POSTGRES_HOST_AUTH_METHOD": "trust",
+		"memory": engineMemoryLimit,
 	})
 	if err != nil {
 		t.Fatalf("create sandbox: %v", err)
@@ -193,7 +201,8 @@ func TestGlobalsDrillEndToEnd(t *testing.T) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	provider := docker.New(nil)
-	params := map[string]string{"image": verifiedImage(t), "env.POSTGRES_HOST_AUTH_METHOD": "trust"}
+	params := map[string]string{"image": verifiedImage(t), "env.POSTGRES_HOST_AUTH_METHOD": "trust",
+		"memory": engineMemoryLimit}
 
 	fixtureDir := t.TempDir()
 	dump := filepath.Join(fixtureDir, "orders.dump")
@@ -321,7 +330,7 @@ func TestPgBackRestEndToEnd(t *testing.T) {
 	makeBackRestRepo(t, ctx, image, hostRepo)
 
 	provider := docker.New(nil)
-	sbx, err := provider.Create(ctx, map[string]string{"image": image, "command": "sleep infinity"})
+	sbx, err := provider.Create(ctx, map[string]string{"image": image, "command": "sleep infinity", "memory": engineMemoryLimit})
 	if err != nil {
 		t.Fatalf("create idle sandbox: %v", err)
 	}
@@ -386,7 +395,7 @@ func TestPgBackRestPITREndToEnd(t *testing.T) {
 	target := makeBackRestRepo(t, ctx, image, hostRepo)
 
 	provider := docker.New(nil)
-	sbx, err := provider.Create(ctx, map[string]string{"image": image, "command": "sleep infinity"})
+	sbx, err := provider.Create(ctx, map[string]string{"image": image, "command": "sleep infinity", "memory": engineMemoryLimit})
 	if err != nil {
 		t.Fatalf("create idle sandbox: %v", err)
 	}
@@ -559,5 +568,124 @@ func destroy(t *testing.T, sbx *docker.Sandbox) {
 	defer cancel()
 	if err := sbx.Destroy(ctx); err != nil {
 		t.Errorf("destroy sandbox: %v", err)
+	}
+}
+
+// TestDirectorySelectionIgnoresFileTimes is the defect issue #100 records,
+// measured rather than argued. A directory source used to rank candidates
+// by modification time, so a stale dump copied in afterwards — cp without
+// -p, an object-store download, an rsync without -t — became "the newest
+// file" and was the backup the drill proved. The two dumps here hold
+// different row counts, so which one was restored is a measurement, not an
+// inference.
+func TestDirectorySelectionIgnoresFileTimes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-postgres"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	provider := docker.New(nil)
+	params := map[string]string{
+		"image": verifiedImage(t), "env.POSTGRES_HOST_AUTH_METHOD": "trust", "memory": engineMemoryLimit,
+	}
+
+	dir := t.TempDir()
+	makeTwoGenerations(t, ctx, provider, params, dir)
+
+	// The stale dump is the newest file: this is what copying it in later
+	// does, and it is exactly what must no longer decide the drill.
+	stale, fresh := filepath.Join(dir, "stale.dump"), filepath.Join(dir, "fresh.dump")
+	now := time.Now()
+	if err := os.Chtimes(fresh, now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(stale, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	sbx, err := provider.Create(ctx, params)
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("postgres", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "pgdump_dir", Path: dir},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	argv := make([]string, 0, len(probe.SQLRunner.Argv))
+	for _, a := range probe.SQLRunner.Argv {
+		a = strings.ReplaceAll(a, "{{user}}", res.Connection.User)
+		a = strings.ReplaceAll(a, "{{database}}", res.Connection.Database)
+		a = strings.ReplaceAll(a, "{{sql}}", "SELECT count(*) FROM orders")
+		argv = append(argv, a)
+	}
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: argv})
+	if err != nil {
+		t.Fatalf("sql_runner exec: %v", err)
+	}
+	count := strings.TrimSpace(string(out.Stdout))
+	if out.ExitCode != 0 || count != strconv.Itoa(freshRowCount) {
+		t.Fatalf("row count = %q (exit %d), want %d — the drill restored the stale dump the copy made look fresh",
+			count, out.ExitCode, freshRowCount)
+	}
+}
+
+// The two generations differ in row count so the restored one is
+// identifiable, and they are taken far enough apart that the timestamp
+// each archive records about itself differs — pg_dump's header keeps
+// whole seconds.
+const (
+	staleRowCount = 3
+	freshRowCount = 11
+)
+
+// makeTwoGenerations writes two real dumps of the same database into dir:
+// an older one, then a newer one taken after more rows were inserted.
+func makeTwoGenerations(t *testing.T, ctx context.Context, provider *docker.Provider,
+	params map[string]string, dir string) {
+	t.Helper()
+	seed, err := provider.Create(ctx, params)
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+
+	awaitReady(t, ctx, seed)
+	mustExec(t, ctx, seed, "psql", "-h", "127.0.0.1", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-c",
+		"CREATE TABLE orders (id bigserial PRIMARY KEY, total numeric(10,2) NOT NULL);"+
+			"INSERT INTO orders (total) SELECT 1 FROM generate_series(1,"+strconv.Itoa(staleRowCount)+");")
+	mustExec(t, ctx, seed, "pg_dump", "-h", "127.0.0.1", "-U", "postgres", "-Fc", "-f", "/tmp/stale.dump", "postgres")
+
+	// A second of daylight between the two archives' own clocks.
+	mustExec(t, ctx, seed, "sleep", "2")
+
+	mustExec(t, ctx, seed, "psql", "-h", "127.0.0.1", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-c",
+		"INSERT INTO orders (total) SELECT 1 FROM generate_series(1,"+strconv.Itoa(freshRowCount-staleRowCount)+");")
+	mustExec(t, ctx, seed, "pg_dump", "-h", "127.0.0.1", "-U", "postgres", "-Fc", "-f", "/tmp/fresh.dump", "postgres")
+
+	for _, name := range []string{"stale.dump", "fresh.dump"} {
+		out, err := exec.CommandContext(ctx, "docker", "cp",
+			seed.ID()+":/tmp/"+name, filepath.Join(dir, name)).CombinedOutput()
+		if err != nil {
+			t.Fatalf("extract %s: %v: %s", name, err, out)
+		}
 	}
 }

@@ -10,7 +10,7 @@ from the protocol document alone.
 | Kind            | Meaning                                                     |
 |-----------------|-------------------------------------------------------------|
 | `mysqldump`     | One `mysqldump` SQL file.                                   |
-| `mysqldump_dir` | A directory of dump files; the newest regular file is restored (mtime, ties broken by name). |
+| `mysqldump_dir` | A directory of dump files; the dump whose own trailer records the newest time is restored. |
 | `mysqldump_with_users` | A directory holding an accounts-and-grants script (`params.users`) and one dump; the accounts are replayed first, and the drill fails while the restored principal chain is broken. |
 | `xtrabackup`    | A Percona XtraBackup full-backup directory (unprepared, as `xtrabackup --backup` leaves it) — a physical restore. |
 
@@ -62,7 +62,7 @@ source:
   path: /backups/shop              # a directory holding both members
   params:
     users: users.sql               # bare filename inside the directory
-    dump: shop-2026-08-08.sql      # optional: without it, the newest non-users file
+    dump: shop-2026-08-08.sql      # optional: without it, the newest-by-trailer non-users file
 target:
   options:
     database: shop                 # the SOURCE database name — see below
@@ -154,9 +154,24 @@ in afterwards, use `mysqldump_with_users`.
 ## Which backup a drill restores, and when it refuses
 
 When the drill config names a **directory**, the adapter picks the
-artifact itself: the newest regular file (mtime, ties broken by name).
-Two things follow from that, and both are stated here rather than left
-for an operator to discover.
+artifact itself: the dump whose **own `-- Dump completed on` trailer
+records the newest time**. The file's modification time is not what ranks
+candidates — copying a backup in (`cp` without `-p`, an object-store
+download, an `rsync` without `-t`) resets it, and a stale artifact would
+then look like the newest thing in the directory. What a dump says about
+itself does not move when the file is copied.
+
+Ranking needs no declared zone: two dumps being compared came off the
+same backup host, so whatever zone it was in cancels out. Declaring
+`params.backup_timezone` is only needed to *report* `backup.created_at`.
+
+A dump the adapter cannot date — taken with `--skip-dump-date` or
+`--compact`, so no trailer carries a date — ranks below every dump it
+can. Between two such files the previous rule still decides: newest
+mtime, ties broken by the larger name.
+
+Two more things follow, and both are stated here rather than left for an
+operator to discover.
 
 **A backup still being written is refused, not skipped.** The newest file
 in a backup directory is quite often the one a backup job is writing
@@ -278,7 +293,7 @@ Set under `source.params` in the drill config.
 | Param             | Kinds                  | Meaning                                            |
 |-------------------|------------------------|----------------------------------------------------|
 | `users`           | `mysqldump_with_users` | **Required.** Bare filename of the accounts-and-grants script inside the source directory. |
-| `dump`            | `mysqldump_with_users` | Optional. Bare filename of the dump; without it the newest non-users file is used. |
+| `dump`            | `mysqldump_with_users` | Optional. Bare filename of the dump; without it the newest-by-trailer non-users file is used. |
 | `backup_timezone` | all                    | Optional. IANA zone name of the host that took the backup (e.g. `Europe/Budapest`). Without it `backup.created_at` is null — see above. |
 
 ## Drill config options

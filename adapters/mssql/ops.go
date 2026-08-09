@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "mssql"
-	adapterVersion = "0.6.0"
+	adapterVersion = "0.7.0"
 
 	defaultUser     = "sa"
 	defaultDatabase = "probavi"

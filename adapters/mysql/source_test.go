@@ -325,3 +325,125 @@ func TestResolveWithUsersPicksNewestNonUsers(t *testing.T) {
 		t.Errorf("path = %s, want the newest non-users file", src.path)
 	}
 }
+
+// writeDumpAs writes a dump carrying its own completion trailer into dir
+// under a chosen name and modification time, so a test can set the two
+// clocks — the one the backup records and the one the filesystem records —
+// independently.
+func writeDumpAs(t *testing.T, dir, name, clock string, mtime time.Time) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	body := "INSERT INTO orders VALUES (1);\n"
+	if clock != "" {
+		body += "-- Dump completed on " + clock + "\n"
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatalf("chtimes %s: %v", name, err)
+	}
+	return path
+}
+
+// TestDirectoryRankingIgnoresFileTimes is issue #100: a stale dump copied
+// into the directory afterwards carries the newest mtime, and used to be
+// the one the drill restored.
+func TestDirectoryRankingIgnoresFileTimes(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	writeDumpAs(t, dir, "stale.sql", "2026-08-01 03:00:00", now)
+	fresh := writeDumpAs(t, dir, "fresh.sql", "2026-08-09 03:00:00", now.Add(-24*time.Hour))
+
+	got, perr := newestBackupIn(dir, "")
+	if perr != nil {
+		t.Fatalf("newestBackupIn: %+v", perr)
+	}
+	if got != fresh {
+		t.Errorf("picked %s, want %s — the copy's file time must not outrank the dump's own trailer",
+			filepath.Base(got), filepath.Base(fresh))
+	}
+}
+
+func TestDirectoryRanking(t *testing.T) {
+	base := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+
+	t.Run("a dump that can be dated beats one that cannot", func(t *testing.T) {
+		dir := t.TempDir()
+		dated := writeDumpAs(t, dir, "a-dated.sql", "2026-08-01 03:00:00", base.Add(-time.Hour))
+		// --skip-dump-date leaves the sentence without a date behind it.
+		writeDumpAs(t, dir, "z-undated.sql", "", base)
+		got, perr := newestBackupIn(dir, "")
+		if perr != nil || got != dated {
+			t.Errorf("picked %s (%+v), want the dump that carries its own time", got, perr)
+		}
+	})
+
+	t.Run("undatable dumps keep the file-time rule", func(t *testing.T) {
+		dir := t.TempDir()
+		writeDumpAs(t, dir, "old.sql", "", base.Add(-time.Hour))
+		newest := writeDumpAs(t, dir, "new.sql", "", base)
+		got, perr := newestBackupIn(dir, "")
+		if perr != nil || got != newest {
+			t.Errorf("picked %s (%+v), want the newest file when nothing else can rank them", got, perr)
+		}
+	})
+
+	t.Run("two dumps completed in the same second break by file time", func(t *testing.T) {
+		dir := t.TempDir()
+		writeDumpAs(t, dir, "a.sql", "2026-08-09 03:00:00", base.Add(-time.Hour))
+		want := writeDumpAs(t, dir, "b.sql", "2026-08-09 03:00:00", base)
+		got, perr := newestBackupIn(dir, "")
+		if perr != nil || got != want {
+			t.Errorf("picked %s (%+v), want the newer file of two dumps recording the same clock", got, perr)
+		}
+	})
+
+	t.Run("the named member is skipped", func(t *testing.T) {
+		dir := t.TempDir()
+		writeDumpAs(t, dir, "users.sql", "2026-08-09 03:00:00", base)
+		want := writeDumpAs(t, dir, "orders.sql", "2026-08-01 03:00:00", base)
+		got, perr := newestBackupIn(dir, "users.sql")
+		if perr != nil || got != want {
+			t.Errorf("picked %s (%+v), want the dump beside the skipped member", got, perr)
+		}
+	})
+}
+
+// TestCandidateRankingIsATotalOrder pins the tie-breaking that keeps a
+// choice from depending on directory iteration order.
+func TestCandidateRankingIsATotalOrder(t *testing.T) {
+	early := time.Date(2026, 8, 9, 10, 0, 0, 0, time.UTC)
+	late := early.Add(time.Hour)
+	tests := []struct {
+		name string
+		a, b dirCandidate
+	}{
+		{"newer recorded clock wins",
+			dirCandidate{name: "a", clock: late, dated: true, mtime: early},
+			dirCandidate{name: "b", clock: early, dated: true, mtime: late}},
+		{"dated beats undated even when older",
+			dirCandidate{name: "a", clock: early, dated: true, mtime: early},
+			dirCandidate{name: "b", mtime: late}},
+		{"same clock falls through to the file time",
+			dirCandidate{name: "a", clock: late, dated: true, mtime: late},
+			dirCandidate{name: "b", clock: late, dated: true, mtime: early}},
+		{"everything equal falls through to the name",
+			dirCandidate{name: "b", clock: late, dated: true, mtime: late},
+			dirCandidate{name: "a", clock: late, dated: true, mtime: late}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.a.beats(tt.b) {
+				t.Errorf("a.beats(b) = false, want a to win")
+			}
+			if tt.b.beats(tt.a) {
+				t.Error("b.beats(a) too — the ranking must be a strict order")
+			}
+		})
+	}
+	same := dirCandidate{name: "a", clock: late, dated: true, mtime: late}
+	if same.beats(same) {
+		t.Error("a candidate beats itself — the ranking is not strict")
+	}
+}

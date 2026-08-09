@@ -54,21 +54,39 @@ func archiveCreatedAt(path string, loc *time.Location) *string {
 	if loc == nil {
 		return nil
 	}
+	clock, ok := archiveClock(path)
+	if !ok {
+		return nil
+	}
+	return formatCreatedAt(time.Date(clock.Year(), clock.Month(), clock.Day(),
+		clock.Hour(), clock.Minute(), clock.Second(), 0, loc))
+}
+
+// archiveClock reads the wall clock a custom-format archive records about
+// itself, carried in a time.Time labelled UTC that is a wall clock and not
+// an instant.
+//
+// It exists so two backups can be ranked against each other (see
+// newestBackupIn): both came off the same backup host, so whatever zone
+// that host was in cancels out of the comparison, and ranking therefore
+// works whether or not the operator declared one. Reporting a creation
+// time is the other job, and that one does need the zone.
+func archiveClock(path string) (time.Time, bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return time.Time{}, false
 	}
 	head := make([]byte, pgdumpHeaderBytes)
 	n, rerr := f.Read(head)
 	if cerr := f.Close(); cerr != nil || rerr != nil || n < pgdumpHeaderBytes {
-		return nil
+		return time.Time{}, false
 	}
 	fields, ok := parseArchiveHeaderTime(head)
 	if !ok {
-		return nil
+		return time.Time{}, false
 	}
-	return formatCreatedAt(time.Date(fields.year, time.Month(fields.month), fields.day,
-		fields.hour, fields.minute, fields.second, 0, loc))
+	return time.Date(fields.year, time.Month(fields.month), fields.day,
+		fields.hour, fields.minute, fields.second, 0, time.UTC), true
 }
 
 // headerTime is the broken-down wall clock a custom-format header stores.
