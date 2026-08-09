@@ -11,10 +11,12 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-09
+
 ### Changed
 
 - **`backup.created_at` now comes from the backup, not from the file's
-  modification time** (postgres 0.5.0, mysql 0.5.0, mongodb 0.4.0, mssql
+  modification time** (postgres 0.6.0, mysql 0.5.0, mongodb 0.4.0, mssql
   0.5.0; tracked in #91). An mtime dates a copy: `cp` without `-p` resets
   it (measured), and a month-old artifact then looks like last night's
   while restoring perfectly — a signed record would carry a fresh-looking
@@ -1283,7 +1285,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/probavi/probavi/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/probavi/probavi/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/probavi/probavi/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/probavi/probavi/compare/v0.2.0...v0.3.0

@@ -204,6 +204,14 @@ wrote it is expecting an accuracy this kind cannot deliver.
 - `created_at`: always null — a mongodump archive records no backup
   timestamp, and an mtime dates a copy rather than a backup (see above).
 
+## Source params
+
+Set under `source.params` in the drill config.
+
+| Param             | Kinds | Meaning                                                            |
+|-------------------|-------|--------------------------------------------------------------------|
+| `backup_timezone` | none  | **Refused.** A mongodump archive records no backup timestamp, so a declared zone has nothing to act on and a config that sets it fails the drill rather than implying an accuracy this adapter cannot deliver — see above. |
+
 ## Drill config options
 
 | Option     | Default | Meaning                                          |
