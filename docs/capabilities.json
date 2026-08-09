@@ -57,7 +57,7 @@
         },
         {
           "id": "mongodump_dir",
-          "name": "A directory of mongodump archives; the newest is restored",
+          "name": "A directory of mongodump archives; the newest file is restored (an archive carries no timestamp of its own)",
           "pitr": false
         },
         {
@@ -79,7 +79,7 @@
       "id": "mssql",
       "name": "SQL Server",
       "status": "experimental",
-      "adapter_version": "0.6.0",
+      "adapter_version": "0.7.0",
       "engine": {
         "id": "sqlserver",
         "name": "Microsoft SQL Server"
@@ -106,7 +106,7 @@
         },
         {
           "id": "bak_dir",
-          "name": "A directory of backup files; the newest full backup is restored",
+          "name": "A directory of backup files; the full backup whose header records the newest completion time is restored",
           "pitr": false
         },
         {
@@ -123,7 +123,7 @@
       "id": "mysql",
       "name": "MySQL",
       "status": "experimental",
-      "adapter_version": "0.6.0",
+      "adapter_version": "0.7.0",
       "engine": {
         "id": "mysql",
         "name": "MySQL"
@@ -145,7 +145,7 @@
         },
         {
           "id": "mysqldump_dir",
-          "name": "A directory of mysqldump files; the newest is restored",
+          "name": "A directory of mysqldump files; the one whose own trailer records the newest time is restored",
           "pitr": false
         },
         {
@@ -167,7 +167,7 @@
       "id": "postgres",
       "name": "PostgreSQL",
       "status": "experimental",
-      "adapter_version": "0.7.0",
+      "adapter_version": "0.8.0",
       "engine": {
         "id": "postgresql",
         "name": "PostgreSQL"
@@ -194,7 +194,7 @@
         },
         {
           "id": "pgdump_dir",
-          "name": "A directory of pg_dump files; the newest is restored",
+          "name": "A directory of pg_dump files; the one whose own header records the newest time is restored",
           "pitr": false
         },
         {

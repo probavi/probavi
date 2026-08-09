@@ -40,8 +40,17 @@ func verifiedImage(t *testing.T) string {
 // empty root password is acceptable only because the sandbox has zero
 // ingress (--network none, no ports expressible).
 func sandboxParams(t *testing.T) map[string]string {
-	return map[string]string{"image": verifiedImage(t), "env.MYSQL_ALLOW_EMPTY_PASSWORD": "yes"}
+	return map[string]string{
+		"image": verifiedImage(t), "env.MYSQL_ALLOW_EMPTY_PASSWORD": "yes",
+		"memory": engineMemoryLimit,
+	}
 }
+
+// engineMemoryLimit caps every engine container this suite starts. The
+// fixtures are a few hundred rows, and an unbounded engine sizing its
+// caches against the whole host makes a suite run compete with everything
+// else on a developer's machine.
+const engineMemoryLimit = "1g"
 
 // TestEndToEndRestoreDrill proves the second engine through the unchanged
 // core: the docker provider, the core-side protocol client, and this
@@ -201,7 +210,7 @@ func TestXtraBackupEndToEnd(t *testing.T) {
 	makeXtraBackupFixture(t, ctx, image, hostBackup)
 
 	provider := docker.New(nil)
-	sbx, err := provider.Create(ctx, map[string]string{"image": image, "command": "sleep infinity"})
+	sbx, err := provider.Create(ctx, map[string]string{"image": image, "command": "sleep infinity", "memory": engineMemoryLimit})
 	if err != nil {
 		t.Fatalf("create idle sandbox: %v", err)
 	}
@@ -688,4 +697,128 @@ func makeAccountedFixture(t *testing.T, ctx context.Context, provider *docker.Pr
 		t.Fatalf("extract fixture: %v: %s", err, out)
 	}
 	return dir
+}
+
+// TestDirectorySelectionIgnoresFileTimes is the defect issue #100 records,
+// measured rather than argued. A directory source used to rank candidates
+// by modification time, so a stale dump copied in afterwards — cp without
+// -p, an object-store download, an rsync without -t — became "the newest
+// file" and was the backup the drill proved. The two dumps here hold
+// different row counts, so which one was restored is a measurement, not an
+// inference.
+func TestDirectorySelectionIgnoresFileTimes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-mysql"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	provider := docker.New(nil)
+	dir := t.TempDir()
+	makeTwoGenerations(t, ctx, provider, dir)
+
+	// The stale dump is the newest file: this is what copying it in later
+	// does, and it is exactly what must no longer decide the drill.
+	now := time.Now()
+	if err := os.Chtimes(filepath.Join(dir, "fresh.sql"), now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(dir, "stale.sql"), now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	sbx, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("mysql", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "mysqldump_dir", Path: dir},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	argv := make([]string, 0, len(probe.SQLRunner.Argv))
+	for _, a := range probe.SQLRunner.Argv {
+		a = strings.ReplaceAll(a, "{{user}}", res.Connection.User)
+		a = strings.ReplaceAll(a, "{{database}}", res.Connection.Database)
+		a = strings.ReplaceAll(a, "{{sql}}", "SELECT count(*) FROM orders")
+		argv = append(argv, a)
+	}
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: argv})
+	if err != nil {
+		t.Fatalf("sql_runner exec: %v", err)
+	}
+	count := strings.TrimSpace(string(out.Stdout))
+	if out.ExitCode != 0 || count != strconv.Itoa(freshRowCount) {
+		t.Fatalf("row count = %q (exit %d), want %d — the drill restored the stale dump the copy made look fresh",
+			count, out.ExitCode, freshRowCount)
+	}
+}
+
+// The two generations differ in row count so the restored one is
+// identifiable, and they are taken far enough apart that the trailer each
+// dump writes about itself differs — mysqldump records whole seconds.
+const (
+	staleRowCount = 3
+	freshRowCount = 11
+)
+
+// makeTwoGenerations writes two real dumps of the same database into dir:
+// an older one, then a newer one taken after more rows were inserted.
+func makeTwoGenerations(t *testing.T, ctx context.Context, provider *docker.Provider, dir string) {
+	t.Helper()
+	seed, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+
+	awaitReady(t, ctx, seed)
+	mustExec(t, ctx, seed, "mysql", "-h", "127.0.0.1", "-u", "root", "-e",
+		"CREATE DATABASE probavi; USE probavi;"+
+			"CREATE TABLE orders (id BIGINT AUTO_INCREMENT PRIMARY KEY, total DECIMAL(10,2) NOT NULL);"+
+			"INSERT INTO orders (total) VALUES "+values(staleRowCount)+";")
+	mustExec(t, ctx, seed, "mysqldump", "-h", "127.0.0.1", "-u", "root",
+		"--result-file=/tmp/stale.sql", "probavi")
+
+	// A second of daylight between the two dumps' own trailers.
+	mustExec(t, ctx, seed, "sleep", "2")
+
+	mustExec(t, ctx, seed, "mysql", "-h", "127.0.0.1", "-u", "root", "-e",
+		"USE probavi; INSERT INTO orders (total) VALUES "+values(freshRowCount-staleRowCount)+";")
+	mustExec(t, ctx, seed, "mysqldump", "-h", "127.0.0.1", "-u", "root",
+		"--result-file=/tmp/fresh.sql", "probavi")
+
+	for _, name := range []string{"stale.sql", "fresh.sql"} {
+		out, err := exec.CommandContext(ctx, "docker", "cp",
+			seed.ID()+":/tmp/"+name, filepath.Join(dir, name)).CombinedOutput()
+		if err != nil {
+			t.Fatalf("extract %s: %v: %s", name, err, out)
+		}
+	}
+}
+
+// values builds n one-column rows for an INSERT.
+func values(n int) string {
+	rows := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		rows = append(rows, "(1)")
+	}
+	return strings.Join(rows, ",")
 }

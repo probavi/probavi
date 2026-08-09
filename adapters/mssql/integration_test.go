@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -552,7 +553,7 @@ func TestBackupTypeSelectionEndToEnd(t *testing.T) {
 
 	buildAdapterOnPath(t, ctx)
 	provider := docker.New(nil)
-	dir := makeBackupSetFixture(t, ctx, provider)
+	dir, rankDir := makeBackupSetFixture(t, ctx, provider)
 
 	runner, err := adapter.New("mssql", nil, nil)
 	if err != nil {
@@ -571,6 +572,38 @@ func TestBackupTypeSelectionEndToEnd(t *testing.T) {
 	t.Run("a directory with no full backup says so", func(t *testing.T) {
 		assertNoFullBackupVerdict(t, ctx, provider, runner, dir)
 	})
+	t.Run("a stale backup copied in later does not outrank a newer one", func(t *testing.T) {
+		assertRankingIgnoresFileTimes(t, ctx, provider, runner, rankDir)
+	})
+}
+
+// assertRankingIgnoresFileTimes is issue #100 on a real engine: both files
+// are full backups of the same database, the stale one carries the newest
+// modification time because it was copied in afterwards, and the drill must
+// restore the one the server finished last. The row counts differ, so which
+// one was restored is a measurement.
+func assertRankingIgnoresFileTimes(t *testing.T, ctx context.Context, provider *docker.Provider,
+	runner *adapter.Runner, dir string) {
+	now := time.Now()
+	if err := os.Chtimes(filepath.Join(dir, "fresh.bak"), now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(dir, "stale.bak"), now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	sbx := freshSandbox(t, ctx, provider)
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "bak_dir", Path: dir},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if got := queryScalar(t, ctx, sbx, res.Connection.Database, "SELECT count(*) FROM dbo.orders"); got != strconv.Itoa(rankFreshRows) {
+		t.Errorf("row count = %s, want %d — the drill restored the stale backup the copy made look fresh",
+			got, rankFreshRows)
+	}
 }
 
 // assertNewestIsUnrestorable is the premise of #88: pointed at the newest
@@ -691,7 +724,7 @@ func queryScalar(t *testing.T, ctx context.Context, sbx *docker.Sandbox, databas
 // transaction log backups, plus a checksum sidecar that is not backup media
 // at all. It also produces a multi-set file (full, log, full appended into
 // one) and a directory holding nothing but log backups.
-func makeBackupSetFixture(t *testing.T, ctx context.Context, provider *docker.Provider) string {
+func makeBackupSetFixture(t *testing.T, ctx context.Context, provider *docker.Provider) (dir, rankDir string) {
 	t.Helper()
 	seed, err := provider.Create(ctx, sandboxParams(t))
 	if err != nil {
@@ -719,11 +752,18 @@ func makeBackupSetFixture(t *testing.T, ctx context.Context, provider *docker.Pr
 		"BACKUP LOG shop TO DISK = N'/tmp/multi.bak'",
 		"BACKUP DATABASE shop TO DISK = N'/tmp/multi.bak'",
 		"BACKUP LOG shop TO DISK = N'/tmp/only-log.trn'",
+		// One more full backup, later and with one more row, for the
+		// ranking proof: /tmp/a-full.bak above is the stale one. The delay
+		// keeps the two completion times apart in the header, which records
+		// whole seconds.
+		"INSERT INTO shop.dbo.orders VALUES (3, 30.50)",
+		"WAITFOR DELAY '00:00:02'",
+		"BACKUP DATABASE shop TO DISK = N'/tmp/rank-fresh.bak'",
 	} {
 		mustSQL(t, ctx, seed, seedPassword, stmt)
 	}
 
-	dir := t.TempDir()
+	dir = t.TempDir()
 	for _, name := range []string{"a-full.bak", "m-diff.bak", "y-log.trn", "z-newest-log.trn"} {
 		copyFixture(t, ctx, seed, "/tmp/"+name, filepath.Join(dir, name))
 	}
@@ -753,8 +793,19 @@ func makeBackupSetFixture(t *testing.T, ctx context.Context, provider *docker.Pr
 			t.Fatal(err)
 		}
 	}
-	return dir
+
+	// A directory of nothing but two full backups of the same database, for
+	// the ranking proof: same type, same database, so only the completion
+	// time each header records can tell them apart.
+	rankDir = t.TempDir()
+	copyFixture(t, ctx, seed, "/tmp/a-full.bak", filepath.Join(rankDir, "stale.bak"))
+	copyFixture(t, ctx, seed, "/tmp/rank-fresh.bak", filepath.Join(rankDir, "fresh.bak"))
+	return dir, rankDir
 }
+
+// rankFreshRows is how many rows the later of the two ranking fixtures
+// carries; the earlier one has one.
+const rankFreshRows = 3
 
 func copyFixture(t *testing.T, ctx context.Context, sbx *docker.Sandbox, containerPath, dest string) {
 	t.Helper()

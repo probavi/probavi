@@ -11,6 +11,34 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Changed
+
+- **A directory source now restores the newest backup, not the newest
+  file** (postgres 0.8.0, mysql 0.7.0, mssql 0.7.0; closes #100).
+  Candidates were ranked by modification time, so a backup copied into
+  the directory afterwards — `cp` without `-p`, an object-store
+  download, an `rsync` without `-t` — looked like the newest thing there
+  and was the one the drill proved. Measured end to end on real engines:
+  with a stale dump carrying the newest file time, the drill restored 3
+  rows where the actual newest backup holds 11.
+
+  Ranking now uses the time each backup records about itself: the
+  pg_dump archive header, mysqldump's `-- Dump completed on` trailer,
+  and `RESTORE HEADERONLY`'s `BackupFinishDate`. That value does not
+  move when a file is copied. It needs no declared zone — two backups
+  being compared came off the same host, so its offset cancels out;
+  `source.params.backup_timezone` is still what turns one into the
+  instant `backup.created_at` reports. A backup the adapter cannot date
+  ranks below every backup it can, and between two undatable files the
+  previous rule still decides: newest file, ties broken by name.
+
+  For SQL Server this means every candidate is probed before one is
+  chosen, where the scan could previously stop at the first full backup
+  it found; only the transfer that feeds the restore is still counted as
+  recovery time. `mongodump_dir` keeps ranking by file time and says so
+  in its README and in `docs/capabilities.json`: a mongodump archive
+  records no timestamp of its own, so there is nothing else to rank by.
+
 ### Added
 
 - **`bak_chain`, a SQL Server source kind that restores the whole backup

@@ -46,19 +46,36 @@ func dumpCompletedAt(path string, loc *time.Location) *string {
 	if loc == nil {
 		return nil
 	}
-	tail, ok := readTail(path, dumpTrailerBytes)
+	clock, ok := dumpClock(path)
 	if !ok {
 		return nil
+	}
+	return formatCreatedAt(time.Date(clock.Year(), clock.Month(), clock.Day(),
+		clock.Hour(), clock.Minute(), clock.Second(), 0, loc))
+}
+
+// dumpClock reads the wall clock a dump records about itself, carried in a
+// time.Time labelled UTC that is a wall clock and not an instant.
+//
+// It exists so two backups can be ranked against each other (see
+// newestBackupIn): both came off the same backup host, so whatever zone
+// that host was in cancels out of the comparison, and ranking therefore
+// works whether or not the operator declared one. Reporting a creation
+// time is the other job, and that one does need the zone.
+func dumpClock(path string) (time.Time, bool) {
+	tail, ok := readTail(path, dumpTrailerBytes)
+	if !ok {
+		return time.Time{}, false
 	}
 	clock, ok := lastDumpClock(tail)
 	if !ok {
-		return nil
+		return time.Time{}, false
 	}
-	t, err := time.ParseInLocation(dumpClockLayout, clock, loc)
+	t, err := time.ParseInLocation(dumpClockLayout, clock, time.UTC)
 	if err != nil {
-		return nil
+		return time.Time{}, false
 	}
-	return formatCreatedAt(t)
+	return t, true
 }
 
 // readTail returns the last n bytes of a file.

@@ -7,8 +7,11 @@ import (
 
 // headerRowWithDate extends the test header row to the column
 // BackupFinishDate occupies on a real server (measured: 19th of 59).
-func headerRowWithDate(backupType, position int, finished string) string {
-	row := headerRow(backupType, position)
+// headerRowWithDate is a full backup's header row carrying a completion
+// date, which is what dates a backup and what ranks two of them. The set
+// is the first one on the media, as a single-set backup file has.
+func headerRowWithDate(finished string) string {
+	row := headerRow(backupTypeFull, 1)
 	for range 7 {
 		row += "|x"
 	}
@@ -16,7 +19,7 @@ func headerRowWithDate(backupType, position int, finished string) string {
 }
 
 func TestParseBackupSetsReadsTheFinishDate(t *testing.T) {
-	sets, perr := parseBackupSets([]byte(headerRowWithDate(backupTypeFull, 1, "2026-08-09 21:08:21.000") + "\n"))
+	sets, perr := parseBackupSets([]byte(headerRowWithDate("2026-08-09 21:08:21.000") + "\n"))
 	if perr != nil {
 		t.Fatalf("parseBackupSets: %+v", perr)
 	}

@@ -28,7 +28,8 @@ type resolvedSource struct {
 // resolveSource maps a source kind to one restorable artifact.
 //
 //	mysqldump            — path is a mysqldump SQL file
-//	mysqldump_dir        — path is a directory; the newest regular file is chosen
+//	mysqldump_dir        — path is a directory; the dump whose own trailer
+//	                       records the newest time is chosen
 //	mysqldump_with_users — path is a directory holding an accounts-and-grants
 //	                       script (params.users) and one dump
 //	xtrabackup           — path is an XtraBackup full-backup directory
@@ -182,7 +183,7 @@ func chooseDump(ctx context.Context, dir, requested, usersName string) (string, 
 		}
 		return filepath.Join(dir, name), nil
 	}
-	newest, perr := newestFileIn(dir, usersName)
+	newest, perr := newestBackupIn(dir, usersName)
 	if perr != nil {
 		return "", perr
 	}
@@ -320,9 +321,10 @@ func resolveFile(path string, loc *time.Location) (*resolvedSource, *protoError)
 	}, nil
 }
 
-// latestDumpIn picks the newest regular file in dir.
+// latestDumpIn picks the dump in dir that records the newest time about
+// itself (see newestBackupIn).
 func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
-	best, perr := newestFileIn(dir, "")
+	best, perr := newestBackupIn(dir, "")
 	if perr != nil {
 		return "", perr
 	}
@@ -337,11 +339,17 @@ func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
 	return best, nil
 }
 
-// newestFileIn returns the newest regular file in dir, skipping the entry
-// named except; ties break toward the lexicographically larger name so the
-// choice is deterministic. An empty result means the directory is readable
-// but holds no candidate — the caller says what that means.
-func newestFileIn(dir, except string) (string, *protoError) {
+// newestBackupIn returns the backup a directory source should restore,
+// skipping the entry named except. An empty result means the directory is
+// readable but holds no candidate — the caller says what that means.
+//
+// Candidates are ranked by the time the backup records about itself, not
+// by the file's modification time. A backup copied into the directory
+// afterwards — cp without -p, an object-store download, an rsync without
+// -t — carries a fresh mtime, so under the old rule a stale artifact
+// became "the newest file" and was the one the drill proved. What a
+// backup says about itself does not move when the file is copied.
+func newestBackupIn(dir, except string) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -351,7 +359,7 @@ func newestFileIn(dir, except string) (string, *protoError) {
 	}
 	var (
 		best     string
-		bestTime time.Time
+		bestRank dirCandidate
 	)
 	for _, e := range entries {
 		if !e.Type().IsRegular() || e.Name() == except {
@@ -361,13 +369,43 @@ func newestFileIn(dir, except string) (string, *protoError) {
 		if err != nil {
 			return "", protoErr("source_unreadable", false, "stat %s: %v", e.Name(), err)
 		}
-		if best == "" || info.ModTime().After(bestTime) ||
-			(info.ModTime().Equal(bestTime) && e.Name() > filepath.Base(best)) {
-			best = filepath.Join(dir, e.Name())
-			bestTime = info.ModTime()
+		path := filepath.Join(dir, e.Name())
+		clock, dated := dumpClock(path)
+		rank := dirCandidate{name: e.Name(), clock: clock, dated: dated, mtime: info.ModTime()}
+		if best == "" || rank.beats(bestRank) {
+			best, bestRank = path, rank
 		}
 	}
 	return best, nil
+}
+
+// dirCandidate is one file a directory source could restore, with the two
+// times that can rank it.
+type dirCandidate struct {
+	name  string
+	clock time.Time // what the backup records about itself
+	dated bool      // whether that clock could be read at all
+	mtime time.Time
+}
+
+// beats orders two candidates. A backup that can be dated from its own
+// bytes wins over one that cannot: the drill would rather restore the
+// backup it can also say something true about. Between two dated
+// candidates the newer recorded clock wins; otherwise the rule that
+// applied before this ranking existed still decides — newer file, then
+// the lexicographically larger name, so the choice never depends on
+// directory iteration order.
+func (c dirCandidate) beats(other dirCandidate) bool {
+	switch {
+	case c.dated != other.dated:
+		return c.dated
+	case c.dated && !c.clock.Equal(other.clock):
+		return c.clock.After(other.clock)
+	case !c.mtime.Equal(other.mtime):
+		return c.mtime.After(other.mtime)
+	default:
+		return c.name > other.name
+	}
 }
 
 // copyInto streams a file's bytes into h.

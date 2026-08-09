@@ -10,7 +10,7 @@ written from the protocol document alone.
 | Kind             | Meaning                                                    |
 |------------------|------------------------------------------------------------|
 | `mongodump`      | One `mongodump --archive` file, plain or `--gzip` — the compression is sniffed from the bytes, never from the file name. |
-| `mongodump_dir`  | A directory of archive files; the newest regular file is restored (mtime, ties broken by name). |
+| `mongodump_dir`  | A directory of archive files; the newest regular file is restored (mtime, ties broken by name — an archive carries no timestamp of its own). |
 | `mongodump_with_users` | An archive taken with `--dumpDbUsersAndRoles`; the account layer is restored with the data, and the drill fails unless it arrived and resolves. |
 | `mongodump_with_oplog` | A full archive taken with `--oplog`; the captured oplog is replayed, and the drill fails unless the replay happened. |
 
@@ -57,6 +57,15 @@ reported empty and the declared `sql_runner` references no `{{user}}`.
 
 When the drill config names a **directory**, the adapter picks the
 artifact itself: the newest regular file (mtime, ties broken by name).
+
+This is the one directory kind still ranked that way, and the reason is
+the archive format: a `mongodump` archive records **no timestamp of its
+own** (measured), so there is nothing else to rank by. The other adapters
+rank by what the backup says about itself, which survives copying; here a
+backup copied in later (`cp` without `-p`, an object-store download, an
+`rsync` without `-t`) still looks like the newest thing in the
+directory. Preserve modification times, or name the artifact outright
+with a file `path`.
 Two things follow from that, and both are stated here rather than left
 for an operator to discover.
 

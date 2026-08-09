@@ -10,7 +10,7 @@ enough to build an adapter.
 | Kind                  | Meaning                                              |
 |-----------------------|------------------------------------------------------|
 | `pgdump`              | One `pg_dump` custom-format (`-Fc`) file.            |
-| `pgdump_dir`          | A directory of dump files; the newest regular file is restored (mtime, ties broken by name). |
+| `pgdump_dir`          | A directory of dump files; the dump whose own header records the newest time is restored. |
 | `pgdump_with_globals` | A directory holding a `pg_dumpall --globals-only` script and one dump; the globals are loaded before the dump. |
 | `pgbackrest`          | A pgBackRest repository directory (filesystem repo) — a physical restore. Declares the `pitr` capability. |
 
@@ -32,7 +32,7 @@ source:
   path: /backups/prod            # a directory holding both members
   params:
     globals: globals.sql         # a filename inside path, never a path
-    dump: orders.dump            # optional; default: the newest file that is not the globals
+    dump: orders.dump            # optional; default: the newest-by-header file that is not the globals
 ```
 
 - **One directory, members named in `params`.** The core only hands an
@@ -41,7 +41,7 @@ source:
   explicitly rather than recognised by filename pattern: renaming a backup
   file must not silently change what a drill proves. Both values are plain
   filenames — a value containing a path separator is refused.
-- **`params.dump` is optional.** Left out, the newest regular file other
+- **`params.dump` is optional.** Left out, the newest-by-header file other
   than the globals script is restored, so a drill against a rotating
   backup directory keeps working unattended. Naming it explicitly is what
   lets one directory hold the globals beside several databases' dumps,
@@ -112,9 +112,24 @@ knowing:
 ## Which backup a drill restores, and when it refuses
 
 When the drill config names a **directory**, the adapter picks the
-artifact itself: the newest regular file (mtime, ties broken by name).
-Two things follow from that, and both are stated here rather than left
-for an operator to discover.
+artifact itself: the dump whose **own header records the newest time**.
+The file's modification time is not what ranks candidates — copying a
+backup in (`cp` without `-p`, an object-store download, an `rsync`
+without `-t`) resets it, and a stale artifact would then look like the
+newest thing in the directory. What a dump says about itself does not
+move when the file is copied.
+
+Ranking needs no declared zone: two dumps being compared came off the
+same backup host, so whatever zone it was in cancels out. Declaring
+`params.backup_timezone` is only needed to *report* `backup.created_at`.
+
+A dump the adapter cannot date — a plain-SQL dump, a header this parser
+does not recognise — ranks below every dump it can. Between two such
+files the previous rule still decides: newest mtime, ties broken by the
+larger name.
+
+Two more things follow, and both are stated here rather than left for an
+operator to discover.
 
 **A backup still being written is refused, not skipped.** The newest file
 in a backup directory is quite often the one a backup job is writing
@@ -208,7 +223,7 @@ Set under `source.params` in the drill config.
 | Param             | Kinds                 | Meaning                                             |
 |-------------------|-----------------------|-----------------------------------------------------|
 | `globals`         | `pgdump_with_globals` | **Required.** Bare filename of the cluster-globals script inside the source directory. |
-| `dump`            | `pgdump_with_globals` | Optional. Bare filename of the dump; without it the newest non-globals file is used. |
+| `dump`            | `pgdump_with_globals` | Optional. Bare filename of the dump; without it the newest-by-header non-globals file is used. |
 | `backup_timezone` | `pgdump*`             | Optional. IANA zone name of the host that took the backup (e.g. `Europe/Budapest`). Without it `backup.created_at` is null — see above. Not needed for `pgbackrest`, whose repository records absolute timestamps. |
 
 ## Drill config options

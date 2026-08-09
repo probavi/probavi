@@ -10,7 +10,7 @@ in-repo adapters, it is written from the protocol document alone.
 | Kind      | Meaning                                                       |
 |-----------|---------------------------------------------------------------|
 | `bak`     | One native `BACKUP DATABASE ... TO DISK` file.                |
-| `bak_dir` | A directory of backup files; the newest **full** backup is restored (see below). |
+| `bak_dir` | A directory of backup files; the **full** backup whose header records the newest completion time is restored (see below). |
 | `bak_with_logins` | A directory holding a server-logins T-SQL script (`params.logins`) and one `.bak`; the logins are replayed first, and the drill fails if any restored SQL user is left without a matching server login. |
 | `bak_chain` | A directory of backups replayed as a **chain**: the newest full, its newest differential, and the log backups that follow — the state the backup set can actually recover to. |
 
@@ -56,12 +56,29 @@ time alone therefore fails a perfectly restorable backup set.
 
 Nothing outside the engine can tell the types apart: the `.bak`/`.trn`
 extensions are pure convention (SQL Server ignores them), and all three
-types share one media format. So the adapter asks the engine. Candidates
-are transferred into the sandbox newest first and identified with
-`RESTORE HEADERONLY`; the first one that holds a **full** backup is
-restored, and the rest are never touched. Files that do not start like
+types share one media format. So the adapter asks the engine. Every
+candidate is transferred into one scratch path and identified with
+`RESTORE HEADERONLY`, and the **full backup whose header records the
+newest completion time** is the one restored — then, and only then, is it
+transferred to the path the restore reads. Files that do not start like
 backup media — checksum sidecars, log files — are skipped without being
 transferred, and named in the failure message if nothing is restorable.
+
+Ranking by the header rather than by the file's modification time matters
+because copying a backup in (`cp` without `-p`, an object-store download,
+an `rsync` without `-t`) resets the file time: a stale artifact would
+otherwise look like the newest thing in the directory. What the header
+records does not move when the file is copied. Ranking needs no declared
+zone — the backups being compared came off the same server, so whatever
+zone it was in cancels out; `params.backup_timezone` is only needed to
+*report* `backup.created_at`. Media whose header carries no completion
+date ranks below media that does, and between two such files the older
+rule still decides: newest file first, ties broken by the larger name.
+
+The cost is one probe per candidate, where an earlier version could stop
+at the first full backup it found. Probing is how the drill *finds* the
+backup; only the transfer that feeds the restore is counted as recovery
+time.
 
 Two consequences worth knowing:
 

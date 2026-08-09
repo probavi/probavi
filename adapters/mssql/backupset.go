@@ -291,54 +291,122 @@ type selection struct {
 	createdAt *string // the chosen set's own completion time, if derivable
 }
 
-// selectBackup transfers candidates into the sandbox newest-first and asks
-// the engine what each one is, stopping at the first that can create a
-// database. Rejected candidates are simply overwritten by the next
-// transfer — they share one destination path, so nothing accumulates.
+// selectBackup asks the engine what every candidate in the directory is,
+// then restores the one whose newest full backup finished last.
 //
-// Only the chosen artifact's transfer is reported: probing is how the
-// drill finds the backup, not part of the recovery it measures, and an
-// operator recovering for real reads their backup catalogue instead.
+// Ranking by what the header records rather than by the file's
+// modification time is issue #100: a backup copied into the directory
+// afterwards — cp without -p, an object-store download, an rsync without
+// -t — carries a fresh mtime, so a stale artifact outranked a newer one
+// and became what the drill proved. A backup's own completion time does
+// not move when the file is copied.
+//
+// That costs a probe per candidate where the previous rule could stop at
+// the first file holding a full backup. Probes share one scratch path, so
+// nothing accumulates in the sandbox, and the chosen artifact is
+// transferred once more to the path the restore reads: probing is how the
+// drill finds the backup, and only the transfer that feeds the restore
+// counts as recovery time — the same separation bak_chain makes.
 func selectBackup(ctx context.Context, c *core, plan *sourcePlan, destPath string) (*selection, *protoError) {
 	if plan.fixed != "" {
 		return selectNamed(ctx, c, plan.fixed, destPath, plan.loc)
 	}
+	probePath := destPath + probeSuffix
 	rejected := make([]string, 0, len(plan.candidates))
-	for _, candidate := range plan.candidates {
-		put, perr := c.putFile(ctx, putFileArgs{SourcePath: candidate, DestPath: destPath, Mode: "0600"})
-		if perr != nil {
+	var (
+		best     *selection
+		bestRank mediaRank
+	)
+	for i, candidate := range plan.candidates {
+		if _, perr := c.putFile(ctx, putFileArgs{SourcePath: candidate, DestPath: probePath, Mode: "0600"}); perr != nil {
 			return nil, perr
 		}
-		sets, perr := probeBackupSets(ctx, c, destPath)
+		sets, perr := probeBackupSets(ctx, c, probePath)
 		if perr != nil {
 			// The file is backup media the engine cannot read. Falling back
 			// to an older backup here would hide exactly what a drill exists
 			// to surface, so this fails the drill.
 			return nil, perr
 		}
-		if len(sets) == 0 {
-			// Nothing to go on: take this candidate the way the pre-header
-			// rule would have, rather than skipping media the engine did
-			// not refuse.
-			if perr := assertSettled(ctx, candidate, settleWindow); perr != nil {
-				return nil, perr
+
+		position, clock := defaultBackupSet, ""
+		if len(sets) > 0 {
+			// Nothing to go on is not the same as a refusal: an answer with
+			// no rows leaves the pre-header rule in place, rather than
+			// skipping media the engine did not reject.
+			found, ok := newestFullPosition(sets)
+			if !ok {
+				rejected = append(rejected, fmt.Sprintf("%s: %s", filepath.Base(candidate), describeSets(sets)))
+				continue
 			}
-			return &selection{hostPath: candidate, position: defaultBackupSet, transfer: put.DurationSeconds}, nil
+			position, clock = found, finishedAtOf(sets, found)
 		}
-		if position, ok := newestFullPosition(sets); ok {
-			// The adapter chose this file, not the operator: make sure a
-			// backup job is not still writing it (see settle.go). The
-			// header alone cannot say — a truncated backup still reads as
-			// a valid one.
-			if perr := assertSettled(ctx, candidate, settleWindow); perr != nil {
-				return nil, perr
-			}
-			return &selection{hostPath: candidate, position: position, transfer: put.DurationSeconds,
-				createdAt: backupFinishedAt(finishedAtOf(sets, position), plan.loc)}, nil
+		finished, dated := headerClock(clock)
+		rank := mediaRank{clock: finished, dated: dated, index: i}
+		if best == nil || rank.beats(bestRank) {
+			best, bestRank = &selection{hostPath: candidate, position: position,
+				createdAt: backupFinishedAt(clock, plan.loc)}, rank
 		}
-		rejected = append(rejected, fmt.Sprintf("%s: %s", filepath.Base(candidate), describeSets(sets)))
 	}
-	return nil, noFullBackup(plan, rejected)
+	if best == nil {
+		return nil, noFullBackup(plan, rejected)
+	}
+
+	// The adapter chose this file, not the operator: make sure a backup job
+	// is not still writing it (see settle.go). The header alone cannot say
+	// — a truncated backup still reads as a valid one.
+	if perr := assertSettled(ctx, best.hostPath, settleWindow); perr != nil {
+		return nil, perr
+	}
+	put, perr := c.putFile(ctx, putFileArgs{SourcePath: best.hostPath, DestPath: destPath, Mode: "0600"})
+	if perr != nil {
+		return nil, perr
+	}
+	best.transfer = put.DurationSeconds
+	return best, nil
+}
+
+// probeSuffix names the scratch path every candidate is probed through,
+// beside the path the restore reads.
+const probeSuffix = ".probe"
+
+// mediaRank orders the candidates of a directory source. A candidate the
+// engine could date wins over one it could not; between two dated ones the
+// later completion time wins; otherwise the scan order decides, which is
+// still newest file first with the larger name breaking a tie, so the
+// choice never depends on directory iteration order.
+type mediaRank struct {
+	clock time.Time // the backup's own completion time
+	dated bool      // whether the header carried one at all
+	index int       // position in the scan order; lower is newer
+}
+
+func (r mediaRank) beats(other mediaRank) bool {
+	switch {
+	case r.dated != other.dated:
+		return r.dated
+	case r.dated && !r.clock.Equal(other.clock):
+		return r.clock.After(other.clock)
+	default:
+		return r.index < other.index
+	}
+}
+
+// headerClock reads a header's completion wall clock for ranking, carried
+// in a time.Time labelled UTC that is a wall clock and not an instant.
+// Two backups being compared came off the same server, so whatever zone it
+// was in cancels out and ranking needs no declared zone; reporting the
+// creation time is the other job, and that one does need it (see
+// backupFinishedAt).
+func headerClock(clock string) (time.Time, bool) {
+	if clock == "" {
+		return time.Time{}, false
+	}
+	t, err := time.ParseInLocation(headerClockLayout, clock, time.UTC)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // selectNamed handles an artifact the drill config names outright: it is
