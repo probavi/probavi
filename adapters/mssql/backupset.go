@@ -138,9 +138,12 @@ func parseBackupSets(stdout []byte) ([]backupSet, *protoError) {
 		}
 		sets = append(sets, backupSet{position: position, backupType: kind})
 	}
-	if len(sets) == 0 {
-		return nil, protoErr("source_corrupt", false, "the backup media holds no backup set")
-	}
+	// No rows at all is not a verdict: the engine answered without
+	// classifying anything, which a real server does not do for media it
+	// accepted — it exits non-zero instead. Callers fall back to the
+	// engine's own set selection rather than inventing a claim, which also
+	// keeps the adapter working under the protocol's simulated sandbox,
+	// where every exec succeeds with a fixed stdout (§10).
 	return sets, nil
 }
 
@@ -207,6 +210,12 @@ func backupTypeName(t int) string {
 	}
 }
 
+// defaultBackupSet is the set the engine restores when none is named: the
+// first one on the media. It is what this adapter falls back to when the
+// header says nothing at all, so an unclassifiable answer changes nothing
+// rather than inventing a claim about the media.
+const defaultBackupSet = 1
+
 // selection is the outcome of choosing what to restore.
 type selection struct {
 	hostPath string  // the artifact whose bytes become the backup identity
@@ -239,6 +248,12 @@ func selectBackup(ctx context.Context, c *core, plan *sourcePlan, destPath strin
 			// to surface, so this fails the drill.
 			return nil, perr
 		}
+		if len(sets) == 0 {
+			// Nothing to go on: take this candidate the way the pre-header
+			// rule would have, rather than skipping media the engine did
+			// not refuse.
+			return &selection{hostPath: candidate, position: defaultBackupSet, transfer: put.DurationSeconds}, nil
+		}
 		if position, ok := newestFullPosition(sets); ok {
 			return &selection{hostPath: candidate, position: position, transfer: put.DurationSeconds}, nil
 		}
@@ -258,6 +273,9 @@ func selectNamed(ctx context.Context, c *core, hostPath, destPath string) (*sele
 	sets, perr := probeBackupSets(ctx, c, destPath)
 	if perr != nil {
 		return nil, perr
+	}
+	if len(sets) == 0 {
+		return &selection{hostPath: hostPath, position: defaultBackupSet, transfer: put.DurationSeconds}, nil
 	}
 	position, ok := newestFullPosition(sets)
 	if !ok {

@@ -229,6 +229,26 @@ func TestRestoreScriptNamesTheBackupSet(t *testing.T) {
 	}
 }
 
+// TestUnclassifiableHeaderFallsBackToTheEngineDefault pins the protocol's
+// simulated-sandbox contract (§10): when every verb succeeds, provision
+// must succeed. An engine that answers without classifying the media says
+// nothing about it, so the adapter restores the set the engine itself
+// would have — it does not invent a verdict either way.
+func TestUnclassifiableHeaderFallsBackToTheEngineDefault(t *testing.T) {
+	fixture := writeFixture(t, "TAPEbytes")
+	h := &scanHandler{t: t, headers: map[string]string{
+		filepath.Base(fixture): "1\n", // what the simulated sandbox returns
+	}}
+	line, _, exit := driveOp(t, "provision", provisionPayload(fixture, "{}"), h.handle)
+	f := parseFinal(t, line)
+	if exit != 0 || !f.OK {
+		t.Fatalf("exit=%d final=%+v — a sandbox whose verbs all succeed must provision", exit, f)
+	}
+	if len(h.restoreArgv) == 0 || h.restoreArgv[len(h.restoreArgv)-1] != "1" {
+		t.Errorf("restore argv = %v, want the engine's own default set", h.restoreArgv)
+	}
+}
+
 // TestSelectionTimeIsNotRecoveryTime pins decision (b): probing rejected
 // candidates is how the drill finds the backup, not part of the recovery
 // it measures — but the chosen artifact's transfer is.

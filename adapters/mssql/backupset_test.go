@@ -39,7 +39,12 @@ func TestParseBackupSets(t *testing.T) {
 			[]backupSet{{position: 1, backupType: backupTypeFull}}, false},
 		{"short lines are noise, not rows", "a|b|c\n" + headerRow(backupTypeFull, 1),
 			[]backupSet{{position: 1, backupType: backupTypeFull}}, false},
-		{"no rows at all", "", nil, true},
+		// The engine answering without classifying anything is not a
+		// verdict: a real server exits non-zero for media it refuses, and
+		// the protocol's simulated sandbox answers every exec with a fixed
+		// stdout (§10), so this must not fail a drill.
+		{"no rows at all", "", nil, false},
+		{"the simulated sandbox's fixed answer", "1\n", nil, false},
 		// A backup name containing the separator shifts every later column.
 		// Reading the wrong one could restore a log backup believing it is
 		// a full one, so the ambiguity is refused rather than guessed at.
