@@ -53,6 +53,36 @@ reported empty and the declared `sql_runner` references no `{{user}}`.
   set it to the database your checks query (typically the one the archive
   restores). It never influences what gets restored.
 
+## Which backup a drill restores, and when it refuses
+
+When the drill config names a **directory**, the adapter picks the
+artifact itself: the newest regular file (mtime, ties broken by name).
+Two things follow from that, and both are stated here rather than left
+for an operator to discover.
+
+**A backup still being written is refused, not skipped.** The newest file
+in a backup directory is quite often the one a backup job is writing
+right now, and restoring a partial artifact fails in whatever way the
+engine happens to fail — a drill reporting trouble against a backup set
+that is perfectly healthy. So the adapter looks twice, a moment apart,
+and refuses an artifact that changed in between (`source_unreadable`,
+with a message that says so). It deliberately does **not** fall back to
+the previous backup: that would prove an older backup while the record
+implied the newest, and nothing in the evidence would say which one it
+was. A backup job that writes to a temporary name and renames on
+completion never trips this at all — the directory only ever shows
+finished files, and that is the arrangement worth having.
+
+**`created_at` is the file's modification time**, which is the closest
+thing available here, not the time the backup was taken. Copying backups
+around without preserving timestamps (`cp` without `-p`, `rsync` without
+`-t`, most object-store downloads) resets it, and a stale artifact then
+looks like the newest one. Preserve timestamps, or point the drill at a
+fixed path when it matters.
+
+An artifact the config names outright is never second-guessed this way:
+the operator chose that file, so the drill restores that file.
+
 ## The mongodump_with_users kind (the account layer)
 
 MongoDB keeps users and roles in the `admin` database

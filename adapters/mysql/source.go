@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -31,18 +32,18 @@ type resolvedSource struct {
 //	mysqldump_with_users — path is a directory holding an accounts-and-grants
 //	                       script (params.users) and one dump
 //	xtrabackup           — path is an XtraBackup full-backup directory
-func resolveSource(kind, path string, params map[string]string) (*resolvedSource, *protoError) {
+func resolveSource(ctx context.Context, kind, path string, params map[string]string) (*resolvedSource, *protoError) {
 	switch kind {
 	case "mysqldump":
 		return resolveFile(path)
 	case "mysqldump_dir":
-		latest, perr := latestDumpIn(path)
+		latest, perr := latestDumpIn(ctx, path)
 		if perr != nil {
 			return nil, perr
 		}
 		return resolveFile(latest)
 	case "mysqldump_with_users":
-		return resolveWithUsers(path, params)
+		return resolveWithUsers(ctx, path, params)
 	case "xtrabackup":
 		src, perr := resolveRepo(path)
 		if perr != nil {
@@ -84,7 +85,7 @@ func resolveSource(kind, path string, params map[string]string) (*resolvedSource
 // construction mirrors the other in-repo adapters' two-member framing
 // (role NUL size NUL content, fixed order), so the same pair always hashes
 // the same and any change to either member changes the hash.
-func resolveWithUsers(dir string, params map[string]string) (*resolvedSource, *protoError) {
+func resolveWithUsers(ctx context.Context, dir string, params map[string]string) (*resolvedSource, *protoError) {
 	info, err := os.Stat(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -107,7 +108,7 @@ func resolveWithUsers(dir string, params map[string]string) (*resolvedSource, *p
 		return nil, perr
 	}
 
-	dumpPath, perr := chooseDump(dir, params["dump"], usersName)
+	dumpPath, perr := chooseDump(ctx, dir, params["dump"], usersName)
 	if perr != nil {
 		return nil, perr
 	}
@@ -173,7 +174,7 @@ func memberName(value, param string) (string, *protoError) {
 // chooseDump resolves which dump the drill restores: the one params.dump
 // names, or — so a drill against a rotating backup directory keeps working
 // unattended — the newest file that is not the users script.
-func chooseDump(dir, requested, usersName string) (string, *protoError) {
+func chooseDump(ctx context.Context, dir, requested, usersName string) (string, *protoError) {
 	if requested != "" {
 		name, perr := memberName(requested, "dump")
 		if perr != nil {
@@ -192,6 +193,11 @@ func chooseDump(dir, requested, usersName string) (string, *protoError) {
 	if newest == "" {
 		return "", protoErr("source_not_found", false,
 			"backup directory %s holds no dump beside the users script %s", dir, usersName)
+	}
+	// The adapter chose this file, not the operator: make sure a backup job
+	// is not still writing it (see settle.go).
+	if perr := assertSettled(ctx, newest, settleWindow); perr != nil {
+		return "", perr
 	}
 	return newest, nil
 }
@@ -316,13 +322,18 @@ func resolveFile(path string) (*resolvedSource, *protoError) {
 }
 
 // latestDumpIn picks the newest regular file in dir.
-func latestDumpIn(dir string) (string, *protoError) {
+func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
 	best, perr := newestFileIn(dir, "")
 	if perr != nil {
 		return "", perr
 	}
 	if best == "" {
 		return "", protoErr("source_not_found", false, "backup directory %s contains no files", dir)
+	}
+	// The adapter chose this file, not the operator: make sure a backup job
+	// is not still writing it (see settle.go).
+	if perr := assertSettled(ctx, best, settleWindow); perr != nil {
+		return "", perr
 	}
 	return best, nil
 }

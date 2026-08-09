@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -55,7 +56,7 @@ func TestDirChecksum(t *testing.T) {
 
 func TestResolveXtraBackupSource(t *testing.T) {
 	backup := writeBackupFixture(t)
-	src, perr := resolveSource("xtrabackup", backup, nil)
+	src, perr := resolveSource(context.Background(), "xtrabackup", backup, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -67,10 +68,10 @@ func TestResolveXtraBackupSource(t *testing.T) {
 	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if _, perr := resolveSource("xtrabackup", file, nil); perr == nil || perr.Code != "invalid_request" {
+	if _, perr := resolveSource(context.Background(), "xtrabackup", file, nil); perr == nil || perr.Code != "invalid_request" {
 		t.Errorf("file as backup dir: %+v, want invalid_request", perr)
 	}
-	if _, perr := resolveSource("xtrabackup", filepath.Join(t.TempDir(), "gone"), nil); perr == nil || perr.Code != "source_not_found" {
+	if _, perr := resolveSource(context.Background(), "xtrabackup", filepath.Join(t.TempDir(), "gone"), nil); perr == nil || perr.Code != "source_not_found" {
 		t.Errorf("missing backup dir: %+v, want source_not_found", perr)
 	}
 
@@ -80,7 +81,7 @@ func TestResolveXtraBackupSource(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(notBackup, "random.dat"), []byte("x"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if _, perr := resolveSource("xtrabackup", notBackup, nil); perr == nil || perr.Code != "source_corrupt" ||
+	if _, perr := resolveSource(context.Background(), "xtrabackup", notBackup, nil); perr == nil || perr.Code != "source_corrupt" ||
 		!strings.Contains(perr.Message, "xtrabackup_checkpoints") {
 		t.Errorf("non-backup dir: %+v, want source_corrupt naming the missing file", perr)
 	}
@@ -96,7 +97,7 @@ func TestBackupNewestMtimeIsCreatedAt(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(backup, "xtrabackup_checkpoints"), old, old); err != nil {
 		t.Fatalf("chtimes: %v", err)
 	}
-	src, perr := resolveSource("xtrabackup", backup, nil)
+	src, perr := resolveSource(context.Background(), "xtrabackup", backup, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}

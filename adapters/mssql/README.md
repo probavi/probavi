@@ -77,6 +77,26 @@ Two consequences worth knowing:
   rather than falling back to an older one: a corrupt newest backup is
   exactly what a drill exists to surface.
 
+**A backup still being written is refused, not skipped.** The newest file
+in a backup directory is quite often the one a backup job is writing right
+now, and a truncated backup still reads as a valid one — measured:
+`RESTORE HEADERONLY` accepts it without complaint. So the chosen artifact
+is looked at twice, a moment apart, and one that changed in between is
+refused (`source_unreadable`, with a message that says so). The adapter
+deliberately does **not** fall back to the previous backup: that would
+prove an older backup while the record implied the newest, and nothing in
+the evidence would say which one it was. A backup job that writes to a
+temporary name and renames on completion never trips this at all — the
+directory only ever shows finished files, and that is the arrangement
+worth having. An artifact the config names outright is never
+second-guessed this way: the operator chose that file.
+
+**`created_at` is the file's modification time**, not the time the backup
+was taken. Copying backups around without preserving timestamps (`cp`
+without `-p`, `rsync` without `-t`, most object-store downloads) resets
+it, and a stale artifact then looks like the newest one — preserve
+timestamps, or point the drill at a fixed path when it matters.
+
 Selection is not part of the measured recovery time. `transfer_seconds`
 counts the chosen artifact's transfer only — an operator recovering for
 real reads their backup catalogue instead of probing.

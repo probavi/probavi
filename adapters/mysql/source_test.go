@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +16,7 @@ func TestResolveSourceFile(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	src, perr := resolveSource("mysqldump", path, nil)
+	src, perr := resolveSource(context.Background(), "mysqldump", path, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -36,8 +37,8 @@ func TestResolveSourceFile(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, perr := resolveSource(tt.kind, tt.path, nil); perr == nil || perr.Code != tt.wantCode {
-				t.Errorf("resolveSource(%s, %s) = %+v, want %s", tt.kind, tt.path, perr, tt.wantCode)
+			if _, perr := resolveSource(context.Background(), tt.kind, tt.path, nil); perr == nil || perr.Code != tt.wantCode {
+				t.Errorf("resolveSource(context.Background(), %s, %s) = %+v, want %s", tt.kind, tt.path, perr, tt.wantCode)
 			}
 		})
 	}
@@ -59,7 +60,7 @@ func TestResolveSourceDirPicksNewest(t *testing.T) {
 		}
 	}
 
-	src, perr := resolveSource("mysqldump_dir", dir, nil)
+	src, perr := resolveSource(context.Background(), "mysqldump_dir", dir, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -79,7 +80,7 @@ func TestResolveSourceDirPicksNewest(t *testing.T) {
 			t.Fatalf("chtimes: %v", err)
 		}
 	}
-	src, perr = resolveSource("mysqldump_dir", dir, nil)
+	src, perr = resolveSource(context.Background(), "mysqldump_dir", dir, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -88,7 +89,7 @@ func TestResolveSourceDirPicksNewest(t *testing.T) {
 	}
 
 	empty := t.TempDir()
-	if _, perr := resolveSource("mysqldump_dir", empty, nil); perr == nil || perr.Code != "source_not_found" {
+	if _, perr := resolveSource(context.Background(), "mysqldump_dir", empty, nil); perr == nil || perr.Code != "source_not_found" {
 		t.Errorf("empty dir: %+v, want source_not_found", perr)
 	}
 }
@@ -143,7 +144,7 @@ func TestResolveWithUsersErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, perr := resolveSource("mysqldump_with_users", tt.path, tt.params); perr == nil || perr.Code != tt.wantCode {
+			if _, perr := resolveSource(context.Background(), "mysqldump_with_users", tt.path, tt.params); perr == nil || perr.Code != tt.wantCode {
 				t.Errorf("perr = %+v, want %s", perr, tt.wantCode)
 			}
 		})
@@ -154,7 +155,7 @@ func TestResolveWithUsersErrors(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(lone, "users.sql"), []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, perr := resolveSource("mysqldump_with_users", lone, map[string]string{"users": "users.sql"}); perr == nil || perr.Code != "source_not_found" {
+		if _, perr := resolveSource(context.Background(), "mysqldump_with_users", lone, map[string]string{"users": "users.sql"}); perr == nil || perr.Code != "source_not_found" {
 			t.Errorf("perr = %+v, want source_not_found", perr)
 		}
 	})
@@ -164,7 +165,7 @@ func TestResolveWithUsersIdentity(t *testing.T) {
 	dir := withUsersDir(t)
 	params := map[string]string{"users": "users.sql", "dump": "orders.sql"}
 
-	src, perr := resolveSource("mysqldump_with_users", dir, params)
+	src, perr := resolveSource(context.Background(), "mysqldump_with_users", dir, params)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
@@ -189,7 +190,7 @@ func TestResolveWithUsersIdentity(t *testing.T) {
 		t.Errorf("createdAt = %v, want the older member's mtime %s", src.createdAt, want)
 	}
 
-	again, perr := resolveSource("mysqldump_with_users", dir, params)
+	again, perr := resolveSource(context.Background(), "mysqldump_with_users", dir, params)
 	if perr != nil {
 		t.Fatalf("resolve again: %+v", perr)
 	}
@@ -204,7 +205,7 @@ func TestResolveWithUsersCreatedAtTracksStalestMember(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(dir, "orders.sql"), older, older); err != nil {
 		t.Fatal(err)
 	}
-	src, perr := resolveSource("mysqldump_with_users", dir, map[string]string{"users": "users.sql", "dump": "orders.sql"})
+	src, perr := resolveSource(context.Background(), "mysqldump_with_users", dir, map[string]string{"users": "users.sql", "dump": "orders.sql"})
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
@@ -221,7 +222,7 @@ func TestResolveWithUsersCreatedAtTracksStalestMember(t *testing.T) {
 func TestResolveWithUsersChecksumCoversBothMembers(t *testing.T) {
 	dir := withUsersDir(t)
 	params := map[string]string{"users": "users.sql", "dump": "orders.sql"}
-	base, perr := resolveSource("mysqldump_with_users", dir, params)
+	base, perr := resolveSource(context.Background(), "mysqldump_with_users", dir, params)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
@@ -229,7 +230,7 @@ func TestResolveWithUsersChecksumCoversBothMembers(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "users.sql"), []byte("CREATE USERZ"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	usersChanged, perr := resolveSource("mysqldump_with_users", dir, params)
+	usersChanged, perr := resolveSource(context.Background(), "mysqldump_with_users", dir, params)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
@@ -243,7 +244,7 @@ func TestResolveWithUsersChecksumCoversBothMembers(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "orders.sql"), []byte("DUMP-BYTEZ"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	dumpChanged, perr := resolveSource("mysqldump_with_users", dir, params)
+	dumpChanged, perr := resolveSource(context.Background(), "mysqldump_with_users", dir, params)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
@@ -270,11 +271,11 @@ func TestResolveWithUsersChecksumIsUnambiguous(t *testing.T) {
 		t.Fatal(err)
 	}
 	params := map[string]string{"users": "users.sql", "dump": "x.sql"}
-	a, perr := resolveSource("mysqldump_with_users", dirA, params)
+	a, perr := resolveSource(context.Background(), "mysqldump_with_users", dirA, params)
 	if perr != nil {
 		t.Fatalf("resolve a: %+v", perr)
 	}
-	b, perr := resolveSource("mysqldump_with_users", dirB, params)
+	b, perr := resolveSource(context.Background(), "mysqldump_with_users", dirB, params)
 	if perr != nil {
 		t.Fatalf("resolve b: %+v", perr)
 	}
@@ -286,7 +287,7 @@ func TestResolveWithUsersChecksumIsUnambiguous(t *testing.T) {
 func TestResolveWithUsersIgnoresSiblings(t *testing.T) {
 	dir := withUsersDir(t)
 	params := map[string]string{"users": "users.sql", "dump": "orders.sql"}
-	base, perr := resolveSource("mysqldump_with_users", dir, params)
+	base, perr := resolveSource(context.Background(), "mysqldump_with_users", dir, params)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
@@ -295,7 +296,7 @@ func TestResolveWithUsersIgnoresSiblings(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "in-flight.tmp"), []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	after, perr := resolveSource("mysqldump_with_users", dir, params)
+	after, perr := resolveSource(context.Background(), "mysqldump_with_users", dir, params)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
@@ -316,7 +317,7 @@ func TestResolveWithUsersPicksNewestNonUsers(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(dir, "orders.sql"), past, past); err != nil {
 		t.Fatal(err)
 	}
-	src, perr := resolveSource("mysqldump_with_users", dir, map[string]string{"users": "users.sql"})
+	src, perr := resolveSource(context.Background(), "mysqldump_with_users", dir, map[string]string{"users": "users.sql"})
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}

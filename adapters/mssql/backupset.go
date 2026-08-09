@@ -252,9 +252,19 @@ func selectBackup(ctx context.Context, c *core, plan *sourcePlan, destPath strin
 			// Nothing to go on: take this candidate the way the pre-header
 			// rule would have, rather than skipping media the engine did
 			// not refuse.
+			if perr := assertSettled(ctx, candidate, settleWindow); perr != nil {
+				return nil, perr
+			}
 			return &selection{hostPath: candidate, position: defaultBackupSet, transfer: put.DurationSeconds}, nil
 		}
 		if position, ok := newestFullPosition(sets); ok {
+			// The adapter chose this file, not the operator: make sure a
+			// backup job is not still writing it (see settle.go). The
+			// header alone cannot say — a truncated backup still reads as
+			// a valid one.
+			if perr := assertSettled(ctx, candidate, settleWindow); perr != nil {
+				return nil, perr
+			}
 			return &selection{hostPath: candidate, position: position, transfer: put.DurationSeconds}, nil
 		}
 		rejected = append(rejected, fmt.Sprintf("%s: %s", filepath.Base(candidate), describeSets(sets)))

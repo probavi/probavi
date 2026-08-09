@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -41,12 +42,12 @@ type resolvedSource struct {
 // the archive is replayed and what the drill then proves — which is why
 // they are distinct kinds rather than options: backup.kind is the only
 // field an auditor can read the difference from.
-func resolveSource(kind, path string) (*resolvedSource, *protoError) {
+func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *protoError) {
 	switch kind {
 	case "mongodump", "mongodump_with_users", "mongodump_with_oplog":
 		return resolveFile(path)
 	case "mongodump_dir":
-		latest, perr := latestDumpIn(path)
+		latest, perr := latestDumpIn(ctx, path)
 		if perr != nil {
 			return nil, perr
 		}
@@ -85,7 +86,7 @@ func resolveFile(path string) (*resolvedSource, *protoError) {
 
 // latestDumpIn picks the newest regular file in dir; ties break toward the
 // lexicographically larger name so the choice is deterministic.
-func latestDumpIn(dir string) (string, *protoError) {
+func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -113,6 +114,11 @@ func latestDumpIn(dir string) (string, *protoError) {
 	}
 	if best == "" {
 		return "", protoErr("source_not_found", false, "backup directory %s contains no files", dir)
+	}
+	// The adapter chose this file, not the operator: make sure a backup job
+	// is not still writing it (see settle.go).
+	if perr := assertSettled(ctx, best, settleWindow); perr != nil {
+		return "", perr
 	}
 	return best, nil
 }

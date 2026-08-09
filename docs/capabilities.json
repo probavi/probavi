@@ -35,7 +35,7 @@
       "id": "mongodb",
       "name": "MongoDB",
       "status": "experimental",
-      "adapter_version": "0.2.0",
+      "adapter_version": "0.3.0",
       "engine": {
         "id": "mongodb",
         "name": "MongoDB"
@@ -79,7 +79,7 @@
       "id": "mssql",
       "name": "SQL Server",
       "status": "experimental",
-      "adapter_version": "0.3.0",
+      "adapter_version": "0.4.0",
       "engine": {
         "id": "sqlserver",
         "name": "Microsoft SQL Server"
@@ -118,7 +118,7 @@
       "id": "mysql",
       "name": "MySQL",
       "status": "experimental",
-      "adapter_version": "0.3.0",
+      "adapter_version": "0.4.0",
       "engine": {
         "id": "mysql",
         "name": "MySQL"
@@ -162,7 +162,7 @@
       "id": "postgres",
       "name": "PostgreSQL",
       "status": "experimental",
-      "adapter_version": "0.4.0",
+      "adapter_version": "0.5.0",
       "engine": {
         "id": "postgresql",
         "name": "PostgreSQL"

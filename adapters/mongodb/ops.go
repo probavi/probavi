@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "mongodb"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 
 	// defaultDatabase is the connection database when the drill config
 	// does not name one: admin always exists, so healthchecks and the
@@ -111,7 +111,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		scratch = "/tmp"
 	}
 
-	src, perr := resolveSource(req.Source.Kind, req.Source.Path)
+	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path)
 	if perr != nil {
 		return nil, perr
 	}
