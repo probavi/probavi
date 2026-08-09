@@ -13,6 +13,33 @@ always called out explicitly.
 
 ### Added
 
+- **`mongodump_with_users` and `mongodump_with_oplog`, two MongoDB source
+  kinds that close the account-layer and consistency gaps** (mongodb
+  adapter 0.2.0; tracked in #90). Users and roles live in the `admin`
+  database, so a per-database archive carries them only with
+  `--dumpDbUsersAndRoles` — and `mongorestore` puts them back only when
+  asked. Measured: an archive that *did* carry the account layer restored
+  without it silently, exit 0, zero users. Separately, an archive taken
+  with `--oplog` restored with its captured window ignored, so a write
+  issued during the dump into an already-copied collection was absent from
+  the restored data and nothing said so.
+
+  `mongodump_with_users` restores the accounts (`options.database` is
+  required — `mongorestore` refuses the flag without a database, and
+  defaulting it would restore them into `admin`) and then gates on two
+  facts: the account layer arrived, and every role a restored user holds
+  or a restored role inherits still resolves via `rolesInfo` — which is
+  how a user pointing at a role in another database, one a single-database
+  archive cannot carry, is caught. `mongodump_with_oplog` replays the
+  captured window and gates on the replay having happened, so its record
+  means *restored to a consistent point* rather than merely *restored*.
+
+  Unlike the sibling adapters' two-member kinds, both are single-artifact
+  sources — mongodump keeps users, roles, and the oplog inside the same
+  archive — so the backup identity is unchanged. Engine diagnostics bound
+  for protocol messages are scrubbed of SCRAM material (`salt`,
+  `storedKey`, `serverKey`), which `admin.system.users` documents embed.
+
 - **`mysqldump_with_users`, a MySQL source kind that replays the account
   layer before the dump and gates on the restored principal chain** (mysql
   adapter 0.3.0; tracked in #89). MySQL accounts and grants live in the
