@@ -194,6 +194,16 @@ the earlier of the two is chosen.
   the dump member: a globals script carries no timestamp of its own, so
   the pair's freshness rests on the member that can be dated.
 
+## Source params
+
+Set under `source.params` in the drill config.
+
+| Param             | Kinds                 | Meaning                                             |
+|-------------------|-----------------------|-----------------------------------------------------|
+| `globals`         | `pgdump_with_globals` | **Required.** Bare filename of the cluster-globals script inside the source directory. |
+| `dump`            | `pgdump_with_globals` | Optional. Bare filename of the dump; without it the newest non-globals file is used. |
+| `backup_timezone` | all                   | Optional. IANA zone name of the host that took the backup (e.g. `Europe/Budapest`). Without it `backup.created_at` is null — see above. |
+
 ## Drill config options
 
 | Option     | Default    | Meaning                              |

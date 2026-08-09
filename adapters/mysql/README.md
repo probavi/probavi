@@ -271,6 +271,16 @@ the earlier of the two is chosen.
   dates the dump member: an accounts script carries no timestamp of its
   own, so the pair's freshness rests on the member that can be dated.
 
+## Source params
+
+Set under `source.params` in the drill config.
+
+| Param             | Kinds                  | Meaning                                            |
+|-------------------|------------------------|----------------------------------------------------|
+| `users`           | `mysqldump_with_users` | **Required.** Bare filename of the accounts-and-grants script inside the source directory. |
+| `dump`            | `mysqldump_with_users` | Optional. Bare filename of the dump; without it the newest non-users file is used. |
+| `backup_timezone` | all                    | Optional. IANA zone name of the host that took the backup (e.g. `Europe/Budapest`). Without it `backup.created_at` is null — see above. |
+
 ## Drill config options
 
 | Option      | Default   | Meaning                               |

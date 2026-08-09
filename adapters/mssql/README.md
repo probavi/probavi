@@ -264,6 +264,16 @@ the earlier of the two is chosen.
   script carries no timestamp of its own, so the pair's freshness rests on
   the member that can be dated.
 
+## Source params
+
+Set under `source.params` in the drill config.
+
+| Param             | Kinds             | Meaning                                                 |
+|-------------------|-------------------|---------------------------------------------------------|
+| `logins`          | `bak_with_logins` | **Required.** Bare filename of the server-logins script inside the source directory. |
+| `bak`             | `bak_with_logins` | Optional. Bare filename of the backup; without it the directory is scanned for the newest full backup. |
+| `backup_timezone` | all               | Optional. IANA zone name of the host that took the backup (e.g. `Europe/Budapest`). Without it `backup.created_at` is null — see above. |
+
 ## Drill config options
 
 | Option     | Default   | Meaning                                        |
