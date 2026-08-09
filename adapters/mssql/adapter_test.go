@@ -143,22 +143,33 @@ func classify(t *testing.T, call verbCall) (execArgs, string) {
 	if len(args.Argv) == 0 {
 		t.Fatal("exec with empty argv")
 	}
+	if args.Argv[0] == sqlcmdPath {
+		return args, classifySqlcmd(args)
+	}
+	if len(args.Argv) >= 3 {
+		switch args.Argv[2] {
+		case initFileScript:
+			return args, "initfile"
+		case startScript:
+			return args, "start"
+		case restoreScript:
+			return args, "restore"
+		}
+	}
+	t.Fatalf("unexpected exec: %v", args.Argv)
+	return args, ""
+}
+
+func classifySqlcmd(args execArgs) string {
 	switch {
-	case args.Argv[0] == sqlcmdPath && slices.Contains(args.Argv, "-i"):
-		return args, "logins"
-	case args.Argv[0] == sqlcmdPath && slices.Contains(args.Argv, orphanQuery):
-		return args, "orphans"
-	case args.Argv[0] == sqlcmdPath:
-		return args, "probe"
-	case len(args.Argv) >= 3 && args.Argv[2] == initFileScript:
-		return args, "initfile"
-	case len(args.Argv) >= 3 && args.Argv[2] == startScript:
-		return args, "start"
-	case len(args.Argv) >= 3 && args.Argv[2] == restoreScript:
-		return args, "restore"
+	case slices.Contains(args.Argv, "-i"):
+		return "logins"
+	case slices.Contains(args.Argv, orphanQuery):
+		return "orphans"
+	case strings.Contains(args.Argv[len(args.Argv)-1], "RESTORE HEADERONLY"):
+		return "headeronly"
 	default:
-		t.Fatalf("unexpected exec: %v", args.Argv)
-		return args, ""
+		return "probe"
 	}
 }
 
@@ -233,6 +244,31 @@ func writeFixture(t *testing.T, content string) string {
 	return path
 }
 
+// headerRow is one RESTORE HEADERONLY result row in the pipe-separated
+// shape sqlcmd prints, trimmed to the columns this adapter reads plus
+// enough neighbours to keep the layout honest: BackupName,
+// BackupDescription, BackupType, ExpirationDate, Compressed, Position.
+func headerRow(backupType, position int) string {
+	return fmt.Sprintf("NULL|NULL|%d|NULL|0|%d|2|sa|host|shop|957", backupType, position)
+}
+
+// fullHeaderExec answers a HEADERONLY probe with a single full backup set.
+func fullHeaderExec() any {
+	return execValue{ExitCode: 0, DurationSeconds: 0.05,
+		StdoutB64: base64.StdEncoding.EncodeToString([]byte(headerRow(backupTypeFull, 1) + "\n"))}
+}
+
+// writeMedia writes a file that starts like SQL Server backup media, so
+// directory scanning treats it as a candidate.
+func writeMedia(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("TAPE"+body), 0o600); err != nil {
+		t.Fatalf("write media %s: %v", name, err)
+	}
+	return path
+}
+
 func provisionPayload(path, options string) string {
 	return fmt.Sprintf(`{"source":{"kind":"bak","path":%q,"params":{},"credential_env":[]},"sandbox":{"scratch_dir":"/scratch"},"options":%s}`, path, options)
 }
@@ -283,8 +319,10 @@ func idleExecResponse(t *testing.T, call verbCall, probes *int) any {
 			t.Errorf("start env = %v, want EULA acceptance and the sandbox constant", args.Env)
 		}
 		return okExec(0)
+	case "headeronly":
+		return fullHeaderExec()
 	case "restore":
-		want := []string{"sh", "-c", restoreScript, "sh", "/scratch/probavi-restore.bak", "orders"}
+		want := []string{"sh", "-c", restoreScript, "sh", "/scratch/probavi-restore.bak", "orders", "1"}
 		if strings.Join(args.Argv, "\x00") != strings.Join(want, "\x00") {
 			t.Errorf("restore argv = %v", args.Argv)
 		}
@@ -332,9 +370,9 @@ func TestProvisionIdleSandbox(t *testing.T) {
 		t.Fatalf("final = %+v", f)
 	}
 	// initfile, probe(refused), start, poll(not ready), poll(ready),
-	// put_file, restore
-	if len(calls) != 7 {
-		t.Errorf("calls = %d, want 7", len(calls))
+	// put_file, headeronly, restore
+	if len(calls) != 8 {
+		t.Errorf("calls = %d, want 8", len(calls))
 	}
 	assertProvisionResult(t, f.Payload)
 }
@@ -359,7 +397,8 @@ func assertProvisionResult(t *testing.T, payload json.RawMessage) {
 	if res.Timings.Transfer != 0.2 || res.Timings.Restore != 1.5 || res.Timings.EngineReady <= 0 {
 		t.Errorf("timings = %+v — must carry the measured values", res.Timings)
 	}
-	if res.State["database"] != "orders" || res.State["bak_path"] != "/scratch/probavi-restore.bak" {
+	if res.State["database"] != "orders" || res.State["bak_path"] != "/scratch/probavi-restore.bak" ||
+		res.State["backup_set"] != "1" {
 		t.Errorf("state = %+v", res.State)
 	}
 }
@@ -377,15 +416,18 @@ func TestProvisionAdoptsRunningEngine(t *testing.T) {
 			if kind == "start" {
 				t.Errorf("a serving engine must be adopted, not restarted: %v", args.Argv)
 			}
+			if kind == "headeronly" {
+				return fullHeaderExec(), nil
+			}
 			return servingExec(), nil
 		})
 	f := parseFinal(t, line)
 	if exit != 0 || !f.OK {
 		t.Fatalf("exit=%d final=%+v", exit, f)
 	}
-	// initfile, probe(ok), put_file, restore
-	if len(calls) != 4 {
-		t.Errorf("calls = %d, want 4", len(calls))
+	// initfile, probe(ok), put_file, headeronly, restore
+	if len(calls) != 5 {
+		t.Errorf("calls = %d, want 5", len(calls))
 	}
 	res := provisionWire{}
 	if err := json.Unmarshal(f.Payload, &res); err != nil {
@@ -403,8 +445,11 @@ func TestProvisionFailures(t *testing.T) {
 			if call.Verb == "put_file" {
 				return putFileValue{}, nil
 			}
-			if _, kind := classify(t, call); kind == "restore" {
+			switch _, kind := classify(t, call); kind {
+			case "restore":
 				return errExec(1, stderr), nil
+			case "headeronly":
+				return fullHeaderExec(), nil
 			}
 			return servingExec(), nil
 		}
@@ -436,15 +481,15 @@ func TestProvisionFailures(t *testing.T) {
 		{"random garbage",
 			provisionPayload(fixture, "{}"),
 			restoreFails("Msg 3241, Level 16, State 1, Server x, Line 1\nThe media family on device '/scratch/probavi-restore.bak' is incorrectly formed. SQL Server cannot process this media family.\nMsg 3013, Level 16, State 1, Server x, Line 1\nRESTORE DATABASE is terminating abnormally."),
-			"source_corrupt", 4},
+			"source_corrupt", 5},
 		{"text garbage",
 			provisionPayload(fixture, "{}"),
 			restoreFails("Msg 3254, Level 16, State 1, Server x, Line 1\nThe volume on device '/scratch/probavi-restore.bak' is empty.\nMsg 3013, Level 16, State 1, Server x, Line 1\nRESTORE DATABASE is terminating abnormally."),
-			"source_corrupt", 4},
+			"source_corrupt", 5},
 		{"engine failure during restore",
 			provisionPayload(fixture, "{}"),
 			restoreFails("Msg 3257, Level 16, State 1, Server x, Line 1\nThere is insufficient free space on disk volume '/var/opt/mssql/data'.\nMsg 3013, Level 16, State 1, Server x, Line 1\nRESTORE DATABASE is terminating abnormally."),
-			"restore_failed", 4},
+			"restore_failed", 5},
 		{"engine with foreign credentials",
 			provisionPayload(fixture, "{}"),
 			func(call verbCall) (any, *protoError) {

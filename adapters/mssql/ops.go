@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const (
 	adapterName    = "mssql"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 
 	defaultUser     = "sa"
 	defaultDatabase = "probavi"
@@ -55,17 +56,18 @@ const (
 	// initFilePath).
 	initFileScript = `printf 'SET NOCOUNT ON;\n' > /tmp/probavi-sqlcmd-init.sql`
 
-	// restoreScript restores $1 (backup file) as database $2: the file
-	// list is read from the backup and every logical file is MOVEd to a
-	// fresh path — the original paths inside the .bak belong to the
-	// production server, not this sandbox. Logical names come from the
-	// operator's artifact, so embedded single quotes are doubled (\047)
-	// before they enter the T-SQL string. All parsing happens inside the
-	// sandbox; the adapter only sees the exit code.
+	// restoreScript restores backup set $3 of $1 (backup file) as database
+	// $2: the file list is read from that same set and every logical file
+	// is MOVEd to a fresh path — the original paths inside the .bak belong
+	// to the production server, not this sandbox. Logical names come from
+	// the operator's artifact, so embedded single quotes are doubled
+	// (\047) before they enter the T-SQL string; the set number is an
+	// integer the adapter parsed from the backup header. All parsing
+	// happens inside the sandbox; the adapter only sees the exit code.
 	restoreScript = `set -e
 sqlcmd=/opt/mssql-tools18/bin/sqlcmd
-moves=$("$sqlcmd" -S 127.0.0.1,1433 -U sa -C -b -l 5 -h -1 -W -s "|" -r 1 -Q "SET NOCOUNT ON; RESTORE FILELISTONLY FROM DISK = N'$1'" | awk -F"|" 'NF >= 3 { name = $1; gsub("\047", "\047\047", name); printf ", MOVE N\047%s\047 TO N\047/var/opt/mssql/data/probavi_restore_%d.dat\047", name, NR }')
-"$sqlcmd" -S 127.0.0.1,1433 -U sa -C -b -l 5 -r 1 -Q "RESTORE DATABASE [$2] FROM DISK = N'$1' WITH RECOVERY$moves"`
+moves=$("$sqlcmd" -S 127.0.0.1,1433 -U sa -C -b -l 5 -h -1 -W -s "|" -r 1 -Q "SET NOCOUNT ON; RESTORE FILELISTONLY FROM DISK = N'$1' WITH FILE = $3" | awk -F"|" 'NF >= 3 { name = $1; gsub("\047", "\047\047", name); printf ", MOVE N\047%s\047 TO N\047/var/opt/mssql/data/probavi_restore_%d.dat\047", name, NR }')
+"$sqlcmd" -S 127.0.0.1,1433 -U sa -C -b -l 5 -r 1 -Q "RESTORE DATABASE [$2] FROM DISK = N'$1' WITH FILE = $3, RECOVERY$moves"`
 )
 
 // databasePattern is deliberately strict: the restore target name is the
@@ -132,24 +134,15 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if err := json.Unmarshal(payload, req); err != nil {
 		return nil, protoErr("invalid_request", false, "malformed provision payload")
 	}
-	if req.PITR != nil {
-		return nil, protoErr("invalid_request", false, "this adapter does not support pitr")
-	}
-	database := option(req.Options, "database", defaultDatabase)
-	if !databasePattern.MatchString(database) {
-		return nil, protoErr("invalid_request", false,
-			"database name %s must contain only letters, digits, underscores, and hyphens", database)
-	}
-	scratch := req.Sandbox.ScratchDir
-	if scratch == "" {
-		scratch = "/tmp"
-	}
-
-	src, perr := resolveSource(req.Source.Kind, req.Source.Path, req.Source.Params)
+	database, scratch, perr := parseProvisionTarget(req)
 	if perr != nil {
 		return nil, perr
 	}
-	logger.Info("source resolved", "path", src.path, "size_bytes", src.sizeBytes)
+
+	plan, perr := resolveSource(req.Source.Kind, req.Source.Path, req.Source.Params)
+	if perr != nil {
+		return nil, perr
+	}
 
 	if perr := writeInitFile(ctx, c); perr != nil {
 		return nil, perr
@@ -159,6 +152,21 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		return nil, perr
 	}
 	logger.Info("engine ready", "seconds", readySeconds)
+
+	// Which file is a full backup — and which set inside it — is a question
+	// only the engine can answer, so the choice happens here rather than on
+	// the host (see backupset.go).
+	bakInSandbox := scratch + "/probavi-restore.bak"
+	chosen, perr := selectBackup(ctx, c, plan, bakInSandbox)
+	if perr != nil {
+		return nil, perr
+	}
+	src, perr := plan.identity(chosen.hostPath)
+	if perr != nil {
+		return nil, perr
+	}
+	logger.Info("source resolved", "path", src.path, "size_bytes", src.sizeBytes,
+		"backup_set", chosen.position)
 
 	state := map[string]any{"database": database}
 	// Server logins go in before the restore: that is the order of the
@@ -176,14 +184,12 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		state["logins_path"] = loginsInSandbox
 	}
 
-	bakInSandbox := scratch + "/probavi-restore.bak"
+	// The chosen artifact is already in the sandbox: selection transferred
+	// it there to ask the engine what it was.
 	state["bak_path"] = bakInSandbox
-	put, perr := c.putFile(ctx, putFileArgs{SourcePath: src.path, DestPath: bakInSandbox, Mode: "0600"})
-	if perr != nil {
-		return nil, perr
-	}
+	state["backup_set"] = strconv.Itoa(chosen.position)
 
-	restore, stderr, perr := execRestore(ctx, c, bakInSandbox, database)
+	restore, stderr, perr := execRestore(ctx, c, bakInSandbox, database, chosen.position)
 	if perr != nil {
 		return nil, perr
 	}
@@ -198,6 +204,41 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		}
 	}
 
+	return provisionResult(database, src, state, timings{
+		engineReady: readySeconds,
+		transfer:    loginsTransfer + chosen.transfer,
+		restore:     loginsLoad + restore.DurationSeconds,
+	}), nil
+}
+
+// parseProvisionTarget validates the request's operator-supplied values
+// before anything is transferred: the restore target name is the only one
+// that reaches T-SQL text, and PITR is not a capability this adapter
+// declares.
+func parseProvisionTarget(req *provisionRequest) (database, scratch string, perr *protoError) {
+	if req.PITR != nil {
+		return "", "", protoErr("invalid_request", false, "this adapter does not support pitr")
+	}
+	database = option(req.Options, "database", defaultDatabase)
+	if !databasePattern.MatchString(database) {
+		return "", "", protoErr("invalid_request", false,
+			"database name %s must contain only letters, digits, underscores, and hyphens", database)
+	}
+	scratch = req.Sandbox.ScratchDir
+	if scratch == "" {
+		scratch = "/tmp"
+	}
+	return database, scratch, nil
+}
+
+// timings are the measured phases of one provision. Only the chosen
+// artifact's transfer is counted: probing rejected candidates is how the
+// drill finds the backup, not part of the recovery it measures.
+type timings struct {
+	engineReady, transfer, restore float64
+}
+
+func provisionResult(database string, src *resolvedSource, state map[string]any, t timings) any {
 	return map[string]any{
 		"connection": map[string]any{
 			"scheme": "mssql", "host": "127.0.0.1", "port": defaultPort,
@@ -207,12 +248,12 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 			"checksum": src.checksum, "size_bytes": src.sizeBytes, "created_at": src.createdAt,
 		},
 		"timings": map[string]any{
-			"engine_ready_seconds": readySeconds,
-			"transfer_seconds":     loginsTransfer + put.DurationSeconds,
-			"restore_seconds":      loginsLoad + restore.DurationSeconds,
+			"engine_ready_seconds": t.engineReady,
+			"transfer_seconds":     t.transfer,
+			"restore_seconds":      t.restore,
 		},
 		"state": state,
-	}, nil
+	}
 }
 
 // healthcheckRequest is the §6.3 request payload.
@@ -340,10 +381,11 @@ func writeInitFile(ctx context.Context, c *core) *protoError {
 
 // execRestore runs the in-sandbox restore script; the .bak path is
 // adapter-composed, the database name is validated before it can reach
-// T-SQL text.
-func execRestore(ctx context.Context, c *core, bakPath, database string) (*execValue, []byte, *protoError) {
+// T-SQL text, and the backup set number came from the header the adapter
+// parsed.
+func execRestore(ctx context.Context, c *core, bakPath, database string, position int) (*execValue, []byte, *protoError) {
 	val, _, stderr, perr := c.exec(ctx, execArgs{
-		Argv: []string{"sh", "-c", restoreScript, "sh", bakPath, database},
+		Argv: []string{"sh", "-c", restoreScript, "sh", bakPath, database, strconv.Itoa(position)},
 		Env:  sqlcmdEnv(),
 	})
 	if perr != nil {

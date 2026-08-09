@@ -523,3 +523,227 @@ func destroy(t *testing.T, sbx *docker.Sandbox) {
 		t.Errorf("destroy sandbox: %v", err)
 	}
 }
+
+// TestBackupTypeSelectionEndToEnd reproduces issue #88 and proves the fix.
+// A real SQL Server backup directory holds full, differential, and
+// transaction log backups side by side, and the newest file is typically a
+// log backup — which cannot create a database. Choosing by mtime alone
+// therefore reports restore_failed on a perfectly restorable backup set: a
+// false alarm, the direction that costs an operator's trust rather than
+// merely withholding it.
+func TestBackupTypeSelectionEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	provider := docker.New(nil)
+	dir := makeBackupSetFixture(t, ctx, provider)
+
+	runner, err := adapter.New("mssql", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+
+	t.Run("the newest file is a log backup that cannot create a database", func(t *testing.T) {
+		assertNewestIsUnrestorable(t, ctx, provider, runner, dir)
+	})
+	t.Run("bak_dir restores the full backup instead", func(t *testing.T) {
+		assertDirPicksTheFull(t, ctx, provider, runner, dir)
+	})
+	t.Run("a multi-set file restores its newest full set", func(t *testing.T) {
+		assertMultiSetPicksNewestFull(t, ctx, provider, runner, dir)
+	})
+	t.Run("a directory with no full backup says so", func(t *testing.T) {
+		assertNoFullBackupVerdict(t, ctx, provider, runner, dir)
+	})
+}
+
+// assertNewestIsUnrestorable is the premise of #88: pointed at the newest
+// file directly, the drill fails — the file is a valid backup, just not one
+// that can create a database.
+func assertNewestIsUnrestorable(t *testing.T, ctx context.Context, provider *docker.Provider, runner *adapter.Runner, dir string) {
+	sbx := freshSandbox(t, ctx, provider)
+	_, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "bak", Path: filepath.Join(dir, "z-newest-log.trn")},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	var aerr *adapter.Error
+	if err == nil || !errors.As(err, &aerr) {
+		t.Fatalf("provision error = %v, want a refusal", err)
+	}
+	// And the refusal now teaches instead of quoting Msg 3118 at the
+	// operator.
+	if !strings.Contains(aerr.Message, "transaction log backup") {
+		t.Errorf("message = %q, want it to name what the file actually is", aerr.Message)
+	}
+}
+
+// assertDirPicksTheFull is the fix: the same directory whose newest file is
+// a log backup now restores the full backup, and its data validates.
+func assertDirPicksTheFull(t *testing.T, ctx context.Context, provider *docker.Provider, runner *adapter.Runner, dir string) {
+	sbx := freshSandbox(t, ctx, provider)
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "bak_dir", Path: dir},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if rows := queryScalar(t, ctx, sbx, res.Connection.Database, "SELECT count(*) FROM dbo.orders"); rows != "1" {
+		t.Errorf("rows = %s, want the full backup's single row", rows)
+	}
+	// The identity describes the artifact the engine chose, not the newest
+	// file in the directory.
+	if res.SourceIdentity.SizeBytes == 0 || !strings.HasPrefix(res.SourceIdentity.Checksum, "sha256:") {
+		t.Errorf("source identity = %+v", res.SourceIdentity)
+	}
+	full, err := os.Stat(filepath.Join(dir, "a-full.bak"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.SourceIdentity.SizeBytes != full.Size() {
+		t.Errorf("size_bytes = %d, want the chosen full backup's %d",
+			res.SourceIdentity.SizeBytes, full.Size())
+	}
+}
+
+// assertMultiSetPicksNewestFull covers appended media: one file holding
+// full, log, full. Restoring without naming a set takes the first — the
+// oldest backup on the file — so the newest full set is named explicitly.
+func assertMultiSetPicksNewestFull(t *testing.T, ctx context.Context, provider *docker.Provider, runner *adapter.Runner, dir string) {
+	sbx := freshSandbox(t, ctx, provider)
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "bak", Path: filepath.Join(dir, "multi", "multi.bak")},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	// The second full set was taken after a second row was inserted; the
+	// first set has one row. Reading two proves the newest set was chosen.
+	if rows := queryScalar(t, ctx, sbx, res.Connection.Database, "SELECT count(*) FROM dbo.orders"); rows != "2" {
+		t.Errorf("rows = %s, want the newest full set's two rows", rows)
+	}
+}
+
+// assertNoFullBackupVerdict proves the honest failure: a directory of log
+// backups is not restorable, and the drill says exactly that instead of
+// quoting the engine.
+func assertNoFullBackupVerdict(t *testing.T, ctx context.Context, provider *docker.Provider, runner *adapter.Runner, dir string) {
+	sbx := freshSandbox(t, ctx, provider)
+	_, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "bak_dir", Path: filepath.Join(dir, "logsonly")},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	var aerr *adapter.Error
+	if err == nil || !errors.As(err, &aerr) || aerr.Code != "source_not_found" {
+		t.Fatalf("provision error = %v, want source_not_found", err)
+	}
+	for _, want := range []string{"no full backup", "transaction log backup", "SHA256SUMS"} {
+		if !strings.Contains(aerr.Message, want) {
+			t.Errorf("message = %q, want it to carry %q", aerr.Message, want)
+		}
+	}
+}
+
+func freshSandbox(t *testing.T, ctx context.Context, provider *docker.Provider) *docker.Sandbox {
+	t.Helper()
+	sbx, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	t.Cleanup(func() { destroy(t, sbx) })
+	return sbx
+}
+
+// queryScalar runs one query against the restored database as the sandbox
+// superuser and returns its first line.
+func queryScalar(t *testing.T, ctx context.Context, sbx *docker.Sandbox, database, query string) string {
+	t.Helper()
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{
+		Argv: []string{"/opt/mssql-tools18/bin/sqlcmd", "-S", "127.0.0.1,1433", "-U", "sa",
+			"-C", "-b", "-l", "5", "-d", database, "-h", "-1", "-W", "-Q", "SET NOCOUNT ON; " + query},
+		Env: map[string]string{"SQLCMDPASSWORD": "Probavi!DrillSandbox0"},
+	})
+	if err != nil || out.ExitCode != 0 {
+		t.Fatalf("query %q: %v (exit %d, stderr %s)", query, err, out.ExitCode, out.Stderr)
+	}
+	return strings.TrimSpace(strings.SplitN(strings.TrimSpace(string(out.Stdout)), "\n", 2)[0])
+}
+
+// makeBackupSetFixture builds what a real SQL Server backup directory looks
+// like: a full backup, a differential, and — newest of all — two
+// transaction log backups, plus a checksum sidecar that is not backup media
+// at all. It also produces a multi-set file (full, log, full appended into
+// one) and a directory holding nothing but log backups.
+func makeBackupSetFixture(t *testing.T, ctx context.Context, provider *docker.Provider) string {
+	t.Helper()
+	seed, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+	startEngine(t, ctx, seed, seedPassword)
+	awaitReady(t, ctx, seed, seedPassword)
+
+	mustSQL(t, ctx, seed, seedPassword, "CREATE DATABASE shop")
+	mustSQL(t, ctx, seed, seedPassword, "ALTER DATABASE shop SET RECOVERY FULL")
+	mustSQL(t, ctx, seed, seedPassword,
+		"CREATE TABLE shop.dbo.orders (id INT PRIMARY KEY, total DECIMAL(10,2)); INSERT INTO shop.dbo.orders VALUES (1, 10.50)")
+
+	// The order of these statements is the point: every artifact after the
+	// full backup is newer than it.
+	for _, stmt := range []string{
+		"BACKUP DATABASE shop TO DISK = N'/tmp/a-full.bak'",
+		"INSERT INTO shop.dbo.orders VALUES (2, 20.50)",
+		"BACKUP DATABASE shop TO DISK = N'/tmp/m-diff.bak' WITH DIFFERENTIAL",
+		"BACKUP LOG shop TO DISK = N'/tmp/y-log.trn'",
+		"BACKUP LOG shop TO DISK = N'/tmp/z-newest-log.trn'",
+		// Appended media: full, log, then a second full taken with both rows.
+		"BACKUP DATABASE shop TO DISK = N'/tmp/multi.bak'",
+		"BACKUP LOG shop TO DISK = N'/tmp/multi.bak'",
+		"BACKUP DATABASE shop TO DISK = N'/tmp/multi.bak'",
+		"BACKUP LOG shop TO DISK = N'/tmp/only-log.trn'",
+	} {
+		mustSQL(t, ctx, seed, seedPassword, stmt)
+	}
+
+	dir := t.TempDir()
+	for _, name := range []string{"a-full.bak", "m-diff.bak", "y-log.trn", "z-newest-log.trn"} {
+		copyFixture(t, ctx, seed, "/tmp/"+name, filepath.Join(dir, name))
+	}
+	// A checksum sidecar: not backup media, and probing it would look
+	// exactly like a corrupt backup ("the volume ... is empty").
+	if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte("abc123  a-full.bak\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Make the multi-set file and the log-only directory separate sources.
+	for _, sub := range []string{"multi", "logsonly"} {
+		if err := os.Mkdir(filepath.Join(dir, sub), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	copyFixture(t, ctx, seed, "/tmp/multi.bak", filepath.Join(dir, "multi", "multi.bak"))
+	copyFixture(t, ctx, seed, "/tmp/only-log.trn", filepath.Join(dir, "logsonly", "only-log.trn"))
+	if err := os.WriteFile(filepath.Join(dir, "logsonly", "SHA256SUMS"), []byte("abc123  only-log.trn\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// mtimes travel with docker cp, but the drill's rule must not depend on
+	// that: stamp them explicitly so "newest" is a fact of this test.
+	stamp := time.Now()
+	for i, name := range []string{"a-full.bak", "m-diff.bak", "y-log.trn", "z-newest-log.trn"} {
+		when := stamp.Add(time.Duration(i-10) * time.Minute)
+		if err := os.Chtimes(filepath.Join(dir, name), when, when); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func copyFixture(t *testing.T, ctx context.Context, sbx *docker.Sandbox, containerPath, dest string) {
+	t.Helper()
+	if out, err := exec.CommandContext(ctx, "docker", "cp", sbx.ID()+":"+containerPath, dest).CombinedOutput(); err != nil {
+		t.Fatalf("extract fixture: %v: %s", err, out)
+	}
+}

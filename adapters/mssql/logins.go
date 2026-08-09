@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"regexp"
-	"strconv"
+
 	"strings"
 )
 
@@ -167,16 +167,6 @@ func nonEmptyLines(b []byte) []string {
 		}
 	}
 	return out
-}
-
-// nameList joins names for a protocol message, capped so one badly seeded
-// backup cannot inflate the error field.
-func nameList(names []string, limit int) string {
-	if len(names) <= limit {
-		return firstLine([]byte(strings.Join(names, ", ")))
-	}
-	head := strings.Join(names[:limit], ", ")
-	return firstLine([]byte(head)) + " and " + strconv.Itoa(len(names)-limit) + " more"
 }
 
 func verdictOrFirstLine(stderr []byte) string {

@@ -10,7 +10,7 @@ in-repo adapters, it is written from the protocol document alone.
 | Kind      | Meaning                                                       |
 |-----------|---------------------------------------------------------------|
 | `bak`     | One native `BACKUP DATABASE ... TO DISK` file.                |
-| `bak_dir` | A directory of backup files; the newest regular file is restored (mtime, ties broken by name). |
+| `bak_dir` | A directory of backup files; the newest **full** backup is restored (see below). |
 | `bak_with_logins` | A directory holding a server-logins T-SQL script (`params.logins`) and one `.bak`; the logins are replayed first, and the drill fails if any restored SQL user is left without a matching server login. |
 
 ## Sandbox image: start it idle
@@ -46,6 +46,41 @@ root password: publicly known access, acceptable **only** because Probavi
 sandboxes have zero ingress — `--network none`, and publishing ports is
 not expressible at all. The credential never protects anything reachable.
 
+## Which backup a drill restores
+
+A real SQL Server backup directory holds full, differential, and
+transaction log backups side by side, and the newest file is typically a
+log backup — which **cannot create a database**. Picking by modification
+time alone therefore fails a perfectly restorable backup set.
+
+Nothing outside the engine can tell the types apart: the `.bak`/`.trn`
+extensions are pure convention (SQL Server ignores them), and all three
+types share one media format. So the adapter asks the engine. Candidates
+are transferred into the sandbox newest first and identified with
+`RESTORE HEADERONLY`; the first one that holds a **full** backup is
+restored, and the rest are never touched. Files that do not start like
+backup media — checksum sidecars, log files — are skipped without being
+transferred, and named in the failure message if nothing is restorable.
+
+Two consequences worth knowing:
+
+- **A drill restores the newest full backup, not the latest state.** The
+  differential and log backups taken after it are not applied — restoring
+  a chain is a different feature, and this kind does not claim it.
+  `backup.created_at` in the evidence record is the chosen full backup's
+  timestamp, so the record never implies more than that.
+- **Backup media may hold several backup sets** (SQL Server appends unless
+  told to overwrite). The newest full set is restored explicitly with
+  `WITH FILE = n`; without that, the engine would take the *first* set on
+  the file, which is the oldest backup on it.
+- A backup file the engine cannot read fails the drill as `source_corrupt`
+  rather than falling back to an older one: a corrupt newest backup is
+  exactly what a drill exists to surface.
+
+Selection is not part of the measured recovery time. `transfer_seconds`
+counts the chosen artifact's transfer only — an operator recovering for
+real reads their backup catalogue instead of probing.
+
 ## Restore behavior
 
 - The backup's file list is read with `RESTORE FILELISTONLY` and every
@@ -77,7 +112,7 @@ source:
   path: /backups/shop              # a directory holding both members
   params:
     logins: logins.sql             # bare filename inside the directory
-    bak: shop-2026-08-08.bak       # optional: without it, the newest non-logins file
+    bak: shop-2026-08-08.bak       # optional: without it, the newest full backup in the directory
 ```
 
 The members are named explicitly (no filename-pattern guessing), and one
@@ -166,8 +201,8 @@ Checks are plain T-SQL against the restored database.
 
 ## Backup identity
 
-- `checksum`: SHA-256 over the selected artifact's bytes (for `bak_dir`,
-  the chosen file).
+- `checksum`: SHA-256 over the selected artifact's bytes — the file the
+  engine identified as holding a full backup, not merely the newest file.
 - `created_at`: the artifact's modification time — the closest derivable
   stand-in for the backup's creation time; treat it accordingly if you
   copy backup files around without preserving timestamps.
