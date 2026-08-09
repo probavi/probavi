@@ -29,11 +29,21 @@ type resolvedSource struct {
 
 // resolveSource maps a source kind to one restorable artifact.
 //
-//	mongodump      — path is a mongodump --archive file (plain or --gzip)
-//	mongodump_dir  — path is a directory; the newest regular file is chosen
+//	mongodump             — path is a mongodump --archive file (plain or --gzip)
+//	mongodump_dir         — path is a directory; the newest regular file is chosen
+//	mongodump_with_users  — path is an archive taken with --dumpDbUsersAndRoles
+//	mongodump_with_oplog  — path is a full archive taken with --oplog
+//
+// The two account/consistency kinds resolve exactly like mongodump: unlike
+// the sibling adapters' two-member kinds, mongodump carries users, roles,
+// and the oplog inside the *same* archive, so there is no second file and
+// the backup identity stays one artifact's checksum. What changes is how
+// the archive is replayed and what the drill then proves — which is why
+// they are distinct kinds rather than options: backup.kind is the only
+// field an auditor can read the difference from.
 func resolveSource(kind, path string) (*resolvedSource, *protoError) {
 	switch kind {
-	case "mongodump":
+	case "mongodump", "mongodump_with_users", "mongodump_with_oplog":
 		return resolveFile(path)
 	case "mongodump_dir":
 		latest, perr := latestDumpIn(path)
@@ -43,7 +53,8 @@ func resolveSource(kind, path string) (*resolvedSource, *protoError) {
 		return resolveFile(latest)
 	default:
 		return nil, protoErr("unsupported_source", false,
-			"unsupported source kind: %s (supported: mongodump, mongodump_dir)", kind)
+			"unsupported source kind: %s (supported: mongodump, mongodump_dir, "+
+				"mongodump_with_users, mongodump_with_oplog)", kind)
 	}
 }
 

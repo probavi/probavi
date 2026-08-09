@@ -11,6 +11,8 @@
   ],
   "sources": {
     "mongodump": "One mongodump archive, plain or gzip",
-    "mongodump_dir": "A directory of mongodump archives; the newest is restored"
+    "mongodump_dir": "A directory of mongodump archives; the newest is restored",
+    "mongodump_with_users": "A mongodump --dumpDbUsersAndRoles archive; users and roles are restored with the data",
+    "mongodump_with_oplog": "A mongodump --oplog archive; the captured oplog is replayed for a point-consistent restore"
   }
 }

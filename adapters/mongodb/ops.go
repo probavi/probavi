@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "mongodb"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.2.0"
 
 	// defaultDatabase is the connection database when the drill config
 	// does not name one: admin always exists, so healthchecks and the
@@ -54,6 +54,8 @@ func probePayload() any {
 		"sources": []map[string]any{
 			{"kind": "mongodump", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "mongodump_dir", "capabilities": map[string]bool{"pitr": false}},
+			{"kind": "mongodump_with_users", "capabilities": map[string]bool{"pitr": false}},
+			{"kind": "mongodump_with_oplog", "capabilities": map[string]bool{"pitr": false}},
 		},
 		"sql_runner": map[string]any{
 			// MongoDB has no SQL: the check text the core passes through
@@ -100,6 +102,10 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		return nil, protoErr("invalid_request", false,
 			"database name %s must contain only letters, digits, underscores, and hyphens", database)
 	}
+	plan, perr := planRestore(req.Source.Kind, database, req.Options["database"] != "")
+	if perr != nil {
+		return nil, perr
+	}
 	scratch := req.Sandbox.ScratchDir
 	if scratch == "" {
 		scratch = "/tmp"
@@ -123,14 +129,27 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		return nil, perr
 	}
 
-	restore, stderr, perr := execRestore(ctx, c, archiveInSandbox, src.gzip)
+	restore, stderr, perr := execRestore(ctx, c, archiveInSandbox, src.gzip, plan)
 	if perr != nil {
 		return nil, perr
 	}
 	if restore.ExitCode != 0 {
 		return nil, mapRestoreFailure(stderr)
 	}
-	logger.Info("restore complete", "seconds", restore.DurationSeconds)
+	// The gates run on a restore the tool called successful: what they
+	// check is whether it proved what the kind claims.
+	if plan.replayOplog {
+		if perr := verifyOplogReplayed(stderr); perr != nil {
+			return nil, perr
+		}
+	}
+	if plan.restoreAccounts {
+		if perr := verifyAccountLayer(ctx, c, database); perr != nil {
+			return nil, perr
+		}
+	}
+	logger.Info("restore complete", "seconds", restore.DurationSeconds,
+		"accounts", plan.restoreAccounts, "oplog", plan.replayOplog)
 
 	return map[string]any{
 		"connection": map[string]any{
@@ -147,6 +166,37 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		},
 		"state": map[string]any{"database": database, "archive_path": archiveInSandbox},
 	}, nil
+}
+
+// restorePlan says how the archive must be replayed, derived from the
+// source kind alone — the kind is the claim, so it is what decides.
+type restorePlan struct {
+	restoreAccounts bool
+	replayOplog     bool
+	database        string
+}
+
+// planRestore turns a source kind into a restore plan, refusing the
+// combinations the engine cannot honour before anything is transferred.
+func planRestore(kind, database string, databaseNamed bool) (*restorePlan, *protoError) {
+	plan := &restorePlan{database: database}
+	switch kind {
+	case "mongodump_with_users":
+		// mongorestore restores an archive's account layer only for a named
+		// database ("cannot use --restoreDbUsersAndRoles without a specified
+		// database"), and the accounts belong to the database the archive was
+		// dumped from. Defaulting here would restore them into admin and
+		// prove the wrong thing, so the drill has to say it.
+		if !databaseNamed {
+			return nil, protoErr("invalid_request", false,
+				"the mongodump_with_users kind requires target.options.database: "+
+					"the name of the database the archive's accounts belong to")
+		}
+		plan.restoreAccounts = true
+	case "mongodump_with_oplog":
+		plan.replayOplog = true
+	}
+	return plan, nil
 }
 
 // healthcheckRequest is the §6.3 request payload.
@@ -221,12 +271,19 @@ func awaitEngine(ctx context.Context, c *core) (float64, *protoError) {
 
 // execRestore replays the archive with mongorestore. --stopOnError makes
 // partial restores fail loudly (§5: never report success past ignored
-// errors); the archive path is adapter-composed, never operator input.
-func execRestore(ctx context.Context, c *core, archivePath string, gzip bool) (*execValue, []byte, *protoError) {
+// errors); the archive path is adapter-composed, never operator input, and
+// the plan's flags come from the source kind, never from the request.
+func execRestore(ctx context.Context, c *core, archivePath string, gzip bool, plan *restorePlan) (*execValue, []byte, *protoError) {
 	argv := []string{"mongorestore", "--host", "127.0.0.1", "--port", "27017",
 		"--stopOnError", "--archive=" + archivePath}
 	if gzip {
 		argv = append(argv, "--gzip")
+	}
+	if plan.restoreAccounts {
+		argv = append(argv, usersRestoreFlags(plan.database)...)
+	}
+	if plan.replayOplog {
+		argv = append(argv, oplogRestoreFlags()...)
 	}
 	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: argv})
 	if perr != nil {
@@ -280,8 +337,33 @@ func verdictLine(b []byte) string {
 			fallback = s
 		}
 		if strings.Contains(s, "Failed:") {
-			return strings.ReplaceAll(s, `"`, "'")
+			return strings.ReplaceAll(scrubSecrets(s), `"`, "'")
 		}
 	}
-	return strings.ReplaceAll(fallback, `"`, "'")
+	return strings.ReplaceAll(scrubSecrets(fallback), `"`, "'")
+}
+
+// firstLine reduces captured output to its first line, quote-free and free
+// of credentials.
+func firstLine(b []byte) string {
+	s := strings.TrimSpace(string(b))
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return strings.ReplaceAll(scrubSecrets(s), `"`, "'")
+}
+
+// credentialField matches the SCRAM material an account layer carries.
+// admin.system.users documents embed each account's salt and derived keys
+// (measured: credentials.SCRAM-SHA-1.{salt,storedKey,serverKey}), and a
+// failed write echoes document content back in its error — so engine
+// diagnostics are a live path from a backup's credentials into a signed
+// evidence record, which the schema forbids from carrying any (evidence
+// schema §8).
+var credentialField = regexp.MustCompile(`(?i)(storedKey|serverKey|salt)("?\s*:\s*)"[^"]*"`)
+
+// scrubSecrets removes credential material from text bound for a protocol
+// message.
+func scrubSecrets(s string) string {
+	return credentialField.ReplaceAllString(s, `${1}${2}"[redacted]"`)
 }
