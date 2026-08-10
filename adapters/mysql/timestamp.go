@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"os"
 	"strings"
@@ -42,11 +43,11 @@ const (
 // dumpCompletedAt reads the dump's own completion time and places it in
 // the operator-declared zone. It returns nil whenever the answer would be
 // a guess: no zone declared, or no dated trailer in the file.
-func dumpCompletedAt(path string, loc *time.Location) *string {
+func dumpCompletedAt(ctx context.Context, path string, loc *time.Location) *string {
 	if loc == nil {
 		return nil
 	}
-	clock, ok := dumpClock(path)
+	clock, ok := dumpClock(ctx, path)
 	if !ok {
 		return nil
 	}
@@ -62,8 +63,12 @@ func dumpCompletedAt(path string, loc *time.Location) *string {
 // that host was in cancels out of the comparison, and ranking therefore
 // works whether or not the operator declared one. Reporting a creation
 // time is the other job, and that one does need the zone.
-func dumpClock(path string) (time.Time, bool) {
-	tail, ok := readTail(path, dumpTrailerBytes)
+//
+// A dump stored compressed is read through the decompressor (see
+// compress.go), so both storage forms are dated from the same sentence and
+// rank against each other on one scale.
+func dumpClock(ctx context.Context, path string) (time.Time, bool) {
+	tail, ok := readDumpTail(ctx, path)
 	if !ok {
 		return time.Time{}, false
 	}

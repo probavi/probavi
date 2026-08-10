@@ -23,6 +23,12 @@ type resolvedSource struct {
 	// usersPath is the accounts-and-grants script to replay before the
 	// dump, for the mysqldump_with_users kind; empty for every other kind.
 	usersPath string
+	// compressed and usersCompressed report whether each SQL member is
+	// stored gzip-compressed, sniffed from its own bytes (see compress.go).
+	// The two members are sniffed separately: a backup pipeline may well
+	// compress a multi-gigabyte dump and leave a small grants script plain.
+	compressed      bool
+	usersCompressed bool
 }
 
 // resolveSource maps a source kind to one restorable artifact.
@@ -40,13 +46,13 @@ func resolveSource(ctx context.Context, kind, path string, params map[string]str
 	}
 	switch kind {
 	case "mysqldump":
-		return resolveFile(path, loc)
+		return resolveFile(ctx, path, loc)
 	case "mysqldump_dir":
 		latest, perr := latestDumpIn(ctx, path)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveFile(latest, loc)
+		return resolveFile(ctx, latest, loc)
 	case "mysqldump_with_users":
 		return resolveWithUsers(ctx, path, params, loc)
 	case "xtrabackup":
@@ -137,16 +143,27 @@ func resolveWithUsers(ctx context.Context, dir string, params map[string]string,
 		}
 	}
 
+	dumpCompressed, perr := sniffCompressed(dumpPath)
+	if perr != nil {
+		return nil, perr
+	}
+	usersCompressed, perr := sniffCompressed(usersPath)
+	if perr != nil {
+		return nil, perr
+	}
+
 	// The dump's own trailer dates this source. An accounts-and-grants
 	// script is operator-authored and carries no timestamp, so the pair's
 	// freshness rests on the member that can be dated — the README says so
 	// rather than letting the field imply more.
 	return &resolvedSource{
-		path:      dumpPath,
-		checksum:  fmt.Sprintf("sha256:%s", hex.EncodeToString(h.Sum(nil))),
-		sizeBytes: users.Size() + dump.Size(),
-		createdAt: dumpCompletedAt(dumpPath, loc),
-		usersPath: usersPath,
+		path:            dumpPath,
+		checksum:        fmt.Sprintf("sha256:%s", hex.EncodeToString(h.Sum(nil))),
+		sizeBytes:       users.Size() + dump.Size(),
+		createdAt:       dumpCompletedAt(ctx, dumpPath, loc),
+		usersPath:       usersPath,
+		compressed:      dumpCompressed,
+		usersCompressed: usersCompressed,
 	}, nil
 }
 
@@ -183,7 +200,7 @@ func chooseDump(ctx context.Context, dir, requested, usersName string) (string, 
 		}
 		return filepath.Join(dir, name), nil
 	}
-	newest, perr := newestBackupIn(dir, usersName)
+	newest, perr := newestBackupIn(ctx, dir, usersName)
 	if perr != nil {
 		return "", perr
 	}
@@ -298,7 +315,11 @@ func hashEntry(h io.Writer, path, rel string, d os.DirEntry, total *int64, files
 	return nil
 }
 
-func resolveFile(path string, loc *time.Location) (*resolvedSource, *protoError) {
+// resolveFile resolves a single-dump source. The checksum and the reported
+// size cover the artifact as stored, compressed or not: those bytes are the
+// ones the operator retains, and the evidence record has to identify what
+// is in the backup archive rather than something derived from it.
+func resolveFile(ctx context.Context, path string, loc *time.Location) (*resolvedSource, *protoError) {
 	info, err := os.Stat(path)
 	switch {
 	case os.IsNotExist(err):
@@ -313,18 +334,23 @@ func resolveFile(path string, loc *time.Location) (*resolvedSource, *protoError)
 	if perr != nil {
 		return nil, perr
 	}
+	compressed, perr := sniffCompressed(path)
+	if perr != nil {
+		return nil, perr
+	}
 	return &resolvedSource{
-		path:      path,
-		checksum:  checksum,
-		sizeBytes: info.Size(),
-		createdAt: dumpCompletedAt(path, loc),
+		path:       path,
+		checksum:   checksum,
+		sizeBytes:  info.Size(),
+		createdAt:  dumpCompletedAt(ctx, path, loc),
+		compressed: compressed,
 	}, nil
 }
 
 // latestDumpIn picks the dump in dir that records the newest time about
 // itself (see newestBackupIn).
 func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
-	best, perr := newestBackupIn(dir, "")
+	best, perr := newestBackupIn(ctx, dir, "")
 	if perr != nil {
 		return "", perr
 	}
@@ -349,7 +375,13 @@ func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
 // -t — carries a fresh mtime, so under the old rule a stale artifact
 // became "the newest file" and was the one the drill proved. What a
 // backup says about itself does not move when the file is copied.
-func newestBackupIn(dir, except string) (string, *protoError) {
+//
+// A compressed candidate has to be decompressed to reach that sentence
+// (see readDumpTail), which makes ranking a directory of compressed dumps
+// cost one pass over each candidate. The rule is what matters here and it
+// stays one rule for both storage forms; the adapter README states the
+// price so an operator can see it before pointing a drill at a directory.
+func newestBackupIn(ctx context.Context, dir, except string) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -370,7 +402,7 @@ func newestBackupIn(dir, except string) (string, *protoError) {
 			return "", protoErr("source_unreadable", false, "stat %s: %v", e.Name(), err)
 		}
 		path := filepath.Join(dir, e.Name())
-		clock, dated := dumpClock(path)
+		clock, dated := dumpClock(ctx, path)
 		rank := dirCandidate{name: e.Name(), clock: clock, dated: dated, mtime: info.ModTime()}
 		if best == "" || rank.beats(bestRank) {
 			best, bestRank = path, rank

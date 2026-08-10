@@ -123,7 +123,7 @@
       "id": "mysql",
       "name": "MySQL",
       "status": "experimental",
-      "adapter_version": "0.7.0",
+      "adapter_version": "0.8.0",
       "engine": {
         "id": "mysql",
         "name": "MySQL"
@@ -140,17 +140,17 @@
       "sources": [
         {
           "id": "mysqldump",
-          "name": "One mysqldump SQL file",
+          "name": "One mysqldump SQL file, plain or gzip-compressed",
           "pitr": false
         },
         {
           "id": "mysqldump_dir",
-          "name": "A directory of mysqldump files; the one whose own trailer records the newest time is restored",
+          "name": "A directory of mysqldump files, plain or gzip-compressed; the one whose own trailer records the newest time is restored",
           "pitr": false
         },
         {
           "id": "mysqldump_with_users",
-          "name": "A directory holding one dump and an accounts-and-grants script, restored together",
+          "name": "A directory holding one dump and an accounts-and-grants script, restored together; either may be gzip-compressed",
           "pitr": false
         },
         {

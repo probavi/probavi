@@ -30,19 +30,38 @@ import (
 // positional parameters, never interpolated into the script.
 const usersLoadScript = `mysql -h 127.0.0.1 -u "$1" -f < "$2"`
 
+// compressedUsersLoadScript is the same replay fed by the decompressor.
+// Its shape follows compressedRestoreScript, with one difference the
+// --force above forces: the client does not abort, so its status is
+// preserved rather than normalised, and only the decompressor's failure
+// takes the reserved exit.
+const compressedUsersLoadScript = `
+{ gzip -dc -- "$2"; echo $? > "$3"; } | mysql -h 127.0.0.1 -u "$1" -f
+loaded=$?
+[ "$(cat "$3")" = 0 ] || exit 90
+[ "$loaded" = 0 ] || exit 1
+`
+
 // loadUsers transfers the users script into the sandbox and replays it,
 // returning the transfer and load durations separately so the caller can
 // account for them in the right phases.
-func loadUsers(ctx context.Context, c *core, user, hostPath, sandboxPath string) (transfer, load float64, perr *protoError) {
-	put, perr := c.putFile(ctx, putFileArgs{SourcePath: hostPath, DestPath: sandboxPath, Mode: "0600"})
+func loadUsers(ctx context.Context, c *core, user, hostPath string, users sqlMember) (transfer, load float64, perr *protoError) {
+	put, perr := c.putFile(ctx, putFileArgs{SourcePath: hostPath, DestPath: users.path, Mode: "0600"})
 	if perr != nil {
 		return 0, 0, perr
 	}
-	val, _, stderr, perr := c.exec(ctx, execArgs{
-		Argv: []string{"sh", "-c", usersLoadScript, "sh", user, sandboxPath},
-	})
+	argv := []string{"sh", "-c", usersLoadScript, "sh", user, users.path}
+	if users.compressed {
+		argv = []string{"sh", "-c", compressedUsersLoadScript, "sh", user, users.path, users.statusPath()}
+	}
+	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: argv})
 	if perr != nil {
 		return 0, 0, perr
+	}
+	// The decompressor is judged before the replay: when it failed, every
+	// diagnostic below it describes the consequence rather than the cause.
+	if val.ExitCode == decompressFailedExit {
+		return 0, 0, mapDecompressFailure(stderr)
 	}
 	if failure := usersFailure(stderr); failure != "" {
 		return 0, 0, protoErr("restore_failed", false, "loading user accounts failed: %s", failure)

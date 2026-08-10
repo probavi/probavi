@@ -11,6 +11,41 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **The mysql adapter restores gzip-compressed dumps** (mysql 0.8.0;
+  closes #106). `mysqldump … | gzip -c > db.sql.gz` is what dump
+  pipelines produce once dumps get large, and the adapter had no notion
+  of compression: the client read the gzip header as SQL and the drill
+  died as `source_corrupt`, pointing an operator at a backup that was
+  perfectly intact.
+
+  The compression is recognised from the artifact's magic bytes, never
+  from its name, and the artifact is restored **as stored** — the
+  decompression happens inside the sandbox, streamed into the client,
+  so `backup.checksum` and `size_bytes` cover the bytes the backup
+  archive actually retains. Decompressing outside Probavi instead would
+  have left the record identifying a temporary file nobody keeps. The
+  sandbox needs `gzip`, which every official `mysql:8.x` image has; an
+  image without it fails the drill with a message naming the image
+  rather than the backup.
+
+  Both ends of that pipeline are judged. A pipeline reports its last
+  command's status, so a decompressor that dies partway is invisible to
+  a client that accepted the truncated prefix — the exact shape of the
+  partial restore the protocol forbids (§5). The decompressor's status
+  is captured separately and a truncated archive fails as
+  `source_corrupt`.
+
+  Directory sources rank compressed candidates the same way as plain
+  ones, by the dump's own `-- Dump completed on` trailer, which for a
+  gzip member means decompressing it: a gzip header records no usable
+  date (measured — `gzip` zeroes that field when it compresses a pipe,
+  which is the `mysqldump | gzip -c` shape), and there is no index to
+  seek by. That costs about a second per 60 MiB of compressed data per
+  candidate. Ranking those backups by file modification time instead was
+  the alternative, and it is the claim the previous release removed.
+
 ### Changed
 
 - **A directory source now restores the newest backup, not the newest

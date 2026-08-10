@@ -783,29 +783,48 @@ const (
 // an older one, then a newer one taken after more rows were inserted.
 func makeTwoGenerations(t *testing.T, ctx context.Context, provider *docker.Provider, dir string) {
 	t.Helper()
+	makeGenerations(t, ctx, provider, dir, "")
+}
+
+// makeGenerations writes the two generations, optionally through the
+// compressor. suffix is what the stored artifacts are named beyond
+// "stale.sql"/"fresh.sql"; ".gz" runs the dumps through the pipeline the
+// field actually uses (`mysqldump … | gzip -c > db.sql.gz`) rather than
+// compressing them afterwards on the host.
+func makeGenerations(t *testing.T, ctx context.Context, provider *docker.Provider, dir, suffix string) {
+	t.Helper()
 	seed, err := provider.Create(ctx, sandboxParams(t))
 	if err != nil {
 		t.Fatalf("create seed sandbox: %v", err)
 	}
 	defer destroy(t, seed)
 
+	dump := func(name string) {
+		t.Helper()
+		if suffix == "" {
+			mustExec(t, ctx, seed, "mysqldump", "-h", "127.0.0.1", "-u", "root",
+				"--result-file=/tmp/"+name, "probavi")
+			return
+		}
+		mustExec(t, ctx, seed, "sh", "-c",
+			"mysqldump -h 127.0.0.1 -u root probavi | gzip -c > /tmp/"+name+suffix)
+	}
+
 	awaitReady(t, ctx, seed)
 	mustExec(t, ctx, seed, "mysql", "-h", "127.0.0.1", "-u", "root", "-e",
 		"CREATE DATABASE probavi; USE probavi;"+
 			"CREATE TABLE orders (id BIGINT AUTO_INCREMENT PRIMARY KEY, total DECIMAL(10,2) NOT NULL);"+
 			"INSERT INTO orders (total) VALUES "+values(staleRowCount)+";")
-	mustExec(t, ctx, seed, "mysqldump", "-h", "127.0.0.1", "-u", "root",
-		"--result-file=/tmp/stale.sql", "probavi")
+	dump("stale.sql")
 
 	// A second of daylight between the two dumps' own trailers.
 	mustExec(t, ctx, seed, "sleep", "2")
 
 	mustExec(t, ctx, seed, "mysql", "-h", "127.0.0.1", "-u", "root", "-e",
 		"USE probavi; INSERT INTO orders (total) VALUES "+values(freshRowCount-staleRowCount)+";")
-	mustExec(t, ctx, seed, "mysqldump", "-h", "127.0.0.1", "-u", "root",
-		"--result-file=/tmp/fresh.sql", "probavi")
+	dump("fresh.sql")
 
-	for _, name := range []string{"stale.sql", "fresh.sql"} {
+	for _, name := range []string{"stale.sql" + suffix, "fresh.sql" + suffix} {
 		out, err := exec.CommandContext(ctx, "docker", "cp",
 			seed.ID()+":/tmp/"+name, filepath.Join(dir, name)).CombinedOutput()
 		if err != nil {
@@ -821,4 +840,164 @@ func values(n int) string {
 		rows = append(rows, "(1)")
 	}
 	return strings.Join(rows, ",")
+}
+
+// TestCompressedDumpEndToEnd is issue #106 measured rather than argued.
+// The fixtures are produced by the pipeline the issue names —
+// `mysqldump … | gzip -c > db.sql.gz` — so what is restored here is the
+// artifact an operator actually retains, and the two generations hold
+// different row counts so which one was restored is a measurement.
+func TestCompressedDumpEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	provider := docker.New(nil)
+	dir := t.TempDir()
+	makeGenerations(t, ctx, provider, dir, ".gz")
+
+	t.Run("a compressed dump restores", func(t *testing.T) {
+		res, count := drillRestore(t, ctx, provider, adapter.ProvisionSource{
+			Kind:   "mysqldump",
+			Path:   filepath.Join(dir, "fresh.sql.gz"),
+			Params: map[string]string{"backup_timezone": "UTC"},
+		})
+		if count != strconv.Itoa(freshRowCount) {
+			t.Errorf("row count = %q, want %d — the compressed dump did not restore", count, freshRowCount)
+		}
+		// The identity must describe the artifact the backup archive keeps,
+		// not something derived from it.
+		stored, err := os.Stat(filepath.Join(dir, "fresh.sql.gz"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.SourceIdentity.SizeBytes != stored.Size() {
+			t.Errorf("size_bytes = %d, want the stored %d", res.SourceIdentity.SizeBytes, stored.Size())
+		}
+		if res.SourceIdentity.CreatedAt == nil {
+			t.Error("created_at = nil — the trailer is readable through the decompressor")
+		}
+	})
+
+	t.Run("a directory of compressed dumps ranks by the trailer", func(t *testing.T) {
+		// The stale dump carries the newest file time, which is what copying
+		// backups in produces and what must not decide the drill.
+		now := time.Now()
+		if err := os.Chtimes(filepath.Join(dir, "fresh.sql.gz"), now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(filepath.Join(dir, "stale.sql.gz"), now, now); err != nil {
+			t.Fatal(err)
+		}
+		_, count := drillRestore(t, ctx, provider,
+			adapter.ProvisionSource{Kind: "mysqldump_dir", Path: dir})
+		if count != strconv.Itoa(freshRowCount) {
+			t.Errorf("row count = %q, want %d — ranking fell back to the file times",
+				count, freshRowCount)
+		}
+	})
+
+	t.Run("a truncated archive fails the drill", func(t *testing.T) {
+		// A decompressor that dies partway leaves a prefix the client may
+		// well accept; the protocol forbids reporting that as a restore (§5).
+		whole, err := os.ReadFile(filepath.Join(dir, "fresh.sql.gz"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		truncated := filepath.Join(t.TempDir(), "fresh.sql.gz")
+		if err := os.WriteFile(truncated, whole[:len(whole)*2/3], 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sbx, runner := drillSandbox(t, ctx, provider)
+		defer destroy(t, sbx)
+		_, err = runner.Provision(ctx, &adapter.ProvisionRequest{
+			Source:  adapter.ProvisionSource{Kind: "mysqldump", Path: truncated},
+			Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+		}, sbx)
+		if err == nil {
+			t.Fatal("provision succeeded on a truncated archive — a partial restore was reported as a restore")
+		}
+		t.Logf("truncated archive verdict: %v", err)
+	})
+
+	t.Run("an archive that fails its own integrity check is refused", func(t *testing.T) {
+		// The dangerous shape, and the reason the decompressor's status is
+		// captured at all: every SQL statement arrives intact and the client
+		// exits 0, while the archive's own checksum says these are not the
+		// bytes that were stored. Nothing on the client side can see that.
+		whole, err := os.ReadFile(filepath.Join(dir, "fresh.sql.gz"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		whole[len(whole)-5] ^= 0xff // the gzip trailer's CRC32
+		corrupt := filepath.Join(t.TempDir(), "fresh.sql.gz")
+		if err := os.WriteFile(corrupt, whole, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sbx, runner := drillSandbox(t, ctx, provider)
+		defer destroy(t, sbx)
+		_, err = runner.Provision(ctx, &adapter.ProvisionRequest{
+			Source:  adapter.ProvisionSource{Kind: "mysqldump", Path: corrupt},
+			Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+		}, sbx)
+		var aerr *adapter.Error
+		if err == nil || !errors.As(err, &aerr) || aerr.Code != "source_corrupt" {
+			t.Fatalf("provision error = %v, want source_corrupt — the client loaded every statement happily", err)
+		}
+		t.Logf("failed-integrity verdict: %v", err)
+	})
+}
+
+// drillSandbox brings up one drill sandbox and the adapter runner.
+func drillSandbox(t *testing.T, ctx context.Context, provider *docker.Provider) (*docker.Sandbox, *adapter.Runner) {
+	t.Helper()
+	sbx, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	runner, err := adapter.New("mysql", nil, nil)
+	if err != nil {
+		destroy(t, sbx)
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	return sbx, runner
+}
+
+// drillRestore runs one whole drill against a fresh sandbox and returns
+// the provision result together with what the restored database holds —
+// the row count is read through the adapter's own declared sql_runner, so
+// the answer comes back the way the core would read it.
+func drillRestore(t *testing.T, ctx context.Context, provider *docker.Provider,
+	source adapter.ProvisionSource) (*adapter.ProvisionResult, string) {
+	t.Helper()
+	sbx, runner := drillSandbox(t, ctx, provider)
+	defer destroy(t, sbx)
+
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  source,
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	argv := make([]string, 0, len(probe.SQLRunner.Argv))
+	for _, a := range probe.SQLRunner.Argv {
+		a = strings.ReplaceAll(a, "{{user}}", res.Connection.User)
+		a = strings.ReplaceAll(a, "{{database}}", res.Connection.Database)
+		a = strings.ReplaceAll(a, "{{sql}}", "SELECT count(*) FROM orders")
+		argv = append(argv, a)
+	}
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: argv})
+	if err != nil {
+		t.Fatalf("sql_runner exec: %v", err)
+	}
+	if out.ExitCode != 0 {
+		t.Fatalf("sql_runner exited %d: %s", out.ExitCode, out.Stderr)
+	}
+	return res, strings.TrimSpace(string(out.Stdout))
 }

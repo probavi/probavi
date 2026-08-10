@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "mysql"
-	adapterVersion = "0.7.0"
+	adapterVersion = "0.8.0"
 
 	defaultUser     = "root"
 	defaultDatabase = "probavi"
@@ -95,7 +95,8 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if perr != nil {
 		return nil, perr
 	}
-	logger.Info("source resolved", "path", src.path, "size_bytes", src.sizeBytes)
+	logger.Info("source resolved", "path", src.path, "size_bytes", src.sizeBytes,
+		"compressed", src.compressed)
 
 	if req.Source.Kind == "xtrabackup" {
 		return provisionPhysical(ctx, c, req, src, logger)
@@ -114,18 +115,18 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	// measured restore duration is the drill's RTO figure.
 	var usersTransfer, usersLoad float64
 	if src.usersPath != "" {
-		usersInSandbox := scratch + "/probavi-users.sql"
-		usersTransfer, usersLoad, perr = loadUsers(ctx, c, user, src.usersPath, usersInSandbox)
+		users := sandboxMember(scratch+"/probavi-users.sql", src.usersCompressed)
+		usersTransfer, usersLoad, perr = loadUsers(ctx, c, user, src.usersPath, users)
 		if perr != nil {
 			return nil, perr
 		}
 		logger.Info("user accounts loaded", "seconds", usersLoad)
-		state["users_path"] = usersInSandbox
+		state["users_path"] = users.path
 	}
 
-	dumpInSandbox := scratch + "/probavi-restore.sql"
-	state["dump_path"] = dumpInSandbox
-	put, perr := c.putFile(ctx, putFileArgs{SourcePath: src.path, DestPath: dumpInSandbox, Mode: "0600"})
+	dump := sandboxMember(scratch+"/probavi-restore.sql", src.compressed)
+	state["dump_path"] = dump.path
+	put, perr := c.putFile(ctx, putFileArgs{SourcePath: src.path, DestPath: dump.path, Mode: "0600"})
 	if perr != nil {
 		return nil, perr
 	}
@@ -133,12 +134,12 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if perr := ensureDatabase(ctx, c, user, database, tgt.charset, tgt.collation); perr != nil {
 		return nil, perr
 	}
-	restore, stderr, perr := execRestore(ctx, c, user, database, dumpInSandbox)
+	restore, stderr, perr := execRestore(ctx, c, user, database, dump)
 	if perr != nil {
 		return nil, perr
 	}
 	if restore.ExitCode != 0 {
-		return nil, mapRestoreFailure(stderr)
+		return nil, mapRestoreFailure(restore.ExitCode, stderr)
 	}
 	logger.Info("restore complete", "seconds", restore.DurationSeconds)
 
@@ -307,27 +308,95 @@ func ensureDatabase(ctx context.Context, c *core, user, database, charset, colla
 // execRestore loads the dump with the mysql client's source command. The
 // client stops at the first error (no --force): partial restores fail
 // loudly (§5). The dump path is adapter-composed, never operator input.
-func execRestore(ctx context.Context, c *core, user, database, dumpPath string) (*execValue, []byte, *protoError) {
-	val, _, stderr, perr := c.exec(ctx, execArgs{
-		Argv: []string{"mysql", "-h", "127.0.0.1", "-u", user, "--database", database,
-			"-e", "source " + dumpPath},
-	})
+func execRestore(ctx context.Context, c *core, user, database string, dump sqlMember) (*execValue, []byte, *protoError) {
+	argv := []string{"mysql", "-h", "127.0.0.1", "-u", user, "--database", database,
+		"-e", "source " + dump.path}
+	if dump.compressed {
+		argv = []string{"sh", "-c", compressedRestoreScript, "sh",
+			dump.path, dump.statusPath(), user, database}
+	}
+	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: argv})
 	if perr != nil {
 		return nil, nil, perr
 	}
 	return val, stderr, nil
 }
 
+// compressedRestoreScript loads a compressed dump without ever writing the
+// plain SQL down: the sandbox needs room for the stored artifact only,
+// while materialising it would ask for the uncompressed size on top of the
+// data directory the restore is about to fill.
+//
+// Both ends of the pipeline are judged, in this order. A pipeline's status
+// is its last command's, so $? carries the client's verdict and the
+// decompressor's is left in a file. The client is judged first
+// deliberately: when a dump holds bad SQL the client aborts, the
+// decompressor then dies of a broken pipe, and blaming the archive would
+// name the wrong culprit. A decompressor that failed while the client was
+// content is the case that matters — a truncated archive whose surviving
+// prefix happens to end on a statement boundary would otherwise pass as a
+// complete restore, which the protocol forbids (§5).
+//
+// A client failure exits 1 rather than passing the client's own status
+// through, so decompressFailedExit stays unambiguous.
+const compressedRestoreScript = `
+{ gzip -dc -- "$1"; echo $? > "$2"; } | mysql -h 127.0.0.1 -u "$3" --database "$4" || exit 1
+[ "$(cat "$2")" = 0 ] || exit 90
+`
+
+// decompressFailedExit is what the load scripts exit with when the
+// decompressor failed and the client did not notice. No mysql client
+// produces it: the scripts normalise every client failure to 1.
+const decompressFailedExit = 90
+
+// sqlMember is one SQL file placed inside the sandbox, and how it is
+// stored there.
+type sqlMember struct {
+	path       string
+	compressed bool
+}
+
+// sandboxMember names a member inside the sandbox. A compressed member
+// keeps the extension its bytes call for, so a person reading the adapter
+// log or an exec argv sees what the file actually is.
+func sandboxMember(path string, compressed bool) sqlMember {
+	if compressed {
+		path += ".gz"
+	}
+	return sqlMember{path: path, compressed: compressed}
+}
+
+// statusPath is where the load script leaves the decompressor's exit
+// status. It sits beside the member, inside the scratch directory the core
+// gave this drill, and dies with the sandbox.
+func (m sqlMember) statusPath() string { return m.path + ".status" }
+
 // mapRestoreFailure classifies mysql client load failures into protocol
 // error codes. ERROR 1064 is the parser rejecting the input as SQL; the
 // ASCII '\0' message is the client refusing binary garbage — both mean
 // "this is not a usable SQL dump".
-func mapRestoreFailure(stderr []byte) *protoError {
-	line := firstLine(stderr)
+func mapRestoreFailure(exitCode int, stderr []byte) *protoError {
+	if exitCode == decompressFailedExit {
+		return mapDecompressFailure(stderr)
+	}
+	line := firstDiagnostic(stderr)
 	if strings.Contains(line, "ERROR 1064") || strings.Contains(line, `ASCII '\0'`) {
 		return protoErr("source_corrupt", false, "mysql rejected the dump: %s", line)
 	}
 	return protoErr("restore_failed", false, "mysql load failed: %s", line)
+}
+
+// mapDecompressFailure separates the two ways decompression fails inside a
+// sandbox. A missing tool is the operator's image, not their backup, and
+// calling that a corrupt source would send them to inspect a file that is
+// fine.
+func mapDecompressFailure(stderr []byte) *protoError {
+	line := firstLine(stderr)
+	if strings.Contains(line, "not found") {
+		return protoErr("restore_failed", false,
+			"the sandbox image provides no gzip, so a compressed dump cannot be restored in it: %s", line)
+	}
+	return protoErr("source_corrupt", false, "the dump could not be decompressed: %s", line)
 }
 
 func option(opts map[string]string, key, fallback string) string {
@@ -335,6 +404,19 @@ func option(opts map[string]string, key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// firstDiagnostic returns the client's first ERROR line, falling back to
+// the first line of all. A decompressor shares the pipeline's stderr and
+// can add a broken-pipe note of its own once the client aborts; that note
+// must not become the drill's explanation.
+func firstDiagnostic(stderr []byte) string {
+	for _, line := range strings.Split(string(stderr), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "ERROR") {
+			return firstLine([]byte(line))
+		}
+	}
+	return firstLine(stderr)
 }
 
 func firstLine(b []byte) string {

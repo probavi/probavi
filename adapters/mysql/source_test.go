@@ -355,7 +355,7 @@ func TestDirectoryRankingIgnoresFileTimes(t *testing.T) {
 	writeDumpAs(t, dir, "stale.sql", "2026-08-01 03:00:00", now)
 	fresh := writeDumpAs(t, dir, "fresh.sql", "2026-08-09 03:00:00", now.Add(-24*time.Hour))
 
-	got, perr := newestBackupIn(dir, "")
+	got, perr := newestBackupIn(context.Background(), dir, "")
 	if perr != nil {
 		t.Fatalf("newestBackupIn: %+v", perr)
 	}
@@ -373,7 +373,7 @@ func TestDirectoryRanking(t *testing.T) {
 		dated := writeDumpAs(t, dir, "a-dated.sql", "2026-08-01 03:00:00", base.Add(-time.Hour))
 		// --skip-dump-date leaves the sentence without a date behind it.
 		writeDumpAs(t, dir, "z-undated.sql", "", base)
-		got, perr := newestBackupIn(dir, "")
+		got, perr := newestBackupIn(context.Background(), dir, "")
 		if perr != nil || got != dated {
 			t.Errorf("picked %s (%+v), want the dump that carries its own time", got, perr)
 		}
@@ -383,7 +383,7 @@ func TestDirectoryRanking(t *testing.T) {
 		dir := t.TempDir()
 		writeDumpAs(t, dir, "old.sql", "", base.Add(-time.Hour))
 		newest := writeDumpAs(t, dir, "new.sql", "", base)
-		got, perr := newestBackupIn(dir, "")
+		got, perr := newestBackupIn(context.Background(), dir, "")
 		if perr != nil || got != newest {
 			t.Errorf("picked %s (%+v), want the newest file when nothing else can rank them", got, perr)
 		}
@@ -393,7 +393,7 @@ func TestDirectoryRanking(t *testing.T) {
 		dir := t.TempDir()
 		writeDumpAs(t, dir, "a.sql", "2026-08-09 03:00:00", base.Add(-time.Hour))
 		want := writeDumpAs(t, dir, "b.sql", "2026-08-09 03:00:00", base)
-		got, perr := newestBackupIn(dir, "")
+		got, perr := newestBackupIn(context.Background(), dir, "")
 		if perr != nil || got != want {
 			t.Errorf("picked %s (%+v), want the newer file of two dumps recording the same clock", got, perr)
 		}
@@ -403,7 +403,7 @@ func TestDirectoryRanking(t *testing.T) {
 		dir := t.TempDir()
 		writeDumpAs(t, dir, "users.sql", "2026-08-09 03:00:00", base)
 		want := writeDumpAs(t, dir, "orders.sql", "2026-08-01 03:00:00", base)
-		got, perr := newestBackupIn(dir, "users.sql")
+		got, perr := newestBackupIn(context.Background(), dir, "users.sql")
 		if perr != nil || got != want {
 			t.Errorf("picked %s (%+v), want the dump beside the skipped member", got, perr)
 		}
@@ -445,5 +445,140 @@ func TestCandidateRankingIsATotalOrder(t *testing.T) {
 	same := dirCandidate{name: "a", clock: late, dated: true, mtime: late}
 	if same.beats(same) {
 		t.Error("a candidate beats itself — the ranking is not strict")
+	}
+}
+
+// writeCompressedDumpAs is writeDumpAs for a dump stored the way a dump
+// pipeline stores one, so a test can put both storage forms in one
+// directory and set their file times independently.
+func writeCompressedDumpAs(t *testing.T, dir, name, clock string, mtime time.Time) string {
+	t.Helper()
+	body := "INSERT INTO orders VALUES (1);\n"
+	if clock != "" {
+		body += "-- Dump completed on " + clock + "\n"
+	}
+	path := writeGzipDump(t, dir, name, body)
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatalf("chtimes %s: %v", name, err)
+	}
+	return path
+}
+
+// TestCompressedSourceKeepsTheStoredIdentity is why the adapter takes the
+// artifact as stored: decompressing it outside Probavi would leave
+// backup.checksum covering a temporary file that is in no backup archive.
+func TestCompressedSourceKeepsTheStoredIdentity(t *testing.T) {
+	dir := t.TempDir()
+	const body = "INSERT INTO orders VALUES (1);\n-- Dump completed on 2026-08-09 21:08:17\n"
+	path := writeGzipDump(t, dir, "orders.sql.gz", body)
+	stored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	src, perr := resolveSource(context.Background(), "mysqldump", path,
+		map[string]string{"backup_timezone": "UTC"})
+	if perr != nil {
+		t.Fatalf("resolveSource: %+v", perr)
+	}
+	if !src.compressed {
+		t.Error("compressed = false for a gzip member")
+	}
+	want, perr := fileChecksum(path)
+	if perr != nil {
+		t.Fatalf("fileChecksum: %+v", perr)
+	}
+	if src.checksum != want || src.sizeBytes != int64(len(stored)) {
+		t.Errorf("identity = %s/%d, want the stored bytes (%s/%d)",
+			src.checksum, src.sizeBytes, want, len(stored))
+	}
+	if src.createdAt == nil || *src.createdAt != "2026-08-09T21:08:17.000Z" {
+		t.Errorf("createdAt = %v, want the trailer read through the decompressor", src.createdAt)
+	}
+}
+
+// TestDirectoryRankingSpansStorageForms is the point of reading a
+// compressed candidate's trailer at all: both forms record the same
+// sentence, so they rank on one scale and a stale plain dump copied in
+// yesterday cannot outrank last night's compressed one.
+func TestDirectoryRankingSpansStorageForms(t *testing.T) {
+	copiedIn := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+
+	t.Run("a compressed dump can be the newest", func(t *testing.T) {
+		dir := t.TempDir()
+		writeDumpAs(t, dir, "stale.sql", "2026-08-01 03:00:00", copiedIn)
+		fresh := writeCompressedDumpAs(t, dir, "fresh.sql.gz", "2026-08-09 03:00:00",
+			copiedIn.Add(-24*time.Hour))
+		got, perr := newestBackupIn(context.Background(), dir, "")
+		if perr != nil || got != fresh {
+			t.Errorf("picked %s (%+v), want the compressed dump that records the newer time",
+				filepath.Base(got), perr)
+		}
+	})
+
+	t.Run("a plain dump can be the newest", func(t *testing.T) {
+		dir := t.TempDir()
+		writeCompressedDumpAs(t, dir, "stale.sql.gz", "2026-08-01 03:00:00", copiedIn)
+		fresh := writeDumpAs(t, dir, "fresh.sql", "2026-08-09 03:00:00", copiedIn.Add(-24*time.Hour))
+		got, perr := newestBackupIn(context.Background(), dir, "")
+		if perr != nil || got != fresh {
+			t.Errorf("picked %s (%+v), want the plain dump that records the newer time",
+				filepath.Base(got), perr)
+		}
+	})
+
+	t.Run("a directory of compressed dumps ranks by their own times", func(t *testing.T) {
+		dir := t.TempDir()
+		// Every file time says the opposite of every trailer, which is what
+		// an object-store download produces.
+		writeCompressedDumpAs(t, dir, "monday.sql.gz", "2026-08-03 03:00:00", copiedIn)
+		writeCompressedDumpAs(t, dir, "tuesday.sql.gz", "2026-08-04 03:00:00", copiedIn.Add(-time.Hour))
+		want := writeCompressedDumpAs(t, dir, "sunday.sql.gz", "2026-08-09 03:00:00",
+			copiedIn.Add(-2*time.Hour))
+		got, perr := newestBackupIn(context.Background(), dir, "")
+		if perr != nil || got != want {
+			t.Errorf("picked %s (%+v), want sunday.sql.gz", filepath.Base(got), perr)
+		}
+	})
+}
+
+// TestResolveWithUsersSniffsBothMembers: a backup pipeline may compress a
+// multi-gigabyte dump and leave a small grants script plain, so each
+// member is judged by its own bytes.
+func TestResolveWithUsersSniffsBothMembers(t *testing.T) {
+	tests := []struct {
+		name                      string
+		compressUsers, compressed bool
+	}{
+		{"both plain", false, false},
+		{"only the dump compressed", false, true},
+		{"only the users script compressed", true, false},
+		{"both compressed", true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			write := func(name, body string, compress bool) {
+				if compress {
+					writeGzipDump(t, dir, name, body)
+					return
+				}
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write("users.sql", "CREATE USER 'app'@'%';\n", tt.compressUsers)
+			write("orders.sql", "INSERT INTO orders VALUES (1);\n", tt.compressed)
+
+			src, perr := resolveSource(context.Background(), "mysqldump_with_users", dir,
+				map[string]string{"users": "users.sql", "dump": "orders.sql"})
+			if perr != nil {
+				t.Fatalf("resolveSource: %+v", perr)
+			}
+			if src.compressed != tt.compressed || src.usersCompressed != tt.compressUsers {
+				t.Errorf("compressed = %v/%v, want %v/%v",
+					src.compressed, src.usersCompressed, tt.compressed, tt.compressUsers)
+			}
+		})
 	}
 }
