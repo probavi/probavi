@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,13 +63,13 @@ func TestDumpCompletedAt(t *testing.T) {
 	path := writeDump(t, dumpTail)
 
 	t.Run("no zone declared means no claim", func(t *testing.T) {
-		if got := dumpCompletedAt(path, nil); got != nil {
+		if got := dumpCompletedAt(context.Background(), path, nil); got != nil {
 			t.Errorf("createdAt = %v, want nil — the instant is not derivable without the zone", *got)
 		}
 	})
 	t.Run("the declared zone makes it an instant", func(t *testing.T) {
 		tokyo := mustLoad(t, "Asia/Tokyo")
-		got := dumpCompletedAt(path, tokyo)
+		got := dumpCompletedAt(context.Background(), path, tokyo)
 		if got == nil || *got != "2026-08-09T21:08:17.000+09:00" {
 			t.Fatalf("createdAt = %v, want the trailer's wall clock with Tokyo's offset", got)
 		}
@@ -82,13 +83,13 @@ func TestDumpCompletedAt(t *testing.T) {
 	})
 	t.Run("an undated dump yields no claim", func(t *testing.T) {
 		tokyo := mustLoad(t, "Asia/Tokyo")
-		if got := dumpCompletedAt(writeDump(t, "-- Dump completed\n"), tokyo); got != nil {
+		if got := dumpCompletedAt(context.Background(), writeDump(t, "-- Dump completed\n"), tokyo); got != nil {
 			t.Errorf("createdAt = %v, want nil", *got)
 		}
 	})
 	t.Run("a missing file yields no claim", func(t *testing.T) {
 		tokyo := mustLoad(t, "Asia/Tokyo")
-		if got := dumpCompletedAt(filepath.Join(t.TempDir(), "gone"), tokyo); got != nil {
+		if got := dumpCompletedAt(context.Background(), filepath.Join(t.TempDir(), "gone"), tokyo); got != nil {
 			t.Errorf("createdAt = %v, want nil", *got)
 		}
 	})
@@ -99,7 +100,7 @@ func TestDumpCompletedAt(t *testing.T) {
 		}
 		path := writeDump(t, string(big)+"\n"+dumpTail)
 		tokyo := mustLoad(t, "Asia/Tokyo")
-		if got := dumpCompletedAt(path, tokyo); got == nil {
+		if got := dumpCompletedAt(context.Background(), path, tokyo); got == nil {
 			t.Error("createdAt = nil — the trailer must be read from the tail, not the head")
 		}
 	})
@@ -113,10 +114,10 @@ func TestDaylightSavingIsTakenFromTheBackupDate(t *testing.T) {
 	budapest := mustLoad(t, "Europe/Budapest")
 	summer := writeDump(t, "-- Dump completed on 2026-07-09 03:00:00\n")
 	winter := writeDump(t, "-- Dump completed on 2026-01-09 03:00:00\n")
-	if got := dumpCompletedAt(summer, budapest); got == nil || *got != "2026-07-09T03:00:00.000+02:00" {
+	if got := dumpCompletedAt(context.Background(), summer, budapest); got == nil || *got != "2026-07-09T03:00:00.000+02:00" {
 		t.Errorf("summer createdAt = %v, want +02:00", got)
 	}
-	if got := dumpCompletedAt(winter, budapest); got == nil || *got != "2026-01-09T03:00:00.000+01:00" {
+	if got := dumpCompletedAt(context.Background(), winter, budapest); got == nil || *got != "2026-01-09T03:00:00.000+01:00" {
 		t.Errorf("winter createdAt = %v, want +01:00", got)
 	}
 }

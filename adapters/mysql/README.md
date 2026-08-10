@@ -9,9 +9,9 @@ from the protocol document alone.
 
 | Kind            | Meaning                                                     |
 |-----------------|-------------------------------------------------------------|
-| `mysqldump`     | One `mysqldump` SQL file.                                   |
-| `mysqldump_dir` | A directory of dump files; the dump whose own trailer records the newest time is restored. |
-| `mysqldump_with_users` | A directory holding an accounts-and-grants script (`params.users`) and one dump; the accounts are replayed first, and the drill fails while the restored principal chain is broken. |
+| `mysqldump`     | One `mysqldump` SQL file, plain or gzip-compressed.         |
+| `mysqldump_dir` | A directory of dump files, plain or gzip-compressed; the dump whose own trailer records the newest time is restored. |
+| `mysqldump_with_users` | A directory holding an accounts-and-grants script (`params.users`) and one dump — either may be gzip-compressed; the accounts are replayed first, and the drill fails while the restored principal chain is broken. |
 | `xtrabackup`    | A Percona XtraBackup full-backup directory (unprepared, as `xtrabackup --backup` leaves it) — a physical restore. |
 
 ## Sandbox image and authentication
@@ -45,6 +45,38 @@ expressible at all. The credential never protects anything reachable.
   at the first error: partial restores fail loudly as `restore_failed`;
   input the parser rejects (`ERROR 1064`, `ASCII '\0'`) is classified
   `source_corrupt`.
+
+## Compressed dumps
+
+A dump stored gzip-compressed — what `mysqldump … | gzip -c > db.sql.gz`
+leaves behind — is restored as it is. Nothing needs declaring: the
+adapter recognises the compression from the artifact's **magic bytes**,
+never from its name, so renaming a backup cannot change what a drill does
+and a `.gz` name over plain SQL cannot break one.
+
+The point is not convenience. Decompressing the artifact outside Probavi
+and pointing the drill at the result would make `backup.checksum` cover a
+temporary file that is in no backup archive: the record would identify
+something nobody keeps, and the link back to the stored backup would rest
+on whatever script produced it. Here the checksum and `size_bytes` cover
+the bytes actually retained.
+
+What this costs, stated plainly:
+
+- **The sandbox image needs `gzip`.** Every official `mysql:8.x` image has
+  it. An image without it fails the drill as `restore_failed` with a
+  message naming the image rather than the backup.
+- **The decompression happens inside the sandbox**, streamed into the
+  client, so the sandbox never needs room for the uncompressed dump.
+- **Both ends of that pipeline are judged.** A decompressor that dies
+  partway leaves a truncated stream the client may well accept, so its
+  status is captured separately; a truncated archive fails the drill as
+  `source_corrupt` and never passes as a complete restore.
+- **`backup.created_at` still comes from the dump's own trailer** — the
+  adapter reads it through the decompressor. See the ranking cost below.
+
+Only gzip is recognised. Other compressors (`zstd`, `xz`, `bzip2`) are
+refused as unusable SQL, the same as any other unreadable input.
 
 ## The mysqldump_with_users kind (accounts first)
 
@@ -170,6 +202,19 @@ A dump the adapter cannot date — taken with `--skip-dump-date` or
 can. Between two such files the previous rule still decides: newest
 mtime, ties broken by the larger name.
 
+**Compressed candidates cost a pass each.** A gzip member carries no index
+and its header records no usable date (measured: `gzip` zeroes that field
+whenever it compresses a pipe, which is exactly the `mysqldump | gzip -c`
+shape), so the only way to its trailer is through the whole member.
+Ranking a directory therefore decompresses every compressed candidate —
+about a second per 60 MiB of compressed data on ordinary hardware, so
+seven daily 1 GiB dumps add roughly two minutes before the restore
+starts. The alternative was ranking compressed backups by file
+modification time, which is the claim this whole section exists to stop
+making. Naming the file outright (kind `mysqldump`, or `params.dump`)
+skips the ranking entirely and pays the pass only for the artifact the
+drill restores. The scan honors the drill's deadline.
+
 Two more things follow, and both are stated here rather than left for an
 operator to discover.
 
@@ -275,8 +320,10 @@ the earlier of the two is chosen.
 
 ## Backup identity
 
-- `checksum`: SHA-256 over the selected artifact's bytes (for
-  `mysqldump_dir`, the chosen file). For `xtrabackup` directories: a
+- `checksum`: SHA-256 over the selected artifact's bytes **as stored** —
+  for a compressed dump, over the compressed bytes, which are the ones the
+  backup archive retains (for `mysqldump_dir`, the chosen file). For
+  `xtrabackup` directories: a
   canonical tree hash — entries sorted by relative path; each regular file
   contributes `relpath NUL size NUL content`, each symlink
   `relpath NUL "L" target NUL`.
