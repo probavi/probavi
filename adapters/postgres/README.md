@@ -9,10 +9,66 @@ enough to build an adapter.
 
 | Kind                  | Meaning                                              |
 |-----------------------|------------------------------------------------------|
-| `pgdump`              | One `pg_dump` custom-format (`-Fc`) file.            |
-| `pgdump_dir`          | A directory of dump files; the dump whose own header records the newest time is restored. |
-| `pgdump_with_globals` | A directory holding a `pg_dumpall --globals-only` script and one dump; the globals are loaded before the dump. |
+| `pgdump`              | One `pg_dump` file — custom-format (`-Fc`) or plain SQL (`-Fp`), stored plain or gzip-compressed. |
+| `pgdump_dir`          | A directory of dump files; the dump whose own head records the newest time is restored. |
+| `pgdump_with_globals` | A directory holding a `pg_dumpall --globals-only` script and one dump; the globals are loaded before the dump. Either member may be gzip-compressed. |
 | `pgbackrest`          | A pgBackRest repository directory (filesystem repo) — a physical restore. Declares the `pitr` capability. |
+
+## How a dump is stored (format and compression)
+
+Every logical kind takes the artifact **as it is stored**, and works out
+what it is from the bytes rather than the file name:
+
+| Stored as | Restored with |
+|-----------|---------------|
+| custom-format archive (`-Fc`) | `pg_restore --no-owner --exit-on-error` |
+| custom-format archive, gzipped | the same, fed by `gzip -dc` |
+| plain SQL (`-Fp`, `pg_dumpall`) | `psql -v ON_ERROR_STOP=1` |
+| plain SQL, gzipped | the same, fed by `gzip -dc` |
+
+Renaming a backup therefore never changes what a drill does, and a
+compressed dump is never decompressed outside Probavi to make a drill
+possible. That matters for the evidence: `backup.checksum` covers the bytes
+the operator actually retained, so the record and the stored artifact are
+the same thing. Decompression happens inside the sandbox, streamed, so the
+sandbox needs room for the stored artifact only.
+
+The engine image must provide `gzip`, and — for a compressed plain-SQL dump
+— `mkfifo` and `tee`. The official `postgres` images do. An image without
+them fails the drill naming the image, not the backup.
+
+Only gzip is recognised. The `-Ft` tar format is not a supported source and
+is refused by name rather than handed to a client that would misreport it.
+
+### A dump has to be whole, and psql cannot say whether it is
+
+`psql` reports that no statement it executed failed. It does **not** report
+that it reached the end of a complete dump: fed a plain-SQL dump cut on a
+line boundary it restores what it got, treats the stream's end as the end of
+the data, and exits 0 (measured: 477 of 1000 rows, exit 0). The failure that
+produces such a file is ordinary — a backup job running `pg_dump | gzip`
+whose `pg_dump` dies of a full disk still leaves a perfectly valid gzip file
+behind, and every byte in it restores.
+
+So a plain-SQL restore is only a pass when the dump's own closing line —
+`-- PostgreSQL database dump complete`, or the `cluster` variant from
+`pg_dumpall` — arrives with it. For a compressed dump the stream is tapped
+while `psql` consumes it and only its tail kept, rather than inflating the
+artifact twice (measured on a 218 MiB dump: the tap costs 2% of the restore,
+a second inflate pass would cost 70%, and the restore duration is an RTO
+figure somebody reads). A dump without that line fails the drill as
+`source_corrupt`, saying the backup stops early — which is a claim about the
+backup job that wrote it, not about the restore.
+
+Custom-format archives need none of this: the format carries a table of
+contents, so `pg_restore` refuses a truncated archive on its own.
+
+**A plain-SQL dump carries its ownership inline.** `pg_restore --no-owner`
+can drop `OWNER TO`; `psql` has no such flag, because the statements are in
+the script. A plain dump taken from a cluster with its own roles therefore
+needs those roles present — which is what the `pgdump_with_globals` kind is
+for, and what the adapter's diagnostic points at when a restore dies on a
+missing role.
 
 ## The pgdump_with_globals kind (cluster globals first)
 
@@ -112,21 +168,29 @@ knowing:
 ## Which backup a drill restores, and when it refuses
 
 When the drill config names a **directory**, the adapter picks the
-artifact itself: the dump whose **own header records the newest time**.
+artifact itself: the dump whose **own head records the newest time**.
 The file's modification time is not what ranks candidates — copying a
 backup in (`cp` without `-p`, an object-store download, an `rsync`
 without `-t`) resets it, and a stale artifact would then look like the
 newest thing in the directory. What a dump says about itself does not
 move when the file is copied.
 
+Both formats record that time in their head — a custom-format archive in
+its header, a plain-SQL dump in the `-- Started on` line — so ranking reads
+a bounded few kilobytes per candidate whatever the artifact's size, and a
+candidate stored compressed is inflated only that far. Neither the format
+nor the compression affects the ordering: a directory may hold all four
+shapes, and only what each artifact records about itself decides.
+
 Ranking needs no declared zone: two dumps being compared came off the
 same backup host, so whatever zone it was in cancels out. Declaring
 `params.backup_timezone` is only needed to *report* `backup.created_at`.
 
-A dump the adapter cannot date — a plain-SQL dump, a header this parser
-does not recognise — ranks below every dump it can. Between two such
-files the previous rule still decides: newest mtime, ties broken by the
-larger name.
+A dump the adapter cannot date ranks below every dump it can. Between two
+such files the previous rule still decides: newest mtime, ties broken by
+the larger name. **Most plain-SQL dumps land here**: `pg_dump` writes the
+`-- Started on` line only under `--verbose`, so a dump taken without it
+carries no date at all, and none is invented for it.
 
 Two more things follow, and both are stated here rather than left for an
 operator to discover.
@@ -160,7 +224,15 @@ A `pg_dump` custom-format archive carries its own creation time in its
 header, and that is what this adapter reads (archive versions 1.14 and
 1.15/1.16 store it at different offsets; both are handled, and a header
 this parser does not recognise yields no timestamp rather than a wrong
-one).
+one). A compressed archive is read through the decompressor, so how the
+artifact is stored does not change what it says about itself.
+
+A plain-SQL dump usually carries no date at all: `pg_dump` writes
+`-- Started on <clock> <zone abbreviation>` only under `--verbose`. Where
+that line is present it is read, and the abbreviation deliberately is not —
+`CST` names three different zones, and one that resolves today may not next
+year, so believing it would put a guess into a signed record. The zone
+comes from the declaration below, the same as for an archive.
 
 A `pgbackrest` repository is the exception in this project: its
 `backup.info` records **epoch seconds**, which are an instant already, so

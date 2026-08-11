@@ -11,6 +11,74 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **The postgres adapter restores plain-SQL dumps, and gzip-compressed
+  dumps of either format** (postgres 0.9.0). `pg_dump`'s *default* output
+  is plain SQL, and `pg_dump … | gzip > db.sql.gz` is what a great many
+  backup jobs write, yet every logical kind accepted only an uncompressed
+  custom-format archive. A gzipped archive was worse than unsupported: it
+  reached `pg_restore`, which reported "input file does not appear to be a
+  valid archive", and the drill recorded `source_corrupt` — telling an
+  auditor the backup was damaged when it was merely compressed.
+
+  Format and compression are both recognised from the artifact's bytes,
+  never from its name, and the artifact is restored **as stored**: the
+  decompression happens inside the sandbox, streamed into the client, so
+  `backup.checksum` and `size_bytes` cover the bytes the backup archive
+  actually retains. A plain-SQL dump is replayed by `psql -v
+  ON_ERROR_STOP=1`, an archive by `pg_restore`, and either may be fed by
+  `gzip -dc`. The `pgdump_with_globals` members are sniffed independently,
+  so a job may compress one and not the other. The `-Ft` tar format stays
+  unsupported and is now refused by name instead of being handed to a
+  client that would misreport it.
+
+  Directory ranking is unaffected by either dimension: both formats record
+  when the dump began in their *head* — the archive header, or the
+  `-- Started on` line `pg_dump` writes under `--verbose` — so a candidate
+  stored compressed is inflated a few kilobytes rather than whole, and the
+  ordering still comes only from what each artifact records about itself.
+  A plain dump taken without `--verbose` carries no date at all and ranks
+  below every dump that does, as an undatable artifact always has.
+
+### Changed
+
+- **A plain-SQL restore now has to prove the dump was whole** (postgres
+  0.9.0). `psql` reports that no statement failed; it does not report that
+  it reached the end of a complete dump. Measured: fed a dump cut on a line
+  boundary it restores 477 of 1000 rows, treats the stream's end as the end
+  of the data, and exits 0 — a silent partial restore, which the adapter
+  protocol (§5) forbids reporting as success. The file that produces one is
+  ordinary: a backup job running `pg_dump | gzip` whose `pg_dump` dies of a
+  full disk leaves a *perfectly valid* gzip member holding an unfinished
+  dump, and every byte in it restores.
+
+  A plain-SQL member is now a pass only when the dump's own closing line
+  arrives with it. For a compressed dump the stream is tapped while `psql`
+  consumes it and only its tail kept, rather than inflating the artifact
+  twice: measured on a 218 MiB dump, the tap costs 2% of the restore where
+  a second inflate pass would cost 70%, and the restore duration is an RTO
+  figure somebody reads. A dump without that line fails as `source_corrupt`
+  saying the backup stops early, which is a claim about the job that wrote
+  it rather than about the restore.
+
+  This applies to the `pgdump_with_globals` globals script too, where the
+  hole was wider: that load runs with `ON_ERROR_STOP` off by design, so a
+  truncated globals script created the roles it got to, said nothing, and
+  passed. A globals script that is not a complete `pg_dumpall` output now
+  fails the drill. Compressed plain-SQL restores need `mkfifo` and `tee` in
+  the engine image alongside `gzip`; the official `postgres` images have
+  all three, and an image without them fails naming the image.
+
+- **A plain-SQL dump the server cannot parse is `source_corrupt`, not
+  `restore_failed`** (postgres 0.9.0). `pg_restore` says as much about an
+  archive it does not recognise; for a script, `psql`'s own syntax error is
+  the same verdict, and it belongs to the artifact rather than to the
+  restore. Other server errors — a missing role, out of memory — remain
+  `restore_failed`, and a restore that dies on ownership now names the
+  `pgdump_with_globals` kind, since a plain dump carries its `OWNER TO`
+  statements inline where `pg_restore --no-owner` could have dropped them.
+
 ## [0.6.0] - 2026-08-10
 
 ### Added

@@ -196,6 +196,47 @@ func TestRejectsWrongProtocolAndOp(t *testing.T) {
 	})
 }
 
+// archiveFixtureBody stands in for a custom-format archive. Its bytes only
+// have to be stable and to open with the magic, because that first sniff is
+// what sends a dump down the pg_restore path rather than the psql one.
+const archiveFixtureBody = pgdumpMagic + "FAKE-ARCHIVE"
+
+// execRole names what an exec is doing, looking through the shell wrapper
+// the plain-SQL replay runs behind so a test can dispatch on the client
+// that ultimately does the work.
+func execRole(argv []string) string {
+	if argv[0] != "sh" {
+		return argv[0]
+	}
+	if _, ok := parseReplay(argv); ok {
+		return "psql"
+	}
+	return "sh"
+}
+
+// replayCall is one plain-SQL replay the adapter asked the sandbox to run,
+// with the shell wrapper unpacked into the parts a test asserts on.
+type replayCall struct {
+	script    string
+	path      string
+	user      string
+	database  string
+	marker    string
+	tailBytes string
+	errorStop string
+}
+
+func parseReplay(argv []string) (replayCall, bool) {
+	const wantArgs = 10
+	if len(argv) != wantArgs || argv[0] != "sh" || argv[1] != "-c" || argv[3] != "sh" {
+		return replayCall{}, false
+	}
+	return replayCall{
+		script: argv[2], path: argv[4], user: argv[5], database: argv[6],
+		marker: argv[7], tailBytes: argv[8], errorStop: argv[9],
+	}, true
+}
+
 func writeFixture(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "fixture.dump")
@@ -281,7 +322,7 @@ func assertProvisionResult(t *testing.T, payload json.RawMessage) {
 	if err := json.Unmarshal(payload, &res); err != nil {
 		t.Fatalf("payload: %v", err)
 	}
-	sum := sha256.Sum256([]byte("FAKE-PGDUMP-BYTES"))
+	sum := sha256.Sum256([]byte(archiveFixtureBody))
 	if res.SourceIdentity.Checksum != "sha256:"+hex.EncodeToString(sum[:]) {
 		t.Errorf("checksum = %s — must be a real measurement of the fixture bytes", res.SourceIdentity.Checksum)
 	}
@@ -302,7 +343,7 @@ func assertProvisionResult(t *testing.T, payload json.RawMessage) {
 }
 
 func TestProvisionHappyPath(t *testing.T) {
-	fixture := writeFixture(t, "FAKE-PGDUMP-BYTES")
+	fixture := writeFixture(t, archiveFixtureBody)
 	isreadyCalls := 0
 	line, calls, exit := driveOp(t, "provision",
 		provisionPayload(fixture, `{"user":"orders_admin","database":"orders"}`),
@@ -334,12 +375,12 @@ const globalsFixtureBody = "CREATE ROLE app_ro;\n"
 
 // writeGlobalsSet builds a source directory and returns it with the two
 // member paths the adapter is expected to transfer.
-func writeGlobalsSet(t *testing.T, dumpBody string) (dir, globals, dump string) {
+func writeGlobalsSet(t *testing.T) (dir, globals, dump string) {
 	t.Helper()
 	dir = t.TempDir()
 	globals = filepath.Join(dir, "globals.sql")
 	dump = filepath.Join(dir, "orders.dump")
-	for path, body := range map[string]string{globals: globalsFixtureBody, dump: dumpBody} {
+	for path, body := range map[string]string{globals: globalsFixtureBody, dump: archiveFixtureBody} {
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatalf("write %s: %v", path, err)
 		}
@@ -356,7 +397,7 @@ func writeGlobalsSet(t *testing.T, dumpBody string) (dir, globals, dump string) 
 // would silently skip the roles after it), while --echo-errors must stay
 // absent (it echoes statements, and those carry password verifiers).
 func TestProvisionWithGlobals(t *testing.T) {
-	dir, globals, dump := writeGlobalsSet(t, "FAKE-PGDUMP-BYTES")
+	dir, globals, dump := writeGlobalsSet(t)
 
 	var order []string
 	line, _, exit := driveOp(t, "provision", withGlobalsPayload(dir),
@@ -388,7 +429,7 @@ func TestProvisionWithGlobals(t *testing.T) {
 	if res.Timings.Restore != 0.5+1.5 {
 		t.Errorf("restore_seconds = %v, want the globals load counted into the restore", res.Timings.Restore)
 	}
-	if res.SourceIdentity.SizeBytes != int64(len("FAKE-PGDUMP-BYTES")+len(globalsFixtureBody)) {
+	if res.SourceIdentity.SizeBytes != int64(len(archiveFixtureBody)+len(globalsFixtureBody)) {
 		t.Errorf("size_bytes = %d, want both members", res.SourceIdentity.SizeBytes)
 	}
 	if res.State["globals_path"] != "/scratch/probavi-globals.sql" {
@@ -413,7 +454,7 @@ func withGlobalsHandler(t *testing.T, globals, dump string, order *[]string) fun
 			if err := json.Unmarshal(call.Args, &args); err != nil {
 				t.Fatalf("exec args: %v", err)
 			}
-			*order = append(*order, args.Argv[0])
+			*order = append(*order, execRole(args.Argv))
 			return withGlobalsExec(t, args), nil
 		}
 		return nil, protoErr("internal", false, "unexpected verb")
@@ -443,7 +484,7 @@ func withGlobalsPutFile(t *testing.T, args putFileArgs, globals, dump string) an
 
 func withGlobalsExec(t *testing.T, args execArgs) any {
 	t.Helper()
-	switch args.Argv[0] {
+	switch execRole(args.Argv) {
 	case "pg_isready":
 		return okExec(0)
 	case "psql":
@@ -458,17 +499,23 @@ func withGlobalsExec(t *testing.T, args execArgs) any {
 
 func assertGlobalsArgv(t *testing.T, argv []string) {
 	t.Helper()
-	joined := strings.Join(argv, " ")
-	if !strings.Contains(joined, "-f /scratch/probavi-globals.sql") {
-		t.Errorf("globals argv = %v, want psql -f over the staged script — pg_dumpall wraps its "+
-			"output in \\restrict meta-commands that only a file-reading session executes", argv)
+	replay, ok := parseReplay(argv)
+	if !ok {
+		t.Fatalf("globals argv = %v, want the plain-SQL replay", argv)
 	}
-	if !strings.Contains(joined, "ON_ERROR_STOP=0") {
-		t.Errorf("globals argv = %v, want ON_ERROR_STOP explicitly off: the bootstrap-role "+
-			"collision sits mid-script and stopping there skips the roles after it", argv)
+	if replay.path != "/scratch/probavi-globals.sql" {
+		t.Errorf("globals replay path = %q, want the staged script", replay.path)
 	}
-	if strings.Contains(joined, "--echo-errors") {
-		t.Errorf("globals argv = %v, must not echo statements — they carry password verifiers", argv)
+	if !strings.Contains(replay.script, `-f "$1"`) {
+		t.Errorf("globals script = %q, want psql -f over the staged script — pg_dumpall wraps its "+
+			"output in \\restrict meta-commands that only a file-reading session executes", replay.script)
+	}
+	if replay.errorStop != errorStopOff {
+		t.Errorf("globals ON_ERROR_STOP = %q, want it explicitly off: the bootstrap-role "+
+			"collision sits mid-script and stopping there skips the roles after it", replay.errorStop)
+	}
+	if strings.Contains(replay.script, "--echo-errors") {
+		t.Errorf("globals script = %q, must not echo statements — they carry password verifiers", replay.script)
 	}
 }
 
@@ -476,7 +523,7 @@ func assertGlobalsArgv(t *testing.T, argv []string) {
 // the dump: a partial cluster must not be restored into and reported as a
 // pass.
 func TestProvisionWithGlobalsFailures(t *testing.T) {
-	dir, _, _ := writeGlobalsSet(t, "X")
+	dir, _, _ := writeGlobalsSet(t)
 
 	tests := []struct {
 		name    string
@@ -526,9 +573,9 @@ func globalsLoadHandler(t *testing.T, psql any, allowRestore bool) func(verbCall
 			t.Fatalf("exec args: %v", err)
 		}
 		switch {
-		case args.Argv[0] == "pg_isready":
+		case execRole(args.Argv) == "pg_isready":
 			return okExec(0), nil
-		case args.Argv[0] == "psql":
+		case execRole(args.Argv) == "psql":
 			return psql, nil
 		case allowRestore:
 			return execValue{ExitCode: 0, DurationSeconds: 1}, nil
@@ -547,7 +594,7 @@ func globalsLoadHandler(t *testing.T, psql any, allowRestore bool) func(verbCall
 // infrastructure — and reporting a lost container as `restore_failed`
 // would put a false negative into an append-only log.
 func TestProvisionWithGlobalsSandboxFailure(t *testing.T) {
-	dir, _, _ := writeGlobalsSet(t, "X")
+	dir, _, _ := writeGlobalsSet(t)
 	for _, tt := range []struct {
 		name string
 		fail string // verb that fails
@@ -591,7 +638,7 @@ func failingVerbHandler(t *testing.T, fail string) func(verbCall) (any, *protoEr
 // bootstrap superuser, which initdb created before the drill started.
 // Treating it as a failure would make the kind useless in every setup.
 func TestProvisionToleratesBootstrapRoleCollision(t *testing.T) {
-	dir, _, _ := writeGlobalsSet(t, "X")
+	dir, _, _ := writeGlobalsSet(t)
 	stderr := `psql:/scratch/probavi-globals.sql:20: ERROR:  role "postgres" already exists`
 
 	line, calls, _ := driveOp(t, "provision", withGlobalsPayload(dir),
@@ -609,7 +656,7 @@ func TestProvisionToleratesBootstrapRoleCollision(t *testing.T) {
 // TestProvisionWithGlobalsRefusesPITR keeps the logical kinds honest: a
 // dump is a single frozen snapshot, whatever the globals add.
 func TestProvisionWithGlobalsRefusesPITR(t *testing.T) {
-	dir, _, _ := writeGlobalsSet(t, "X")
+	dir, _, _ := writeGlobalsSet(t)
 	payload := fmt.Sprintf(`{"source":{"kind":"pgdump_with_globals","path":%q,`+
 		`"params":{"globals":"globals.sql"}},`+
 		`"sandbox":{},"options":{},"pitr":{"target_time":"2026-07-30T14:32:00Z"}}`, dir)
@@ -619,7 +666,7 @@ func TestProvisionWithGlobalsRefusesPITR(t *testing.T) {
 }
 
 func TestProvisionFailures(t *testing.T) {
-	fixture := writeFixture(t, "X")
+	fixture := writeFixture(t, archiveFixtureBody)
 	readyThen := func(rest func(call verbCall) (any, *protoError)) func(verbCall) (any, *protoError) {
 		return func(call verbCall) (any, *protoError) {
 			if call.Verb == "exec" {

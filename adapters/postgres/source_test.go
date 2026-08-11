@@ -294,6 +294,16 @@ func writeArchiveAs(t *testing.T, dir, name string, head []byte, mtime time.Time
 	return path
 }
 
+// backdate stamps a file already written, so a ranking test can make the
+// fresher backup the older file.
+func backdate(t *testing.T, path string, mtime time.Time) string {
+	t.Helper()
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatalf("chtimes %s: %v", path, err)
+	}
+	return path
+}
+
 // TestDirectoryRankingIgnoresFileTimes is issue #100: a stale backup
 // copied into the directory afterwards carries the newest mtime, and used
 // to be the one the drill restored. The archives here are real headers,
@@ -360,6 +370,44 @@ func TestDirectoryRanking(t *testing.T) {
 			t.Errorf("picked %s (%+v), want the dump beside the skipped member", got, perr)
 		}
 	})
+}
+
+// TestDirectoryRankingIgnoresStorageShape: how a backup is stored is not a
+// claim about how recent it is. A directory may hold both formats and both
+// storage forms — a pipeline changed last month leaves exactly that — and
+// the choice has to come from what each artifact records about itself.
+func TestDirectoryRankingIgnoresStorageShape(t *testing.T) {
+	base := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	for _, tt := range []struct {
+		name  string
+		write func(dir string) string // writes the newer backup as the older file
+	}{
+		{"a compressed plain dump over an archive", func(dir string) string {
+			return backdate(t, writeGzip(t, dir, "later.sql.gz", plainDumpBody), base.Add(-24*time.Hour))
+		}},
+		{"a plain dump over an archive", func(dir string) string {
+			return backdate(t, writePlain(t, dir, "later.sql", plainDumpBody), base.Add(-24*time.Hour))
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			// The archive records 21:26:26 and is the newest file;
+			// plainDumpBody records 21:26:45 and is a day old.
+			stale := writeArchiveAs(t, dir, "earlier.dump", archiveHeaders[0].head, base)
+			want := tt.write(dir)
+			got, perr := newestBackupIn(dir, "")
+			if perr != nil {
+				t.Fatalf("newestBackupIn: %+v", perr)
+			}
+			if got != want {
+				t.Errorf("picked %s, want %s — the later backup, whatever shape it is stored in",
+					filepath.Base(got), filepath.Base(want))
+			}
+			if got == stale {
+				t.Error("the drill would prove the earlier backup")
+			}
+		})
+	}
 }
 
 // TestCandidateRankingIsATotalOrder pins the tie-breaking that keeps a

@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/binary"
-	"os"
+	"strings"
 	"time"
 )
 
@@ -25,9 +25,27 @@ import (
 // the drill config: source.params.backup_timezone names the zone the
 // backup host was in. Without it, this adapter reports no creation time
 // at all rather than guessing one.
+//
+// A plain-SQL dump says less about itself, and what it says depends on how
+// it was taken (measured on PostgreSQL 16): without --verbose it carries no
+// date at all, and with it the leading comment block opens with
+// "-- Started on <wall clock> <zone abbreviation>". The abbreviation is not
+// read. It is ambiguous — several zones share CST, and one that resolves
+// today may not next year — so treating it as authoritative would put a
+// guess into a signed record; source.params.backup_timezone stays the one
+// answer, exactly as for the archive header. Both forms therefore yield the
+// same kind of value, the backup host's wall clock at the moment the dump
+// began, which is what makes the two comparable when a directory holds
+// both.
 
 // pgdumpMagic opens every pg_dump custom-format archive.
 const pgdumpMagic = "PGDMP"
+
+// What a plain-SQL dump writes about its own beginning, under --verbose.
+const (
+	plainStartedPrefix = "-- Started on "
+	plainClockLayout   = "2006-01-02 15:04:05"
+)
 
 // The header is fixed-width up to the creation time: magic (5), version
 // triple (3), intSize, offSize, format. What follows depends on the
@@ -46,15 +64,14 @@ const (
 	pgdumpHeaderBytes        = 64
 )
 
-// archiveCreatedAt reads a custom-format archive's own creation time and
-// places it in the operator-declared zone. It returns nil whenever the
-// answer would be a guess: no zone declared, a file that is not a custom
-// -format archive, or a header this parser does not recognise.
-func archiveCreatedAt(path string, loc *time.Location) *string {
+// dumpCreatedAt reads a dump's own creation time and places it in the
+// operator-declared zone. It returns nil whenever the answer would be a
+// guess: no zone declared, or nothing in the dump's head that dates it.
+func dumpCreatedAt(head []byte, storage dumpStorage, loc *time.Location) *string {
 	if loc == nil {
 		return nil
 	}
-	clock, ok := archiveClock(path)
+	clock, ok := dumpClock(head, storage)
 	if !ok {
 		return nil
 	}
@@ -62,23 +79,29 @@ func archiveCreatedAt(path string, loc *time.Location) *string {
 		clock.Hour(), clock.Minute(), clock.Second(), 0, loc))
 }
 
-// archiveClock reads the wall clock a custom-format archive records about
-// itself, carried in a time.Time labelled UTC that is a wall clock and not
-// an instant.
+// dumpClock reads the wall clock a dump records about itself, carried in a
+// time.Time labelled UTC that is a wall clock and not an instant.
 //
 // It exists so two backups can be ranked against each other (see
 // newestBackupIn): both came off the same backup host, so whatever zone
 // that host was in cancels out of the comparison, and ranking therefore
 // works whether or not the operator declared one. Reporting a creation
 // time is the other job, and that one does need the zone.
-func archiveClock(path string) (time.Time, bool) {
-	f, err := os.Open(path)
-	if err != nil {
-		return time.Time{}, false
+//
+// Where the clock is read from follows the artifact's format, and both
+// places sit in the head — so a dump stored compressed is dated from the
+// same sentence as one stored plain, for the price of inflating a few
+// kilobytes rather than the whole archive.
+func dumpClock(head []byte, storage dumpStorage) (time.Time, bool) {
+	if storage.plain {
+		return plainDumpClock(head)
 	}
-	head := make([]byte, pgdumpHeaderBytes)
-	n, rerr := f.Read(head)
-	if cerr := f.Close(); cerr != nil || rerr != nil || n < pgdumpHeaderBytes {
+	return archiveClock(head)
+}
+
+// archiveClock reads the creation time out of a custom-format header.
+func archiveClock(head []byte) (time.Time, bool) {
+	if len(head) < pgdumpHeaderBytes {
 		return time.Time{}, false
 	}
 	fields, ok := parseArchiveHeaderTime(head)
@@ -87,6 +110,30 @@ func archiveClock(path string) (time.Time, bool) {
 	}
 	return time.Date(fields.year, time.Month(fields.month), fields.day,
 		fields.hour, fields.minute, fields.second, 0, time.UTC), true
+}
+
+// plainDumpClock reads the time a plain-SQL dump was started, which pg_dump
+// writes only under --verbose. Its absence is the ordinary case, not a
+// defect: a dump taken without that flag simply cannot be dated, and
+// newestBackupIn ranks it accordingly rather than inventing a time.
+//
+// The first match wins. Only the head is available here, and for the one
+// artifact this reads that is where its own beginning is recorded.
+func plainDumpClock(head []byte) (time.Time, bool) {
+	for _, line := range strings.Split(string(head), "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), plainStartedPrefix)
+		if !ok || len(rest) < len(plainClockLayout) {
+			continue
+		}
+		// Whatever follows the clock is the backup host's zone
+		// abbreviation, deliberately not read (see the file comment).
+		clock, err := time.ParseInLocation(plainClockLayout, rest[:len(plainClockLayout)], time.UTC)
+		if err != nil {
+			continue
+		}
+		return clock, true
+	}
+	return time.Time{}, false
 }
 
 // headerTime is the broken-down wall clock a custom-format header stores.

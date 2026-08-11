@@ -167,7 +167,7 @@
       "id": "postgres",
       "name": "PostgreSQL",
       "status": "experimental",
-      "adapter_version": "0.8.0",
+      "adapter_version": "0.9.0",
       "engine": {
         "id": "postgresql",
         "name": "PostgreSQL"
@@ -189,17 +189,17 @@
         },
         {
           "id": "pgdump",
-          "name": "One pg_dump custom-format (-Fc) file",
+          "name": "One pg_dump file, custom-format (-Fc) or plain SQL (-Fp), stored plain or gzip-compressed",
           "pitr": false
         },
         {
           "id": "pgdump_dir",
-          "name": "A directory of pg_dump files; the one whose own header records the newest time is restored",
+          "name": "A directory of pg_dump files; the one whose own head records the newest time is restored",
           "pitr": false
         },
         {
           "id": "pgdump_with_globals",
-          "name": "One pg_dump file plus the cluster globals (roles and grants) loaded before it",
+          "name": "One pg_dump file plus the cluster globals (roles and grants) loaded before it; either member may be gzip-compressed",
           "pitr": false
         }
       ],

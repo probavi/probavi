@@ -689,3 +689,165 @@ func makeTwoGenerations(t *testing.T, ctx context.Context, provider *docker.Prov
 		}
 	}
 }
+
+// storedForms are the shapes a pg_dump artifact reaches a drill in, plus
+// the three ways one of them can be broken. Every name here is produced by
+// makeStoredForms from the same seeded database, so a row count is a
+// measurement of what the restore actually carried.
+var storedForms = []string{
+	"orders.dump", "orders.dump.gz", "orders.sql", "orders.sql.gz",
+	"half.sql", "half.sql.gz", "crc.sql.gz",
+}
+
+// TestStoredDumpFormsEndToEnd restores every shape a pg_dump artifact is
+// stored in against a real engine, and proves the failures that only a real
+// gzip and a real psql produce — including the one no exit code reports: a
+// perfectly valid gzip file holding a dump that was never finished, which
+// restores in full and would otherwise pass the drill.
+func TestStoredDumpFormsEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-postgres"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	provider := docker.New(nil)
+	params := map[string]string{"image": verifiedImage(t), "env.POSTGRES_HOST_AUTH_METHOD": "trust",
+		"memory": engineMemoryLimit}
+
+	dir := t.TempDir()
+	makeStoredForms(t, ctx, provider, params, dir)
+
+	t.Run("restorable shapes", func(t *testing.T) {
+		for _, name := range []string{"orders.dump", "orders.dump.gz", "orders.sql", "orders.sql.gz"} {
+			t.Run(name, func(t *testing.T) {
+				rows, err := drillStoredForm(t, ctx, provider, params, filepath.Join(dir, name))
+				if err != nil {
+					t.Fatalf("provision %s: %v", name, err)
+				}
+				if rows != "1000" {
+					t.Errorf("row count = %q, want 1000 — the restore did not carry the data", rows)
+				}
+			})
+		}
+	})
+
+	t.Run("broken shapes are refused", func(t *testing.T) {
+		tests := []struct {
+			name   string
+			file   string
+			wantIn string
+		}{
+			// The witness earns its keep here: gzip is content, psql is
+			// content, and only the dump's missing closing line is not.
+			{"a valid member holding a dump that was never finished", "half.sql.gz", "not a complete dump"},
+			{"a plain dump that stops halfway", "half.sql", "not a complete dump"},
+			// Every byte arrived and only the trailing checksum disagreed.
+			// The data may well be whole; the drill refuses anyway, because
+			// "may well be" is not what a signed record rests on.
+			{"a member whose checksum does not match its data", "crc.sql.gz", "could not be decompressed"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				rows, err := drillStoredForm(t, ctx, provider, params, filepath.Join(dir, tt.file))
+				var aerr *adapter.Error
+				if err == nil || !errors.As(err, &aerr) {
+					t.Fatalf("provision = %q, %v — want a refusal", rows, err)
+				}
+				if aerr.Code != "source_corrupt" || !strings.Contains(aerr.Message, tt.wantIn) {
+					t.Errorf("error = %s/%q, want source_corrupt mentioning %q",
+						aerr.Code, aerr.Message, tt.wantIn)
+				}
+			})
+		}
+	})
+}
+
+// drillStoredForm restores one stored artifact in a sandbox of its own and
+// reports the row count the restore produced.
+func drillStoredForm(t *testing.T, ctx context.Context, provider *docker.Provider,
+	params map[string]string, fixture string) (string, error) {
+	t.Helper()
+	sbx, err := provider.Create(ctx, params)
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("postgres", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "pgdump", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		return "", err
+	}
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{
+		Argv: []string{"psql", "-h", "127.0.0.1", "-U", res.Connection.User,
+			"-d", res.Connection.Database, "-tA", "-v", "ON_ERROR_STOP=1",
+			"-c", "SELECT count(*) FROM orders"},
+	})
+	if err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if out.ExitCode != 0 {
+		t.Fatalf("count rows: exit %d: %s", out.ExitCode, out.Stderr)
+	}
+	return strings.TrimSpace(string(out.Stdout)), nil
+}
+
+// makeStoredForms seeds one database and writes every artifact shape out of
+// it, so the shapes differ only in how they are stored.
+//
+// The halved dump is cut on a line boundary deliberately. Measured: cut
+// mid-row, psql reports the malformed value and the drill fails for the
+// wrong reason; cut cleanly, psql treats the stream's end as the end of the
+// data, restores 477 of the 1000 rows and exits 0 — which is the silent
+// partial restore §5 forbids, and the only thing that reports it is the
+// closing line the dump never got to write.
+//
+// The checksum case is built by flipping one byte of the gzip trailer
+// rather than truncating the member, so that every byte still arrives and
+// only the decompressor's own verdict says otherwise. The replacement byte
+// is derived from the original, so the fixture cannot accidentally be the
+// value it already held.
+func makeStoredForms(t *testing.T, ctx context.Context, provider *docker.Provider,
+	params map[string]string, dest string) {
+	t.Helper()
+	seed, err := provider.Create(ctx, params)
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+
+	awaitReady(t, ctx, seed)
+	seedSQL := `CREATE TABLE orders (id bigserial PRIMARY KEY, total numeric(10,2) NOT NULL);
+INSERT INTO orders (total) SELECT (random()*100)::numeric(10,2) FROM generate_series(1,1000);`
+	mustExec(t, ctx, seed, "psql", "-h", "127.0.0.1", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-c", seedSQL)
+	mustExec(t, ctx, seed, "sh", "-c", `set -e
+cd /tmp
+pg_dump -h 127.0.0.1 -U postgres -Fc postgres > orders.dump
+gzip -c orders.dump > orders.dump.gz
+pg_dump -h 127.0.0.1 -U postgres -Fp postgres > orders.sql
+gzip -c orders.sql > orders.sql.gz
+head -n $(( $(wc -l < orders.sql) / 2 )) orders.sql > half.sql
+gzip -c half.sql > half.sql.gz
+sz=$(stat -c%s orders.sql.gz)
+cp orders.sql.gz crc.sql.gz
+orig=$(dd if=orders.sql.gz bs=1 skip=$((sz-5)) count=1 status=none | od -An -tu1 | tr -d " ")
+printf "$(printf "\\\\%03o" $(( (orig + 1) % 256 )))" | dd of=crc.sql.gz bs=1 seek=$((sz-5)) conv=notrunc status=none`)
+
+	for _, name := range storedForms {
+		if out, err := exec.CommandContext(ctx, "docker", "cp",
+			seed.ID()+":/tmp/"+name, filepath.Join(dest, name)).CombinedOutput(); err != nil {
+			t.Fatalf("extract %s: %v: %s", name, err, out)
+		}
+	}
+}
