@@ -11,6 +11,42 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Changed
+
+- **A mysql restore now has to prove the dump was whole** (mysql adapter
+  0.9.0). The postgres work below turned up a defect the same survey found
+  in exactly one other adapter. The mysql client reports that no statement
+  it ran failed; it does not report that it reached the end of a complete
+  dump, and a dump that stops on a statement boundary is valid SQL as far
+  as it goes. Measured against a real server: a three-table dump cut where
+  mysqldump would have died after the first restores that one table, the
+  client exits 0, the decompressor exits 0, and the drill passed — having
+  proved a third of the backup. For the `mysqldump_with_users` accounts
+  script the hole was wider, because that replay runs with `--force` and so
+  cannot abort at all.
+
+  A member is now a pass only when mysqldump's `-- Dump completed` sign-off
+  arrives with it; for a compressed member the stream is tapped while the
+  client consumes it, rather than inflating the artifact twice. A member
+  without that line fails as `source_corrupt` saying the backup stops
+  early, which is a claim about the job that wrote it rather than about the
+  restore.
+
+  **Comment-free dumps stay exempt.** Measured across the flags a backup
+  job plausibly uses, the mysqldump banner and the sign-off travel
+  together: the default and `--skip-dump-date` write both, `--compact` and
+  `--skip-comments` write neither. So only a dump that announces itself is
+  held to its ending, and the residual is documented rather than hidden — a
+  truncated `--compact` dump cannot be detected, because nothing in that
+  format says where it should have stopped. Restoring a compressed member
+  now also needs `mkfifo` and `tee` in the engine image alongside `gzip`;
+  the official `mysql:8.x` images have all three.
+
+  The other two adapters were measured and need nothing: `mongorestore`
+  exits non-zero on a truncated archive, and SQL Server refuses a truncated
+  `.bak` outright (`Msg 3287`), because both formats describe their own
+  extent where a SQL script does not.
+
 ### Added
 
 - **The postgres adapter restores plain-SQL dumps, and gzip-compressed

@@ -44,7 +44,8 @@ expressible at all. The credential never protects anything reachable.
 - The dump is loaded with the mysql client's `source` command, which stops
   at the first error: partial restores fail loudly as `restore_failed`;
   input the parser rejects (`ERROR 1064`, `ASCII '\0'`) is classified
-  `source_corrupt`.
+  `source_corrupt`. A dump that stops early without erroring is caught
+  separately — see the completeness rule below.
 
 ## Compressed dumps
 
@@ -77,6 +78,43 @@ What this costs, stated plainly:
 
 Only gzip is recognised. Other compressors (`zstd`, `xz`, `bzip2`) are
 refused as unusable SQL, the same as any other unreadable input.
+
+Restoring a compressed member needs `gzip`, `mkfifo` and `tee` in the
+engine image. The official `mysql:8.x` images have all three; an image
+without them fails the drill naming the image, not the backup.
+
+## A dump has to be whole, and the client cannot say whether it is
+
+The mysql client reports that no statement it ran failed. It does not
+report that it reached the end of a complete dump, and a dump that stops on
+a statement boundary is valid SQL as far as it goes. Measured against a
+real server: a three-table dump cut where mysqldump would have died after
+the first restores that one table, the client exits 0, the decompressor
+exits 0, and the drill passes — having proved a third of the backup. For
+the accounts script the hole is wider, because that replay runs with
+`--force` and so cannot abort at all.
+
+The file that produces this is ordinary. A backup job running `mysqldump |
+gzip` whose mysqldump dies of a full disk, a killed session or a lost
+connection leaves a **perfectly valid gzip member** behind holding an
+unfinished dump, and every byte in it restores.
+
+So a member is a pass only when the line mysqldump signs its output off
+with — `-- Dump completed` — arrives with it. For a compressed member the
+stream is tapped while the client consumes it and only its tail kept,
+rather than inflating the artifact a second time. A member without that
+line fails as `source_corrupt` saying the backup stops early, which is a
+claim about the job that wrote it rather than about the restore.
+
+**A comment-free dump is exempt, not failed.** Measured across the flags a
+backup job plausibly uses, the banner and the sign-off travel together:
+the default and `--skip-dump-date` write both, `--compact` and
+`--skip-comments` write neither. A dump that announces itself as a
+mysqldump is therefore held to its ending, and one that carries no
+comments has no ending to be held to. The residual is stated rather than
+hidden: **a truncated `--compact` dump cannot be detected**, because
+nothing in that format says where it should have stopped. If that matters
+for your backups, drop `--compact`.
 
 ## The mysqldump_with_users kind (accounts first)
 

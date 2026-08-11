@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -70,7 +71,10 @@ func withUsersExec(t *testing.T, call verbCall, b withUsersBehavior) any {
 	if err := json.Unmarshal(call.Args, &args); err != nil {
 		t.Fatalf("exec args: %v", err)
 	}
-	if args.Argv[0] == "sh" {
+	if replay, ok := parseReplay(args.Argv); ok {
+		if replay.script == restoreScript {
+			return execValue{ExitCode: 0, DurationSeconds: 1.5}
+		}
 		assertUsersArgv(t, args)
 		return execValue{ExitCode: b.usersExit, DurationSeconds: 0.5,
 			StderrB64: base64.StdEncoding.EncodeToString([]byte(b.usersStderr))}
@@ -81,8 +85,6 @@ func withUsersExec(t *testing.T, call verbCall, b withUsersBehavior) any {
 		return execValue{ExitCode: 0, StdoutB64: base64.StdEncoding.EncodeToString([]byte("1\n"))}
 	case strings.HasPrefix(stmt, "CREATE DATABASE IF NOT EXISTS `shop`"):
 		return okExec(0)
-	case stmt == "source /scratch/probavi-restore.sql":
-		return execValue{ExitCode: 0, DurationSeconds: 1.5}
 	case strings.HasPrefix(stmt, "SELECT DISTINCT o.definer"):
 		return gateExec(b, b.definers)
 	case strings.HasPrefix(stmt, "SELECT table_name FROM information_schema.views"):
@@ -117,7 +119,8 @@ func gateExec(b withUsersBehavior, stdout string) any {
 // shape reintroduces the ordering-dependent partial load.
 func assertUsersArgv(t *testing.T, args execArgs) {
 	t.Helper()
-	want := []string{"sh", "-c", usersLoadScript, "sh", "root", "/scratch/probavi-users.sql"}
+	want := []string{"sh", "-c", usersLoadScript, "sh", "root", "/scratch/probavi-users.sql",
+		"", strconv.Itoa(markerTailBytes)}
 	if strings.Join(args.Argv, "\x00") != strings.Join(want, "\x00") {
 		t.Errorf("users replay argv = %v, want %v", args.Argv, want)
 	}

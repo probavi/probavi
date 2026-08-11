@@ -29,6 +29,11 @@ type resolvedSource struct {
 	// compress a multi-gigabyte dump and leave a small grants script plain.
 	compressed      bool
 	usersCompressed bool
+	// marker and usersMarker are the patterns each member's end has to
+	// match for the replay to count as complete, or "" for a member that
+	// carries no ending to check (see complete.go).
+	marker      string
+	usersMarker string
 }
 
 // resolveSource maps a source kind to one restorable artifact.
@@ -164,6 +169,8 @@ func resolveWithUsers(ctx context.Context, dir string, params map[string]string,
 		usersPath:       usersPath,
 		compressed:      dumpCompressed,
 		usersCompressed: usersCompressed,
+		marker:          completenessMarker(dumpPath),
+		usersMarker:     completenessMarker(usersPath),
 	}, nil
 }
 
@@ -344,6 +351,7 @@ func resolveFile(ctx context.Context, path string, loc *time.Location) (*resolve
 		sizeBytes:  info.Size(),
 		createdAt:  dumpCompletedAt(ctx, path, loc),
 		compressed: compressed,
+		marker:     completenessMarker(path),
 	}, nil
 }
 

@@ -28,7 +28,12 @@ import (
 // shape that continues. The exit code stays 0 under --force; the verdict
 // comes from classifying stderr instead. The path and user travel as
 // positional parameters, never interpolated into the script.
-const usersLoadScript = `mysql -h 127.0.0.1 -u "$1" -f < "$2"`
+const usersLoadScript = `
+mysql -h 127.0.0.1 -u "$1" -f < "$2"
+rc=$?
+[ "$rc" = 0 ] || exit "$rc"
+[ -z "$3" ] || tail -c "$4" -- "$2" | grep -qE "$3" || exit 91
+`
 
 // compressedUsersLoadScript is the same replay fed by the decompressor.
 // Its shape follows compressedRestoreScript, with one difference the
@@ -36,23 +41,30 @@ const usersLoadScript = `mysql -h 127.0.0.1 -u "$1" -f < "$2"`
 // preserved rather than normalised, and only the decompressor's failure
 // takes the reserved exit.
 const compressedUsersLoadScript = `
-{ gzip -dc -- "$2"; echo $? > "$3"; } | mysql -h 127.0.0.1 -u "$1" -f
+rm -f "$2.fifo"
+mkfifo "$2.fifo" || exit 92
+tail -c "$5" <"$2.fifo" >"$2.tail" &
+{ gzip -dc -- "$2"; echo $? > "$3"; } | tee "$2.fifo" | mysql -h 127.0.0.1 -u "$1" -f
 loaded=$?
+wait
 [ "$(cat "$3")" = 0 ] || exit 90
 [ "$loaded" = 0 ] || exit 1
+[ -z "$4" ] || grep -qE "$4" "$2.tail" || exit 91
 `
 
 // loadUsers transfers the users script into the sandbox and replays it,
 // returning the transfer and load durations separately so the caller can
 // account for them in the right phases.
-func loadUsers(ctx context.Context, c *core, user, hostPath string, users sqlMember) (transfer, load float64, perr *protoError) {
+func loadUsers(ctx context.Context, c *core, user, hostPath string, users sqlMember, marker string) (transfer, load float64, perr *protoError) {
 	put, perr := c.putFile(ctx, putFileArgs{SourcePath: hostPath, DestPath: users.path, Mode: "0600"})
 	if perr != nil {
 		return 0, 0, perr
 	}
-	argv := []string{"sh", "-c", usersLoadScript, "sh", user, users.path}
+	argv := []string{"sh", "-c", usersLoadScript, "sh", user, users.path,
+		marker, strconv.Itoa(markerTailBytes)}
 	if users.compressed {
-		argv = []string{"sh", "-c", compressedUsersLoadScript, "sh", user, users.path, users.statusPath()}
+		argv = []string{"sh", "-c", compressedUsersLoadScript, "sh", user, users.path,
+			users.statusPath(), marker, strconv.Itoa(markerTailBytes)}
 	}
 	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: argv})
 	if perr != nil {
@@ -60,8 +72,11 @@ func loadUsers(ctx context.Context, c *core, user, hostPath string, users sqlMem
 	}
 	// The decompressor is judged before the replay: when it failed, every
 	// diagnostic below it describes the consequence rather than the cause.
-	if val.ExitCode == decompressFailedExit {
-		return 0, 0, mapDecompressFailure(stderr)
+	// A truncated script is the failure this replay cannot report by
+	// itself — --force means the client never aborts, so it creates the
+	// accounts it got to and exits content (see complete.go).
+	if perr := mapScriptExit(val.ExitCode, stderr, "the accounts script"); perr != nil {
+		return 0, 0, perr
 	}
 	if failure := usersFailure(stderr); failure != "" {
 		return 0, 0, protoErr("restore_failed", false, "loading user accounts failed: %s", failure)

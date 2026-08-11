@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -240,8 +241,35 @@ func happyProvisionHandler(t *testing.T, fixture string, readyCalls *int) func(v
 	}
 }
 
+// replayCall is one load the adapter asked the sandbox to run, with the
+// shell wrapper unpacked into the parts a test asserts on.
+type replayCall struct {
+	script string
+	args   []string
+}
+
+func parseReplay(argv []string) (replayCall, bool) {
+	if len(argv) < 5 || argv[0] != "sh" || argv[1] != "-c" || argv[3] != "sh" {
+		return replayCall{}, false
+	}
+	return replayCall{script: argv[2], args: argv[4:]}, true
+}
+
+// replayArgs is the argv a load script is expected to run under.
+func replayArgs(script string, args ...string) []string {
+	return append([]string{"sh", "-c", script, "sh"}, args...)
+}
+
 func happyExecResponse(t *testing.T, call verbCall, readyCalls *int) any {
 	args, stmt := lastArg(t, call)
+	if replay, ok := parseReplay(args.Argv); ok && replay.script == restoreScript {
+		want := replayArgs(restoreScript, "/scratch/probavi-restore.sql",
+			"orders_admin", "orders", "", strconv.Itoa(markerTailBytes))
+		if strings.Join(args.Argv, "\x00") != strings.Join(want, "\x00") {
+			t.Errorf("restore argv = %v", args.Argv)
+		}
+		return execValue{ExitCode: 0, DurationSeconds: 1.5}
+	}
 	switch {
 	case stmt == "SELECT 1":
 		want := []string{"mysql", "-h", "127.0.0.1", "-u", "orders_admin", "-N", "-B", "-e", "SELECT 1"}
@@ -255,13 +283,6 @@ func happyExecResponse(t *testing.T, call verbCall, readyCalls *int) any {
 		return execValue{ExitCode: 0, StdoutB64: base64.StdEncoding.EncodeToString([]byte("1\n"))}
 	case stmt == "CREATE DATABASE IF NOT EXISTS `orders`":
 		return okExec(0)
-	case stmt == "source /scratch/probavi-restore.sql":
-		want := []string{"mysql", "-h", "127.0.0.1", "-u", "orders_admin", "--database", "orders",
-			"-e", "source /scratch/probavi-restore.sql"}
-		if strings.Join(args.Argv, " ") != strings.Join(want, " ") {
-			t.Errorf("restore argv = %v", args.Argv)
-		}
-		return execValue{ExitCode: 0, DurationSeconds: 1.5}
 	default:
 		t.Fatalf("unexpected exec: %v", args.Argv)
 		return nil

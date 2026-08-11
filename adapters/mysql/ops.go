@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const (
 	adapterName    = "mysql"
-	adapterVersion = "0.8.0"
+	adapterVersion = "0.9.0"
 
 	defaultUser     = "root"
 	defaultDatabase = "probavi"
@@ -116,7 +117,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	var usersTransfer, usersLoad float64
 	if src.usersPath != "" {
 		users := sandboxMember(scratch+"/probavi-users.sql", src.usersCompressed)
-		usersTransfer, usersLoad, perr = loadUsers(ctx, c, user, src.usersPath, users)
+		usersTransfer, usersLoad, perr = loadUsers(ctx, c, user, src.usersPath, users, src.usersMarker)
 		if perr != nil {
 			return nil, perr
 		}
@@ -134,7 +135,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if perr := ensureDatabase(ctx, c, user, database, tgt.charset, tgt.collation); perr != nil {
 		return nil, perr
 	}
-	restore, stderr, perr := execRestore(ctx, c, user, database, dump)
+	restore, stderr, perr := execRestore(ctx, c, user, database, dump, src.marker)
 	if perr != nil {
 		return nil, perr
 	}
@@ -308,12 +309,12 @@ func ensureDatabase(ctx context.Context, c *core, user, database, charset, colla
 // execRestore loads the dump with the mysql client's source command. The
 // client stops at the first error (no --force): partial restores fail
 // loudly (§5). The dump path is adapter-composed, never operator input.
-func execRestore(ctx context.Context, c *core, user, database string, dump sqlMember) (*execValue, []byte, *protoError) {
-	argv := []string{"mysql", "-h", "127.0.0.1", "-u", user, "--database", database,
-		"-e", "source " + dump.path}
+func execRestore(ctx context.Context, c *core, user, database string, dump sqlMember, marker string) (*execValue, []byte, *protoError) {
+	argv := []string{"sh", "-c", restoreScript, "sh",
+		dump.path, user, database, marker, strconv.Itoa(markerTailBytes)}
 	if dump.compressed {
 		argv = []string{"sh", "-c", compressedRestoreScript, "sh",
-			dump.path, dump.statusPath(), user, database}
+			dump.path, dump.statusPath(), user, database, marker, strconv.Itoa(markerTailBytes)}
 	}
 	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: argv})
 	if perr != nil {
@@ -340,14 +341,60 @@ func execRestore(ctx context.Context, c *core, user, database string, dump sqlMe
 // A client failure exits 1 rather than passing the client's own status
 // through, so decompressFailedExit stays unambiguous.
 const compressedRestoreScript = `
-{ gzip -dc -- "$1"; echo $? > "$2"; } | mysql -h 127.0.0.1 -u "$3" --database "$4" || exit 1
+rm -f "$1.fifo"
+mkfifo "$1.fifo" || exit 92
+tail -c "$6" <"$1.fifo" >"$1.tail" &
+{ gzip -dc -- "$1"; echo $? > "$2"; } | tee "$1.fifo" | mysql -h 127.0.0.1 -u "$3" --database "$4"
+rc=$?
+wait
+[ "$rc" = 0 ] || exit 1
 [ "$(cat "$2")" = 0 ] || exit 90
+[ -z "$5" ] || grep -qE "$5" "$1.tail" || exit 91
 `
 
-// decompressFailedExit is what the load scripts exit with when the
-// decompressor failed and the client did not notice. No mysql client
-// produces it: the scripts normalise every client failure to 1.
-const decompressFailedExit = 90
+// restoreScript replays a stored-plain dump and then proves the dump was
+// whole, in that order: the client's exit code says only that nothing it
+// executed failed, never that it reached the end of a complete dump.
+//
+// A member that announces no ending (see complete.go) passes an empty
+// marker and the check is skipped — there is nothing to check against, and
+// failing a comment-free dump would refuse a backup that is fine.
+const restoreScript = `
+mysql -h 127.0.0.1 -u "$2" --database "$3" -e "source $1"
+rc=$?
+[ "$rc" = 0 ] || exit "$rc"
+[ -z "$4" ] || tail -c "$5" -- "$1" | grep -qE "$4" || exit 91
+`
+
+// What the load scripts exit with when they, and not the client, decided
+// the load failed. No mysql client produces these: the scripts normalise
+// every client failure to 1, and the client's own codes stop at 2.
+const (
+	decompressFailedExit = 90
+	incompleteDumpExit   = 91
+	witnessSetupExit     = 92
+)
+
+// mapScriptExit classifies the verdicts a load script reaches on its own,
+// as opposed to the client's; what names the member in diagnostics. It
+// returns nil for every other exit code, which means the client failed and
+// its own diagnostics decide.
+func mapScriptExit(exitCode int, stderr []byte, what string) *protoError {
+	switch exitCode {
+	case decompressFailedExit:
+		return mapDecompressFailure(stderr)
+	case incompleteDumpExit:
+		return protoErr("source_corrupt", false,
+			"%s is not a complete dump: it ends without the line mysqldump writes when it "+
+				"finishes, so whatever wrote it stopped early — restoring it would have proved "+
+				"only the part that survived", what)
+	case witnessSetupExit:
+		return protoErr("restore_failed", false,
+			"the sandbox image provides no mkfifo, which replaying a compressed dump needs in "+
+				"order to prove the dump was whole: %s", firstLine(stderr))
+	}
+	return nil
+}
 
 // sqlMember is one SQL file placed inside the sandbox, and how it is
 // stored there.
@@ -376,8 +423,8 @@ func (m sqlMember) statusPath() string { return m.path + ".status" }
 // ASCII '\0' message is the client refusing binary garbage — both mean
 // "this is not a usable SQL dump".
 func mapRestoreFailure(exitCode int, stderr []byte) *protoError {
-	if exitCode == decompressFailedExit {
-		return mapDecompressFailure(stderr)
+	if perr := mapScriptExit(exitCode, stderr, "the backup"); perr != nil {
+		return perr
 	}
 	line := firstDiagnostic(stderr)
 	if strings.Contains(line, "ERROR 1064") || strings.Contains(line, `ASCII '\0'`) {
