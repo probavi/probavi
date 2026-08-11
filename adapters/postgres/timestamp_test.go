@@ -94,6 +94,19 @@ func TestParseArchiveHeaderTimeRefusals(t *testing.T) {
 	}
 }
 
+// createdAtOf dates the artifact at path the way a drill does: read what
+// the artifact says about itself, then place that wall clock in the
+// declared zone. An artifact that cannot be read makes no claim, which is
+// the same answer as one that says nothing about itself.
+func createdAtOf(t *testing.T, path string, loc *time.Location) *string {
+	t.Helper()
+	head, storage, perr := readDumpHead(path)
+	if perr != nil {
+		return nil
+	}
+	return dumpCreatedAt(head, storage, loc)
+}
+
 func writeArchive(t *testing.T, head []byte) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "orders.dump")
@@ -109,13 +122,13 @@ func TestArchiveCreatedAt(t *testing.T) {
 	path := writeArchive(t, archiveHeaders[2].head)
 
 	t.Run("no zone declared means no claim", func(t *testing.T) {
-		if got := archiveCreatedAt(path, nil); got != nil {
+		if got := createdAtOf(t, path, nil); got != nil {
 			t.Errorf("createdAt = %v, want nil — the instant is not derivable without the zone", *got)
 		}
 	})
 	t.Run("the declared zone makes it an instant", func(t *testing.T) {
 		tokyo := mustLoad(t, "Asia/Tokyo")
-		got := archiveCreatedAt(path, tokyo)
+		got := createdAtOf(t, path, tokyo)
 		if got == nil {
 			t.Fatal("createdAt = nil, want the archive's own creation time")
 		}
@@ -131,7 +144,7 @@ func TestArchiveCreatedAt(t *testing.T) {
 		}
 	})
 	t.Run("the same wall clock in another zone is another instant", func(t *testing.T) {
-		got := archiveCreatedAt(path, mustLoad(t, "UTC"))
+		got := createdAtOf(t, path, mustLoad(t, "UTC"))
 		if got == nil || *got != "2026-08-09T21:26:45.000Z" {
 			t.Errorf("createdAt = %v, want the wall clock read as UTC", got)
 		}
@@ -145,13 +158,13 @@ func TestArchiveCreatedAtRefusals(t *testing.T) {
 			t.Fatal(err)
 		}
 		tokyo := mustLoad(t, "Asia/Tokyo")
-		if got := archiveCreatedAt(plain, tokyo); got != nil {
+		if got := createdAtOf(t, plain, tokyo); got != nil {
 			t.Errorf("createdAt = %v, want nil", *got)
 		}
 	})
 	t.Run("a missing file yields no claim", func(t *testing.T) {
 		tokyo := mustLoad(t, "Asia/Tokyo")
-		if got := archiveCreatedAt(filepath.Join(t.TempDir(), "gone"), tokyo); got != nil {
+		if got := createdAtOf(t, filepath.Join(t.TempDir(), "gone"), tokyo); got != nil {
 			t.Errorf("createdAt = %v, want nil", *got)
 		}
 	})
@@ -167,11 +180,11 @@ func TestDaylightSavingIsTakenFromTheBackupDate(t *testing.T) {
 	winter := append([]byte(nil), summer...)
 	winter[33] = 0 // month field: August (7) -> January (0)
 
-	got := archiveCreatedAt(writeArchive(t, summer), budapest)
+	got := createdAtOf(t, writeArchive(t, summer), budapest)
 	if got == nil || *got != "2026-08-09T21:26:45.000+02:00" {
 		t.Errorf("summer createdAt = %v, want +02:00", got)
 	}
-	got = archiveCreatedAt(writeArchive(t, winter), budapest)
+	got = createdAtOf(t, writeArchive(t, winter), budapest)
 	if got == nil || *got != "2026-01-09T21:26:45.000+01:00" {
 		t.Errorf("winter createdAt = %v, want +01:00", got)
 	}

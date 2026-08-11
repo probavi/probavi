@@ -10,9 +10,9 @@
     { "engine_version": "16", "image": "postgres:16" }
   ],
   "sources": {
-    "pgdump": "One pg_dump custom-format (-Fc) file",
-    "pgdump_dir": "A directory of pg_dump files; the one whose own header records the newest time is restored",
-    "pgdump_with_globals": "One pg_dump file plus the cluster globals (roles and grants) loaded before it",
+    "pgdump": "One pg_dump file, custom-format (-Fc) or plain SQL (-Fp), stored plain or gzip-compressed",
+    "pgdump_dir": "A directory of pg_dump files; the one whose own head records the newest time is restored",
+    "pgdump_with_globals": "One pg_dump file plus the cluster globals (roles and grants) loaded before it; either member may be gzip-compressed",
     "pgbackrest": "A pgBackRest filesystem repository (physical restore)"
   }
 }

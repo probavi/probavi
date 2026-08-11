@@ -23,6 +23,12 @@ type resolvedSource struct {
 	// globalsPath is the cluster-globals script to load before the dump,
 	// for the pgdump_with_globals kind; empty for every other kind.
 	globalsPath string
+	// storage is what the artifact turned out to be, which decides how it
+	// is restored; globalsStorage is the same for the globals script,
+	// sniffed on its own because a backup job may compress the two
+	// members independently.
+	storage        dumpStorage
+	globalsStorage dumpStorage
 }
 
 // resolveSource maps a source kind to one restorable artifact.
@@ -126,16 +132,30 @@ func resolveWithGlobals(ctx context.Context, dir string, params map[string]strin
 		}
 	}
 
-	// The dump's own header dates this source. The globals script carries
+	// Each member is sniffed on its own: a backup job is free to compress
+	// the globals script and the dump differently, and the two are replayed
+	// by different clients anyway.
+	dumpHead, dumpStore, perr := readDumpHead(dumpPath)
+	if perr != nil {
+		return nil, perr
+	}
+	_, globalsStore, perr := readDumpHead(globalsPath)
+	if perr != nil {
+		return nil, perr
+	}
+
+	// The dump's own head dates this source. The globals script carries
 	// no timestamp of its own (measured: pg_dumpall --globals-only writes
 	// none), so the pair's freshness rests on the member that can be
 	// dated — the README says so rather than letting the field imply more.
 	return &resolvedSource{
-		path:        dumpPath,
-		checksum:    fmt.Sprintf("sha256:%s", hex.EncodeToString(h.Sum(nil))),
-		sizeBytes:   globals.Size() + dump.Size(),
-		createdAt:   archiveCreatedAt(dumpPath, loc),
-		globalsPath: globalsPath,
+		path:           dumpPath,
+		checksum:       fmt.Sprintf("sha256:%s", hex.EncodeToString(h.Sum(nil))),
+		sizeBytes:      globals.Size() + dump.Size(),
+		createdAt:      dumpCreatedAt(dumpHead, dumpStore, loc),
+		globalsPath:    globalsPath,
+		storage:        dumpStore,
+		globalsStorage: globalsStore,
 	}, nil
 }
 
@@ -315,6 +335,10 @@ func resolveFile(path string, loc *time.Location) (*resolvedSource, *protoError)
 		return nil, protoErr("invalid_request", false,
 			"source path %s is a directory; use kind pgdump_dir for directories", path)
 	}
+	head, storage, perr := readDumpHead(path)
+	if perr != nil {
+		return nil, perr
+	}
 	checksum, perr := fileChecksum(path)
 	if perr != nil {
 		return nil, perr
@@ -323,7 +347,8 @@ func resolveFile(path string, loc *time.Location) (*resolvedSource, *protoError)
 		path:      path,
 		checksum:  checksum,
 		sizeBytes: info.Size(),
-		createdAt: archiveCreatedAt(path, loc),
+		createdAt: dumpCreatedAt(head, storage, loc),
+		storage:   storage,
 	}, nil
 }
 
@@ -355,6 +380,10 @@ func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
 // -t — carries a fresh mtime, so under the old rule a stale artifact
 // became "the newest file" and was the one the drill proved. What a
 // backup says about itself does not move when the file is copied.
+//
+// Ranking costs a bounded read per candidate whatever the artifact's size,
+// including a compressed one: what dates a dump sits in its head, so a
+// candidate stored gzipped is inflated only far enough to reach it.
 func newestBackupIn(dir, except string) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
@@ -376,13 +405,26 @@ func newestBackupIn(dir, except string) (string, *protoError) {
 			return "", protoErr("source_unreadable", false, "stat %s: %v", e.Name(), err)
 		}
 		path := filepath.Join(dir, e.Name())
-		clock, dated := archiveClock(path)
+		clock, dated := candidateClock(path)
 		rank := dirCandidate{name: e.Name(), clock: clock, dated: dated, mtime: info.ModTime()}
 		if best == "" || rank.beats(bestRank) {
 			best, bestRank = path, rank
 		}
 	}
 	return best, nil
+}
+
+// candidateClock dates one entry of a directory source, or reports that it
+// cannot be dated. An unreadable file is not distinguished from an undated
+// one: either way it is not a candidate this ranking should prefer, and
+// whatever is finally chosen is opened again by the restore, which reports
+// what is wrong with it in the client's own words.
+func candidateClock(path string) (time.Time, bool) {
+	head, storage, perr := readDumpHead(path)
+	if perr != nil {
+		return time.Time{}, false
+	}
+	return dumpClock(head, storage)
 }
 
 // dirCandidate is one file a directory source could restore, with the two

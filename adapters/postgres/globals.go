@@ -36,11 +36,16 @@ func bootstrapRoleExists(user string) string {
 // with psql, returning the transfer and load durations separately so the
 // caller can account for them in the right phases.
 //
-// The script is replayed with `psql -f`, never through the sql_runner:
-// pg_dumpall wraps its output in \restrict/\unrestrict meta-commands,
-// which only a psql session reading a file can execute.
-func loadGlobals(ctx context.Context, c *core, user, hostPath, sandboxPath string) (transfer, load float64, perr *protoError) {
-	put, perr := c.putFile(ctx, putFileArgs{SourcePath: hostPath, DestPath: sandboxPath, Mode: "0600"})
+// The script is replayed by psql reading it whole, never through the
+// sql_runner: pg_dumpall wraps its output in \restrict/\unrestrict
+// meta-commands, which only a psql session reading a script can execute.
+//
+// A globals script stored gzip-compressed is replayed as stored, through
+// the same scripts the dump uses (see psqlReplayArgv). The two members are
+// sniffed independently because a backup job is free to compress one and
+// not the other.
+func loadGlobals(ctx context.Context, c *core, user, hostPath string, globals sandboxFile) (transfer, load float64, perr *protoError) {
+	put, perr := c.putFile(ctx, putFileArgs{SourcePath: hostPath, DestPath: globals.path, Mode: "0600"})
 	if perr != nil {
 		return 0, 0, perr
 	}
@@ -55,14 +60,21 @@ func loadGlobals(ctx context.Context, c *core, user, hostPath, sandboxPath strin
 	// absent — it would echo the failing statement, and a globals script's
 	// statements carry role password hashes.
 	val, _, stderr, perr := c.exec(ctx, execArgs{
-		Argv: []string{"psql", "-h", "127.0.0.1", "-U", user, "-d", defaultDatabase,
-			"-v", "ON_ERROR_STOP=0", "-f", sandboxPath},
+		Argv: psqlReplayArgv(globals, user, defaultDatabase, errorStopOff),
 	})
 	if perr != nil {
 		return 0, 0, perr
 	}
 	if failure := globalsFailure(stderr, user); failure != "" {
 		return 0, 0, protoErr("restore_failed", false, "loading cluster globals failed: %s", failure)
+	}
+	// A truncated globals script is the one failure psql cannot report here
+	// by construction: ON_ERROR_STOP is off, so it replays what it was given
+	// and exits content, having created however many roles survived. The
+	// replay script checks the script's own closing line for exactly that
+	// reason — a drill that restored half the cluster's roles must not pass.
+	if perr := mapScriptExit(val.ExitCode, stderr, "the cluster globals script"); perr != nil {
+		return 0, 0, perr
 	}
 	if val.ExitCode != 0 {
 		// No classified error, yet psql still refused: the client itself
