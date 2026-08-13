@@ -77,6 +77,19 @@ always called out explicitly.
   A plain dump taken without `--verbose` carries no date at all and ranks
   below every dump that does, as an undatable artifact always has.
 
+- **Code scanning, a published supply-chain score, and a security policy.**
+  CodeQL reads the Go of both modules — the core and `spec/evidence`, the
+  independent verifier — and the workflow files themselves; findings land in
+  the Security tab and gate nothing, so a query added upstream can never
+  wedge a release. OpenSSF Scorecard grades this repository from the outside
+  and publishes the result: how a tool that asks auditors to trust its
+  output is itself built is fair game for scrutiny. Three things the grader
+  was right about are fixed rather than argued with — [SECURITY.md](SECURITY.md)
+  now names what counts as a vulnerability in a product whose output is
+  evidence, Dependabot moves the pins that nothing was moving (Go modules,
+  actions, base-image digests), and no workflow checkout leaves the job's
+  token behind in `.git/config`, since nothing here pushes.
+
 ### Changed
 
 - **A plain-SQL restore now has to prove the dump was whole** (postgres
