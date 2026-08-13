@@ -1,0 +1,54 @@
+# OpenSSF Scorecard — an outside assessment of this repository's supply-chain
+# posture: are actions pinned, are workflow tokens least-privilege, are
+# releases signed, is the project maintained. Probavi asks auditors to trust
+# a log it produces, so how it is itself built is fair game for scrutiny; the
+# score is published rather than kept in-house for that reason.
+# Third-party actions are pinned to commit SHAs (supply-chain rule, §3.3).
+
+name: Scorecard
+
+on:
+  # Fires when the default branch's protection rules change — one of the
+  # things the analysis grades.
+  branch_protection_rule:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '41 5 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # The SARIF goes to the Security tab; the score goes to the OpenSSF's
+      # public dataset, which is the only thing the README badge can read.
+      security-events: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: analyze
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Without this the score never leaves the run, and the badge has
+          # nothing to serve.
+          publish_results: true
+      - name: keep the raw result with the run
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scorecard-results
+          path: results.sarif
+          retention-days: 5
+      - name: upload to code scanning
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        with:
+          sarif_file: results.sarif

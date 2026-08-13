@@ -2,7 +2,9 @@
 # main, which every CI gate already protects; this workflow builds the
 # artifacts reproducibly (AGENTS.md §3.3) and drafts the GitHub release for
 # the maintainer to review and publish. Third-party actions are pinned to
-# commit SHAs (supply-chain rule, §3.3).
+# commit SHAs (supply-chain rule, §3.3). What this workflow publishes it
+# publishes through `gh`, never through git, so the checkouts drop the token
+# they were handed instead of leaving it in .git/config.
 
 name: Release
 
@@ -28,6 +30,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -275,6 +279,8 @@ jobs:
     needs: release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # QEMU so one amd64 runner can also produce the arm64 layer, and the
       # container driver because the default builder cannot do multi-arch.
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0

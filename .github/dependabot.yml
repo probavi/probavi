@@ -1,0 +1,54 @@
+# Dependabot keeps the pins fresh. Everything this repository depends on is
+# pinned — Go modules by version with go.sum, actions by commit SHA, base
+# images by digest (supply-chain rule, AGENTS.md §3.3) — and a pin nobody
+# moves is a vulnerability waiting quietly. Updates are grouped and weekly so
+# the churn stays reviewable: every one of them still has to pass the full
+# gate set, including the integration suite against real engines.
+
+version: 2
+
+updates:
+  # The core module. New modules need the one-line justification of
+  # AGENTS.md §3.1 in the pull request; a version bump of one already here
+  # does not.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      go:
+        patterns: ["*"]
+
+  # spec/evidence is its own module on purpose: the independent verifier
+  # shares no code with the core, so it also shares no dependency updates.
+  - package-ecosystem: gomod
+    directory: /spec/evidence
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      go:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # The published container image builds on digest-pinned bases; this is what
+  # moves those digests.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(deps)
