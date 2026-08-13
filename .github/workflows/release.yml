@@ -12,22 +12,27 @@ on:
   push:
     tags: ["v*"]
 
+# Read-only by default; each job below states the writes it actually needs.
+# The four write scopes this once granted at the top reached both jobs and
+# every step of them, including the third-party actions that build and push.
 permissions:
-  contents: write
-  packages: write
-  # Sigstore build provenance: keyless, OIDC, nothing long-lived to guard.
-  # It is why there is no packaging GPG key — signing .deb files would be
-  # security theatre for most users (dpkg does not verify them by default)
-  # in exchange for a second key to protect forever, in a project whose
-  # trust proposition is key handling.
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
   release:
     name: Build artifacts and draft release
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      # Drafts the release and uploads its assets.
+      contents: write
+      # Sigstore build provenance: keyless, OIDC, nothing long-lived to
+      # guard. It is why there is no packaging GPG key — signing .deb files
+      # would be security theatre for most users (dpkg does not verify them
+      # by default) in exchange for a second key to protect forever, in a
+      # project whose trust proposition is key handling.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -273,6 +278,12 @@ jobs:
     name: Publish container image
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      # Appends the pushed image's digest to the release notes.
+      contents: write
+      # Pushes to ghcr.io, with the built-in token rather than a stored
+      # credential.
+      packages: write
     # The draft release must exist before its notes can gain the digest,
     # and a failed artifact build should not leave an image published
     # against a release nobody can download.
