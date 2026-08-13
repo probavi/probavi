@@ -6,6 +6,17 @@
 
 [English](README.md) · **Magyar** · [Deutsch](README.de.md) · [Français](README.fr.md) · [Español](README.es.md)
 
+[![CI](https://github.com/probavi/probavi/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/probavi/probavi/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/probavi/probavi/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/probavi/probavi/actions/workflows/codeql.yml)
+[![Coverage](https://codecov.io/gh/probavi/probavi/branch/main/graph/badge.svg)](https://codecov.io/gh/probavi/probavi)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/probavi/probavi/badge)](https://scorecard.dev/viewer/?uri=github.com/probavi/probavi)
+
+[![Release](https://img.shields.io/github/v/release/probavi/probavi?sort=semver&label=release)](https://github.com/probavi/probavi/releases/latest)
+[![License](https://img.shields.io/github/license/probavi/probavi?label=license)](LICENSE)
+[![Go](https://img.shields.io/github/go-mod/go-version/probavi/probavi?label=go)](go.mod)
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS-informational)](docs/packaging.md)
+[![Downloads](https://img.shields.io/github/downloads/probavi/probavi/total?label=downloads)](https://github.com/probavi/probavi/releases)
+
 > **English is authoritative.** Ez a [README.md](README.md) bevezetőjének fordítása, a 2026-08-04-i állapot szerint. Eltérés esetén az angol szöveg az irányadó: a telepítés, a példák és az aktuális képességlista csak angolul naprakész.
 
 *Probavi* — latinul **„bebizonyítottam”.** A befejezett múlt a lényeg: nem „teszteljük a visszaállításokat”, hanem „ez a visszaállítás megtörtént és bizonyított, itt az aláírt rekord”.
