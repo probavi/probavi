@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -30,21 +32,32 @@ func stubTool(t *testing.T, dir, name, body string) {
 // stubPath builds a PATH holding nothing but the named stubs plus the
 // coreutils the scripts themselves call, so a tool the script must not
 // depend on is genuinely absent rather than merely mocked.
-func stubPath(t *testing.T, stubs map[string]string) string {
+func stubPath(t *testing.T, stubs map[string]string, omit ...string) string {
 	t.Helper()
 	dir := t.TempDir()
 	for name, body := range stubs {
 		stubTool(t, dir, name, body)
 	}
-	real, err := exec.LookPath("cat")
-	if err != nil {
-		t.Skipf("no cat on this host: %v", err)
-	}
-	if err := os.Symlink(real, filepath.Join(dir, "cat")); err != nil {
-		t.Fatalf("link cat: %v", err)
+	for _, name := range scriptTools {
+		if _, stubbed := stubs[name]; stubbed || slices.Contains(omit, name) {
+			continue
+		}
+		real, err := exec.LookPath(name)
+		if err != nil {
+			t.Skipf("no %s on this host: %v", name, err)
+		}
+		if err := os.Symlink(real, filepath.Join(dir, name)); err != nil {
+			t.Fatalf("link %s: %v", name, err)
+		}
 	}
 	return dir
 }
+
+// scriptTools are the commands the load scripts call for themselves, as
+// opposed to the clients they drive. They are linked in from the host so
+// the scripts run for real; anything not listed is genuinely absent, which
+// is how the missing-tool paths are exercised.
+var scriptTools = []string{"cat", "tail", "grep", "rm", "mkfifo", "tee"}
 
 // runLoadScript runs one of the load scripts with the stubbed tools and
 // returns its exit status.
@@ -76,7 +89,11 @@ const (
 	// reports the member truncated.
 	emitsThenFails = `printf 'INSERT INTO orders VALUES (1);\n'; ` +
 		`echo "gzip: /scratch/probavi-restore.sql.gz: unexpected end of file" >&2; exit 1`
-	emitsWholeDump = `printf 'INSERT INTO orders VALUES (1);\n'; exit 0`
+	emitsWholeDump = `printf 'INSERT INTO orders VALUES (1);\n-- Dump completed on 2026-08-09 21:08:17\n'; exit 0`
+	// emitsUnfinishedDump is the failure no exit code reports: a whole gzip
+	// member holding a dump that stops on a statement boundary, which every
+	// client loads without complaint. Only the missing sign-off says so.
+	emitsUnfinishedDump = `printf 'INSERT INTO orders VALUES (1);\n'; exit 0`
 )
 
 // TestCompressedRestoreScriptJudgesBothEnds is the protocol's partial
@@ -87,24 +104,43 @@ func TestCompressedRestoreScriptJudgesBothEnds(t *testing.T) {
 	tests := []struct {
 		name     string
 		stubs    map[string]string
+		marker   string
+		omit     []string
 		wantExit int
 	}{
 		{"both ends succeed",
-			map[string]string{"gzip": emitsWholeDump, "mysql": drainsThenSucceeds}, 0},
+			map[string]string{"gzip": emitsWholeDump, "mysql": drainsThenSucceeds},
+			dumpCompleteMarker, nil, 0},
 		{"a truncated archive the client was content with",
-			map[string]string{"gzip": emitsThenFails, "mysql": drainsThenSucceeds}, decompressFailedExit},
+			map[string]string{"gzip": emitsThenFails, "mysql": drainsThenSucceeds},
+			dumpCompleteMarker, nil, decompressFailedExit},
 		{"the client rejects the SQL",
-			map[string]string{"gzip": emitsWholeDump, "mysql": abortsWithoutReading}, 1},
+			map[string]string{"gzip": emitsWholeDump, "mysql": abortsWithoutReading},
+			dumpCompleteMarker, nil, 1},
 		{"the image has no gzip at all",
-			map[string]string{"mysql": drainsThenSucceeds}, decompressFailedExit},
+			map[string]string{"mysql": drainsThenSucceeds},
+			dumpCompleteMarker, nil, decompressFailedExit},
+		// A whole member, a content client, and a dump that simply never
+		// ended: the case the sign-off exists to catch.
+		{"a whole member holding a dump that was never finished",
+			map[string]string{"gzip": emitsUnfinishedDump, "mysql": drainsThenSucceeds},
+			dumpCompleteMarker, nil, incompleteDumpExit},
+		// A comment-free dump has no sign-off to carry, so it is exempt
+		// rather than failed — and the same bytes now pass.
+		{"a dump that announces no ending is not held to one",
+			map[string]string{"gzip": emitsUnfinishedDump, "mysql": drainsThenSucceeds},
+			"", nil, 0},
+		{"an image that cannot make a fifo",
+			map[string]string{"gzip": emitsWholeDump, "mysql": drainsThenSucceeds},
+			dumpCompleteMarker, []string{"mkfifo"}, witnessSetupExit},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			binDir := stubPath(t, tt.stubs)
+			binDir := stubPath(t, tt.stubs, tt.omit...)
 			scratch := t.TempDir()
 			got := runLoadScript(t, compressedRestoreScript, binDir,
 				filepath.Join(scratch, "dump.sql.gz"), filepath.Join(scratch, "dump.status"),
-				"root", "orders")
+				"root", "orders", tt.marker, strconv.Itoa(markerTailBytes))
 			if got != tt.wantExit {
 				t.Errorf("exit = %d, want %d", got, tt.wantExit)
 			}
@@ -120,21 +156,34 @@ func TestCompressedUsersScriptJudgesBothEnds(t *testing.T) {
 	tests := []struct {
 		name     string
 		stubs    map[string]string
+		marker   string
 		wantExit int
 	}{
 		{"both ends succeed",
-			map[string]string{"gzip": emitsWholeDump, "mysql": drainsThenSucceeds}, 0},
+			map[string]string{"gzip": emitsWholeDump, "mysql": drainsThenSucceeds},
+			dumpCompleteMarker, 0},
 		{"a truncated script the forced client swallowed",
-			map[string]string{"gzip": emitsThenFails, "mysql": drainsThenSucceeds}, decompressFailedExit},
+			map[string]string{"gzip": emitsThenFails, "mysql": drainsThenSucceeds},
+			dumpCompleteMarker, decompressFailedExit},
 		{"the client refuses the replay",
-			map[string]string{"gzip": emitsWholeDump, "mysql": `cat >/dev/null; exit 1`}, 1},
+			map[string]string{"gzip": emitsWholeDump, "mysql": `cat >/dev/null; exit 1`},
+			dumpCompleteMarker, 1},
+		// --force means this client cannot abort, so a script that stops
+		// halfway creates the accounts it got to and reports nothing.
+		{"a script that was never finished",
+			map[string]string{"gzip": emitsUnfinishedDump, "mysql": drainsThenSucceeds},
+			dumpCompleteMarker, incompleteDumpExit},
+		{"a script that announces no ending is not held to one",
+			map[string]string{"gzip": emitsUnfinishedDump, "mysql": drainsThenSucceeds},
+			"", 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			binDir := stubPath(t, tt.stubs)
 			scratch := t.TempDir()
 			got := runLoadScript(t, compressedUsersLoadScript, binDir, "root",
-				filepath.Join(scratch, "users.sql.gz"), filepath.Join(scratch, "users.status"))
+				filepath.Join(scratch, "users.sql.gz"), filepath.Join(scratch, "users.status"),
+				tt.marker, strconv.Itoa(markerTailBytes))
 			if got != tt.wantExit {
 				t.Errorf("exit = %d, want %d", got, tt.wantExit)
 			}
@@ -143,12 +192,19 @@ func TestCompressedUsersScriptJudgesBothEnds(t *testing.T) {
 }
 
 // compressedFixture writes a dump stored the way a dump pipeline stores
-// one, carrying its own trailer.
+// one: mysqldump's banner, the data, and the sign-off that says the dump
+// finished. The banner matters as much as the trailer — it is what puts the
+// artifact under the completeness rule at all (see complete.go).
 func compressedFixture(t *testing.T) string {
 	t.Helper()
-	return writeGzipDump(t, t.TempDir(), "orders.sql.gz",
-		"INSERT INTO `orders` VALUES (1);\n-- Dump completed on 2026-08-09 21:08:17\n")
+	return writeGzipDump(t, t.TempDir(), "orders.sql.gz", dumpFixtureBody)
 }
+
+// dumpFixtureBody is a mysqldump artifact reduced to the three things this
+// adapter reads about it.
+const dumpFixtureBody = "-- MySQL dump 10.13  Distrib 8.4.11, for Linux (x86_64)\n" +
+	"INSERT INTO `orders` VALUES (1);\n" +
+	"-- Dump completed on 2026-08-09 21:08:17\n"
 
 const compressedInSandbox = "/scratch/probavi-restore.sql.gz"
 
@@ -197,7 +253,8 @@ func TestProvisionCompressedDump(t *testing.T) {
 	}
 
 	want := []string{"sh", "-c", compressedRestoreScript, "sh",
-		compressedInSandbox, compressedInSandbox + ".status", defaultUser, defaultDatabase}
+		compressedInSandbox, compressedInSandbox + ".status", defaultUser, defaultDatabase,
+		dumpCompleteMarker, strconv.Itoa(markerTailBytes)}
 	if strings.Join(loadArgv, "\x00") != strings.Join(want, "\x00") {
 		t.Errorf("load argv = %q, want %q", loadArgv, want)
 	}
@@ -260,6 +317,13 @@ func TestCompressedRestoreFailuresAreNamed(t *testing.T) {
 			"gzip: stdout: Broken pipe\n" +
 				"ERROR 1114 (HY000) at line 12: The table 'orders' is full",
 			"restore_failed", "ERROR 1114"},
+		// A whole member, a content client, and a dump that simply never
+		// ended. Nothing in the pipeline noticed; the sign-off did.
+		{"a dump that was never finished", incompleteDumpExit, "",
+			"source_corrupt", "not a complete dump"},
+		{"an image without mkfifo", witnessSetupExit,
+			"sh: line 2: mkfifo: command not found",
+			"restore_failed", "provides no mkfifo"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -308,9 +372,9 @@ func TestProvisionWithCompressedMembers(t *testing.T) {
 func compressedMembersHandler(t *testing.T, usersInSandbox, dumpInSandbox string, order *[]string) func(verbCall) (any, *protoError) {
 	loads := map[string][]string{
 		"users": {"sh", "-c", compressedUsersLoadScript, "sh", defaultUser,
-			usersInSandbox, usersInSandbox + ".status"},
+			usersInSandbox, usersInSandbox + ".status", "", strconv.Itoa(markerTailBytes)},
 		"dump": {"sh", "-c", compressedRestoreScript, "sh", dumpInSandbox,
-			dumpInSandbox + ".status", defaultUser, "shop"},
+			dumpInSandbox + ".status", defaultUser, "shop", "", strconv.Itoa(markerTailBytes)},
 	}
 	return func(call verbCall) (any, *protoError) {
 		if call.Verb == "put_file" {
@@ -326,7 +390,7 @@ func compressedMembersHandler(t *testing.T, usersInSandbox, dumpInSandbox string
 		args, stmt := lastArg(t, call)
 		if args.Argv[0] == "sh" {
 			member := "dump"
-			if strings.Contains(args.Argv[2], "-f") {
+			if args.Argv[2] == compressedUsersLoadScript {
 				member = "users"
 			}
 			*order = append(*order, member)

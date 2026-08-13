@@ -83,6 +83,50 @@ func readDumpTail(ctx context.Context, path string) (string, bool) {
 	return inflateTail(ctx, path)
 }
 
+// readDumpHead returns the leading bytes of a dump's SQL text, which is
+// where mysqldump announces itself (see complete.go). Unlike the trailer,
+// the head costs the same whatever the artifact's size: a compressed member
+// is inflated only far enough to reach it.
+func readDumpHead(path string) (string, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	head, rerr := readHeadFrom(f)
+	if cerr := f.Close(); cerr != nil || rerr != nil {
+		return "", false
+	}
+	return head, true
+}
+
+func readHeadFrom(f io.Reader) (string, error) {
+	buf := bufio.NewReaderSize(f, inflateBufferBytes)
+	magic, perr := buf.Peek(len(gzipMagic))
+	// A file shorter than the magic is simply not compressed, which Peek
+	// reports as EOF.
+	if perr != nil && !errors.Is(perr, io.EOF) {
+		return "", perr
+	}
+	var r io.Reader = buf
+	if len(magic) == len(gzipMagic) && [2]byte(magic) == gzipMagic {
+		zr, err := gzip.NewReader(buf)
+		if err != nil {
+			return "", err
+		}
+		defer func() { _ = zr.Close() }() //nolint:errcheck // a bounded head read closes nothing that can fail meaningfully
+		r = zr
+	}
+	head := make([]byte, dumpHeadBytes)
+	// A dump shorter than the head is normal, and so is a stream that ends
+	// early: the restore refuses that one separately, and with a better
+	// diagnosis than this function could give.
+	n, err := io.ReadFull(r, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return "", err
+	}
+	return string(head[:n]), nil
+}
+
 // inflateTail streams the whole member through the decompressor, keeping
 // only its last n bytes. A member that does not decompress cleanly —
 // truncated, or with a checksum its trailer disagrees with — yields no

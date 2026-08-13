@@ -123,7 +123,7 @@
       "id": "mysql",
       "name": "MySQL",
       "status": "experimental",
-      "adapter_version": "0.8.0",
+      "adapter_version": "0.9.0",
       "engine": {
         "id": "mysql",
         "name": "MySQL"

@@ -1001,3 +1001,132 @@ func drillRestore(t *testing.T, ctx context.Context, provider *docker.Provider,
 	}
 	return res, strings.TrimSpace(string(out.Stdout))
 }
+
+// TestUnfinishedDumpIsRefused is the silent partial restore, measured
+// rather than argued. A backup job whose mysqldump dies part-way leaves a
+// dump that is valid SQL as far as it goes, and the client loads it without
+// complaint: measured against a real server, a three-table dump cut where
+// mysqldump would have stopped after the first restores that one table and
+// exits 0. Nothing in the pipeline reports it — only the sign-off mysqldump
+// never got to write.
+//
+// The same file is drilled in both storage forms, because compressing it
+// changes nothing about the claim: `mysqldump | gzip` whose mysqldump dies
+// still leaves a whole, valid gzip member behind.
+func TestUnfinishedDumpIsRefused(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	buildAdapterOnPath(t, ctx)
+
+	provider := docker.New(nil)
+	dir := t.TempDir()
+	makeUnfinishedFixtures(t, ctx, provider, dir)
+
+	runner, err := adapter.New("mysql", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+
+	t.Run("the whole dump restores every table", func(t *testing.T) {
+		tables := drillTables(t, ctx, provider, runner, filepath.Join(dir, "full.sql"))
+		if len(tables) != 3 {
+			t.Errorf("tables = %v, want all three", tables)
+		}
+	})
+
+	for _, name := range []string{"partial.sql", "partial.sql.gz"} {
+		t.Run(name+" is refused", func(t *testing.T) {
+			_, err := drillProvision(t, ctx, provider, runner, filepath.Join(dir, name))
+			var aerr *adapter.Error
+			if err == nil || !errors.As(err, &aerr) {
+				t.Fatalf("provision = %v, want a refusal — the drill would have proved a third of the backup", err)
+			}
+			if aerr.Code != "source_corrupt" || !strings.Contains(aerr.Message, "not a complete dump") {
+				t.Errorf("error = %s/%q, want source_corrupt naming the incomplete dump", aerr.Code, aerr.Message)
+			}
+		})
+	}
+
+	// A comment-free dump carries no sign-off to check, so it is exempt
+	// rather than failed: refusing it would reject a backup that is fine.
+	t.Run("a comment-free dump is still restorable", func(t *testing.T) {
+		tables := drillTables(t, ctx, provider, runner, filepath.Join(dir, "compact.sql"))
+		if len(tables) != 3 {
+			t.Errorf("tables = %v, want all three", tables)
+		}
+	})
+}
+
+// drillProvision restores one artifact in a sandbox of its own.
+func drillProvision(t *testing.T, ctx context.Context, provider *docker.Provider,
+	runner *adapter.Runner, fixture string) (*adapter.ProvisionResult, error) {
+	t.Helper()
+	sbx, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	t.Cleanup(func() { destroy(t, sbx) })
+	return runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "mysqldump", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+}
+
+// drillTables restores one artifact and reports the tables that arrived,
+// which is what makes "the restore was partial" a measurement.
+func drillTables(t *testing.T, ctx context.Context, provider *docker.Provider,
+	runner *adapter.Runner, fixture string) []string {
+	t.Helper()
+	sbx, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "mysqldump", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision %s: %v", filepath.Base(fixture), err)
+	}
+	return rootRows(t, ctx, sbx,
+		"SELECT table_name FROM information_schema.tables WHERE table_schema = '"+res.Connection.Database+"'")
+}
+
+// makeUnfinishedFixtures seeds three tables and writes four artifacts out
+// of them: the whole dump, the same dump cut where mysqldump would have
+// died after the first table (plain and compressed), and a --compact dump
+// that carries no sign-off at all.
+func makeUnfinishedFixtures(t *testing.T, ctx context.Context, provider *docker.Provider, dest string) {
+	t.Helper()
+	seed, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+
+	awaitReady(t, ctx, seed)
+	mustExec(t, ctx, seed, "mysql", "-h", "127.0.0.1", "-u", "root", "-e", `CREATE DATABASE probavi;
+USE probavi;
+CREATE TABLE customers (id INT PRIMARY KEY);
+INSERT INTO customers VALUES (1),(2),(3);
+CREATE TABLE invoices (id INT PRIMARY KEY);
+INSERT INTO invoices VALUES (1),(2);
+CREATE TABLE orders (id INT PRIMARY KEY);
+INSERT INTO orders VALUES (1);`)
+	mustExec(t, ctx, seed, "sh", "-c", `set -e
+cd /tmp
+mysqldump -h 127.0.0.1 -u root probavi > full.sql
+mysqldump -h 127.0.0.1 -u root --compact probavi > compact.sql
+cut=$(grep -n "Table structure for table .invoices." full.sql | head -1 | cut -d: -f1)
+head -n $(( cut - 3 )) full.sql > partial.sql
+gzip -c partial.sql > partial.sql.gz`)
+
+	for _, name := range []string{"full.sql", "compact.sql", "partial.sql", "partial.sql.gz"} {
+		if out, err := exec.CommandContext(ctx, "docker", "cp",
+			seed.ID()+":/tmp/"+name, filepath.Join(dest, name)).CombinedOutput(); err != nil {
+			t.Fatalf("extract %s: %v: %s", name, err, out)
+		}
+	}
+}
