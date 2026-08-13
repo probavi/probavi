@@ -90,6 +90,17 @@ always called out explicitly.
   actions, base-image digests), and no workflow checkout leaves the job's
   token behind in `.git/config`, since nothing here pushes.
 
+- **The README says where to go and check.** A badge row, identical in all
+  five READMEs, links the CI run list, CodeQL, the published Scorecard, the
+  coverage report, the newest release, the license, the Go version the
+  module builds against, the platforms released binaries exist for, and how
+  often they have been downloaded. A gate holds the row to this repository:
+  a badge naming another project's slug, or reporting on a workflow file
+  that no longer exists, fails the docs tests rather than quietly rendering
+  somebody else's green — neither failure shows up as a broken image.
+  Coverage is now also reported to Codecov, and gates nothing there: the
+  gate remains the ratchet against the committed `.coverage-floor`.
+
 ### Changed
 
 - **A plain-SQL restore now has to prove the dump was whole** (postgres

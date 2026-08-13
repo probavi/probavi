@@ -82,6 +82,19 @@ jobs:
             echo "::error::coverage ${total}% fell below the committed floor ${floor}% — add tests; never lower the floor"
             exit 1
           fi
+      - name: report the profile to Codecov
+        # Reporting only. The gate is the ratchet above, against a floor
+        # committed to this repository; a number a third party computes may
+        # not decide whether a change merges (.github/codecov.yml pins that
+        # down on their side too). Runs after the ratchet, so a report is
+        # never published for a run that already failed the standard.
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: cover.out
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # An upload that cannot reach Codecov is not a reason to fail a
+          # gate that has already measured the number it was asked for.
+          fail_ci_if_error: false
       - name: spec/evidence — independent verifier
         # The whole value of this module is that it agrees with the core
         # about the published example logs without sharing a line of code
