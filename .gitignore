@@ -17,6 +17,8 @@
 # Test and coverage artifacts
 *.test
 coverage.out
+# The name ci.yml and spec/evidence's gate actually write.
+cover.out
 
 # Generated PoC fixtures (created by poc/make-fixture.sh)
 /poc/testdata/
