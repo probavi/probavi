@@ -49,6 +49,41 @@ always called out explicitly.
 
 ### Added
 
+- **A ClickHouse adapter** (`adapters/clickhouse` 0.1.0), the fifth engine
+  and the first one added since the engine catalog went into `ROADMAP.md`.
+  It restores native backup archives — `BACKUP … TO File('name.zip')` —
+  either one named artifact (`clickhouse_backup`) or the newest in a
+  directory (`clickhouse_backup_dir`). Zero core changes, conformance
+  15/15, verified against ClickHouse 26.3 and 26.7.
+
+  Three things are worth knowing before you point a drill at it, and all
+  three are measured rather than assumed:
+
+  - **The built-in checks work unchanged.** ClickHouse speaks SQL, so
+    `row_count`, `table_exists` and `freshness` reach it exactly as the
+    core composes them — the first engine since MongoDB where that is
+    true, and the reason this one was picked first. The end-to-end test
+    validates the restore with the core's own generated statements rather
+    than a hand-written query, so the claim cannot quietly stop being
+    true.
+  - **`backup.created_at` is real.** A ClickHouse archive carries a
+    `.backup` manifest whose header records when the `BACKUP` ran. What it
+    does not carry is an offset, so `source.params.backup_timezone` says
+    where that server stood; without it the record's `created_at` stays
+    null rather than claiming a wrong instant. The same timestamp is what
+    ranks a directory — never the file's modification time, which dates a
+    copy.
+  - **A half-written archive stops the drill instead of being skipped.**
+    A backup job still writing its zip leaves an unreadable archive newer
+    than everything else; quietly restoring last night's instead would
+    leave a record the operator reads as covering tonight's. An unreadable
+    archive *older* than the chosen one is ignored, so one broken artifact
+    does not block every future drill.
+
+  `RESTORE ALL` covers every artifact shape, so the adapter never has to
+  know what you backed up. Unpacked directory backups, `clickhouse-backup`
+  layouts, and PITR are not supported; the README says why for each.
+
 - **Adapters are now verified against several engine versions, and the
   claim has to earn itself.** `docs/capabilities.json` named one version
   per adapter — PostgreSQL 16, MySQL 8.4, MongoDB 7, SQL Server 2022 —
