@@ -185,6 +185,7 @@ jobs:
           ls -1 dist/Formula
 
       - name: attest build provenance
+        id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
@@ -192,6 +193,16 @@ jobs:
             dist/*.deb
             dist/*.rpm
             dist/*.apk
+
+      - name: attach the provenance bundle to the assets
+        # The attestations live in GitHub's API either way; this puts the
+        # same Sigstore bundles next to the artifacts they vouch for, so a
+        # downloader can verify without asking the API which attestations
+        # exist — and so the signing material survives anything that
+        # happens to the API's availability. The name matters: scanners
+        # (OpenSSF Scorecard among them) recognise signing material on a
+        # release by the *.intoto.jsonl suffix.
+        run: cp "${{ steps.attest.outputs.bundle-path }}" dist/provenance.intoto.jsonl
 
       - name: draft the release
         env:
@@ -228,6 +239,15 @@ jobs:
             echo
             echo '```sh'
             echo "gh attestation verify probavi_${VERSION}_linux_amd64.tar.gz --repo ${GITHUB_REPOSITORY}"
+            echo '```'
+            echo
+            echo "The same attestations are attached here as \`provenance.intoto.jsonl\`,"
+            echo "so the check also works from the downloaded bundle instead of querying"
+            echo "the API for it:"
+            echo
+            echo '```sh'
+            echo "gh attestation verify probavi_${VERSION}_linux_amd64.tar.gz \\"
+            echo "  --bundle provenance.intoto.jsonl --repo ${GITHUB_REPOSITORY}"
             echo '```'
             echo
             echo "## Linux packages"
@@ -281,6 +301,7 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             dist/*.tar.gz dist/*.deb dist/*.rpm dist/*.apk \
             dist/PKGBUILD dist/*.ebuild dist/Formula/*.rb dist/SHA256SUMS \
+            dist/provenance.intoto.jsonl \
             --draft --verify-tag --title "probavi ${GITHUB_REF_NAME}" --notes-file notes.md
 
   image:
