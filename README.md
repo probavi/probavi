@@ -316,7 +316,7 @@ Probavi will **not**: take backups, implement its own scheduler, manage database
 
 ## Contributing
 
-The adapter protocol (v0) and evidence schema (v2) specs in `docs/` are normative and frozen — feedback on them is the most valuable contribution right now; open an issue. Machine-readable JSON Schemas for both live in `docs/schemas/`. Code contributions are welcome under DCO sign-off (`git commit -s`): start with `AGENTS.md` (the engineering rules this repo is held to) and the skills under `.claude/skills/`, which double as contributor guides for adapter and evidence work. New adapters can be built in any language from `docs/adapter-protocol.md` alone — that is the point of the protocol.
+The adapter protocol (v0) and evidence schema (v2) specs in `docs/` are normative and frozen — feedback on them is the most valuable contribution right now; open an issue. Machine-readable JSON Schemas for both live in `docs/schemas/`. Code contributions are welcome under DCO sign-off (`git commit -s`): start with `AGENTS.md` (the engineering rules this repo is held to) and the skills under `.claude/skills/`, which double as contributor guides for adapter and evidence work. New adapters can be built in any language from `docs/adapter-protocol.md` alone — that is the point of the protocol. The full guide is [CONTRIBUTING.md](CONTRIBUTING.md); [GOVERNANCE.md](GOVERNANCE.md) says how decisions are made and which commitments stand, and the [code of conduct](CODE_OF_CONDUCT.md) applies in every project space.
 
 ## Development transparency
 
