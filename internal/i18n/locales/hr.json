@@ -75,5 +75,6 @@
   "members[%d]: duplicate dependency %q": "members[%d]: duplicirana ovisnost %q",
   "members[%d]: depends_on references unknown member %q": "members[%d]: depends_on upućuje na nepoznatog člana %q",
   "dependency cycle involving members: %s": "ciklus ovisnosti koji obuhvaća članove: %s",
-  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "članovi %s i %s dijele dokazni dnevnik %s dok je max_parallel %d — istodobne vježbe nad istim dnevnikom padaju na njegovom zaključavanju s jednim piscem; koristite zaseban dnevnik po članu ili max_parallel: 1"
+  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "članovi %s i %s dijele dokazni dnevnik %s dok je max_parallel %d — istodobne vježbe nad istim dnevnikom padaju na njegovom zaključavanju s jednim piscem; koristite zaseban dnevnik po članu ili max_parallel: 1",
+  "probavi evidence verify: the log is intact but holds no records — nothing has been proven, and this exits 0 exactly as a log of verified drills does\n": "probavi evidence verify: dnevnik je neoštećen, ali ne sadrži dokazne zapise — ništa nije dokazano, a izlazni kod je 0 jednako kao kod dnevnika s provjerenim vježbama\n"
 }

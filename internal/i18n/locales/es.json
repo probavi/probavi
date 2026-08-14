@@ -75,5 +75,6 @@
   "members[%d]: duplicate dependency %q": "members[%d]: dependencia duplicada %q",
   "members[%d]: depends_on references unknown member %q": "members[%d]: depends_on hace referencia a un miembro desconocido %q",
   "dependency cycle involving members: %s": "ciclo de dependencias entre los miembros: %s",
-  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "los miembros %s y %s comparten el log de evidencias %s mientras max_parallel es %d — simulacros simultáneos sobre un mismo log fallan en su bloqueo de escritor único; use un log por miembro o max_parallel: 1"
+  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "los miembros %s y %s comparten el log de evidencias %s mientras max_parallel es %d — simulacros simultáneos sobre un mismo log fallan en su bloqueo de escritor único; use un log por miembro o max_parallel: 1",
+  "probavi evidence verify: the log is intact but holds no records — nothing has been proven, and this exits 0 exactly as a log of verified drills does\n": "probavi evidence verify: el log está intacto pero no contiene registros de evidencia — no se ha probado nada, y el código de salida es 0 igual que en un log de simulacros verificados\n"
 }

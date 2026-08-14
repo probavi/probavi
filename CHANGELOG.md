@@ -49,6 +49,27 @@ always called out explicitly.
 
 ### Added
 
+- **`evidence verify` now says when an intact log proves nothing.** An empty
+  evidence log verifies: no lines, no damage, no failed assertion, so the
+  schema's algorithm returns VALID (§9) and the command exits `0` — exactly
+  as a log full of verified drills does. That is the right answer to the
+  question a verifier asks, which is whether the file was tampered with
+  rather than whether any drill was ever run, but it means a monitoring
+  check that branches on the exit status cannot tell *"every drill
+  verified"* from *"nothing has ever run"*.
+
+  Both verifiers — `probavi evidence verify` and the independent
+  `probavi-evidence-verify` — now write one line to **stderr** in that case.
+  Nothing else moves: the exit code is normative and stays `0`, and the
+  machine-readable result on stdout is untouched (it already carries the
+  record count, which is what a script should branch on). The message is
+  translated into all 23 shipped locales.
+
+  Surfaced by the new fuzz targets, which initially asserted that VALID
+  implies something was verified. The specification disagreed, and it was
+  right; the assertion was wrong. What survived was the observation that the
+  two cases look identical from the outside.
+
 - **A ClickHouse adapter** (`adapters/clickhouse` 0.1.0), the fifth engine
   and the first one added since the engine catalog went into `ROADMAP.md`.
   It restores native backup archives — `BACKUP … TO File('name.zip')` —

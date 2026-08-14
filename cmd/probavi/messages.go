@@ -20,8 +20,13 @@ const (
 
 	msgVerifyFlagsRequired = "probavi evidence verify: --log and at least one --key are required\n"
 	msgVerifyEncodeResult  = "probavi evidence verify: encode result: %v\n"
-	msgKeygenOutRequired   = "probavi evidence keygen: --out is required\n"
-	msgKeygenEncodeResult  = "probavi evidence keygen: encode result: %v\n"
+	// An intact log with nothing in it is the one verdict a reader can
+	// misread as good news: it exits 0, exactly like a log of verified
+	// drills. The exit code is normative (evidence schema §9) and stays
+	// as it is; the difference is stated instead.
+	msgVerifyNoRecords    = "probavi evidence verify: the log is intact but holds no records — nothing has been proven, and this exits 0 exactly as a log of verified drills does\n"
+	msgKeygenOutRequired  = "probavi evidence keygen: --out is required\n"
+	msgKeygenEncodeResult = "probavi evidence keygen: encode result: %v\n"
 
 	msgConformanceAdapterRequired = "probavi adapter conformance: exactly one adapter name or executable path is required\n"
 	msgConformanceBadSourceParam  = "probavi adapter conformance: --source-param %q is not k=v\n"
@@ -92,6 +97,7 @@ var allMessages = []string{
 	msgGameDayEncodeSummary,
 	msgVerifyFlagsRequired,
 	msgVerifyEncodeResult,
+	msgVerifyNoRecords,
 	msgKeygenOutRequired,
 	msgKeygenEncodeResult,
 	msgConformanceAdapterRequired,

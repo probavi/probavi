@@ -162,6 +162,13 @@ func runEvidenceVerify(args []string, stdout, stderr io.Writer, tr *i18n.T) int 
 		tr.Fprintf(stderr, msgVerifyEncodeResult, err)
 		return exitUsage
 	}
+	// A log that is intact and empty is VALID, and that is the right answer
+	// to the question the verifier asks — whether the file was tampered
+	// with, not whether drills were run. Both answers exit 0, so the one
+	// that proves nothing says so.
+	if res.Status == evidence.StatusValid && res.Records == 0 {
+		tr.Fprintf(stderr, msgVerifyNoRecords)
+	}
 	switch res.Status {
 	case evidence.StatusValid:
 		return exitValid

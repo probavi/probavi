@@ -75,5 +75,6 @@
   "members[%d]: duplicate dependency %q": "members[%d]: spleáchas dúblach %q",
   "members[%d]: depends_on references unknown member %q": "members[%d]: déanann depends_on tagairt do bhall anaithnid %q",
   "dependency cycle involving members: %s": "timthriall spleáchais a bhaineann leis na baill: %s",
-  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "roinneann na baill %s agus %s an loga fianaise %s agus max_parallel ar %d — teipeann ar chleachtaí comhuaineacha ar an loga céanna mar gheall ar a ghlas aonscríbhneora; úsáid loga ar leith do gach ball nó max_parallel: 1"
+  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "roinneann na baill %s agus %s an loga fianaise %s agus max_parallel ar %d — teipeann ar chleachtaí comhuaineacha ar an loga céanna mar gheall ar a ghlas aonscríbhneora; úsáid loga ar leith do gach ball nó max_parallel: 1",
+  "probavi evidence verify: the log is intact but holds no records — nothing has been proven, and this exits 0 exactly as a log of verified drills does\n": "probavi evidence verify: tá an loga slán ach níl aon taifead fianaise ann — níor cruthaíodh faic, agus is é 0 an cód scoir díreach mar a bheadh i loga de chleachtaí fíoraithe\n"
 }

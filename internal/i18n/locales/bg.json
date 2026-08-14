@@ -75,5 +75,6 @@
   "members[%d]: duplicate dependency %q": "members[%d]: повтаряща се зависимост %q",
   "members[%d]: depends_on references unknown member %q": "members[%d]: depends_on сочи към непознат член %q",
   "dependency cycle involving members: %s": "цикъл от зависимости между членовете: %s",
-  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "членовете %s и %s споделят доказателствения журнал %s, докато max_parallel е %d — едновременни учения върху един журнал се провалят на заключването му за единствен писател; използвайте отделен журнал за всеки член или max_parallel: 1"
+  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "членовете %s и %s споделят доказателствения журнал %s, докато max_parallel е %d — едновременни учения върху един журнал се провалят на заключването му за единствен писател; използвайте отделен журнал за всеки член или max_parallel: 1",
+  "probavi evidence verify: the log is intact but holds no records — nothing has been proven, and this exits 0 exactly as a log of verified drills does\n": "probavi evidence verify: журналът е непокътнат, но не съдържа доказателствени записи — нищо не е доказано, а изходният код е 0, точно както при журнал с проверени учения\n"
 }

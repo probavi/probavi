@@ -75,5 +75,6 @@
   "members[%d]: duplicate dependency %q": "members[%d]: dubleret afhængighed %q",
   "members[%d]: depends_on references unknown member %q": "members[%d]: depends_on henviser til ukendt medlem %q",
   "dependency cycle involving members: %s": "afhængighedscyklus der omfatter medlemmerne: %s",
-  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "medlemmerne %s og %s deler bevisloggen %s, mens max_parallel er %d — samtidige øvelser mod samme log fejler på dens enkeltskriverlås; brug en log pr. medlem eller max_parallel: 1"
+  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "medlemmerne %s og %s deler bevisloggen %s, mens max_parallel er %d — samtidige øvelser mod samme log fejler på dens enkeltskriverlås; brug en log pr. medlem eller max_parallel: 1",
+  "probavi evidence verify: the log is intact but holds no records — nothing has been proven, and this exits 0 exactly as a log of verified drills does\n": "probavi evidence verify: loggen er intakt, men indeholder ingen bevisposter — intet er bevist, og afslutningskoden er 0 præcis som for en log med verificerede øvelser\n"
 }

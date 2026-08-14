@@ -75,5 +75,6 @@
   "members[%d]: duplicate dependency %q": "members[%d]: dépendance %q en double",
   "members[%d]: depends_on references unknown member %q": "members[%d]: depends_on fait référence au membre inconnu %q",
   "dependency cycle involving members: %s": "cycle de dépendances impliquant les membres : %s",
-  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "les membres %s et %s partagent le journal de preuves %s alors que max_parallel vaut %d — des exercices simultanés sur un même journal échouent à cause de son verrou à rédacteur unique ; utilisez un journal par membre ou max_parallel: 1"
+  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "les membres %s et %s partagent le journal de preuves %s alors que max_parallel vaut %d — des exercices simultanés sur un même journal échouent à cause de son verrou à rédacteur unique ; utilisez un journal par membre ou max_parallel: 1",
+  "probavi evidence verify: the log is intact but holds no records — nothing has been proven, and this exits 0 exactly as a log of verified drills does\n": "probavi evidence verify: le journal est intact mais ne contient aucun enregistrement de preuve — rien n'a été prouvé, et le code de sortie est 0 comme pour un journal d'exercices vérifiés\n"
 }

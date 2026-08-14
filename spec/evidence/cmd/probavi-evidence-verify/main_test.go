@@ -64,6 +64,34 @@ func TestValidLogExitsZero(t *testing.T) {
 	}
 }
 
+// TestEmptyLogWarnsWithoutChangingTheVerdict covers the verdict most likely
+// to be misread: an intact log with nothing in it verifies, and exits 0
+// exactly as a log of verified drills does. The §9 exit code stays; the
+// difference is said out loud on stderr.
+func TestEmptyLogWarnsWithoutChangingTheVerdict(t *testing.T) {
+	empty := filepath.Join(t.TempDir(), "empty.jsonl")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatalf("write empty log: %v", err)
+	}
+	code, stdout, stderr := runCLI(t, "--log", empty, "--key", examplePath("signer.pub"))
+	if code != exitValid {
+		t.Fatalf("exit = %d, want %d — the §9 exit code must not move", code, exitValid)
+	}
+	var res struct {
+		Status  string `json:"status"`
+		Records int    `json:"records"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("stdout is not JSON (%q): %v", stdout, err)
+	}
+	if res.Status != "VALID" || res.Records != 0 {
+		t.Errorf("result = %s with %d records, want VALID with 0", res.Status, res.Records)
+	}
+	if !strings.Contains(stderr, "holds no records") {
+		t.Errorf("stderr = %q, want it to say the log proves nothing", stderr)
+	}
+}
+
 func TestEveryPublishedVersionVerifies(t *testing.T) {
 	key := examplePath("signer.pub")
 	for _, name := range []string{"log_v0.jsonl", "log_v1.jsonl", "log_v2.jsonl"} {
