@@ -1,5 +1,5 @@
 {
-  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the image listed under verified, so neither can drift. See docs/capabilities.md.",
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. See docs/capabilities.md and docs/engine-versions.md.",
   "id": "mssql",
   "name": "SQL Server",
   "status": "experimental",
@@ -7,7 +7,19 @@
   "conformance_verified": true,
   "docs": "adapters/mssql/README.md",
   "verified": [
-    { "engine_version": "2022", "image": "mcr.microsoft.com/mssql/server:2022-latest" }
+    {
+      "engine_version": "2019",
+      "image": "mcr.microsoft.com/mssql/server:2019-latest"
+    },
+    {
+      "engine_version": "2022",
+      "image": "mcr.microsoft.com/mssql/server:2022-latest",
+      "baseline": true
+    },
+    {
+      "engine_version": "2025",
+      "image": "mcr.microsoft.com/mssql/server:2025-latest"
+    }
   ],
   "sources": {
     "bak": "One native SQL Server .bak backup file",
