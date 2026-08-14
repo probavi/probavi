@@ -221,18 +221,24 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # The scanner runs on the latest stable toolchain, not the module
-          # minimum from go.mod: govulncheck@latest tracks current Go and
-          # refuses to build on older ones. It analyzes source, so the
-          # toolchain choice affects no build output.
+          # minimum from go.mod. This is not about building the tool: the
+          # standard library is scanned at the toolchain's own version, so
+          # a job pinned to the module minimum would flag stdlib advisories
+          # that the current patch release already fixed — and blame us.
           go-version: stable
           check-latest: true
       - name: govulncheck
-        # Deliberately @latest: a vulnerability scanner is only useful when
-        # current, and the tool version does not affect build outputs.
+        # The scanner is a tool dependency in go.mod: pinned by version,
+        # verified by the checksum database, and kept current by the weekly
+        # Dependabot gomod run — pinned and current are not in tension.
+        # The vulnerability *data* is fetched live regardless of the tool's
+        # version. spec/evidence is a separate module (its isolation is the
+        # point), so it is scanned through -C rather than its own tool
+        # directive, which would put a dependency into the one module whose
+        # value is having none.
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
-          (cd spec/evidence && govulncheck ./...)
+          go tool govulncheck ./...
+          go tool govulncheck -C spec/evidence ./...
 
   adapter-version:
     name: Adapter version bump
