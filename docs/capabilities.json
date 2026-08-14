@@ -70,6 +70,44 @@
       "docs": "adapters/clickhouse/README.md"
     },
     {
+      "id": "etcd",
+      "name": "etcd",
+      "status": "experimental",
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "etcd",
+        "name": "etcd"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "3.5",
+          "image": "quay.io/coreos/etcd:v3.5.21"
+        },
+        {
+          "engine_version": "3.6",
+          "image": "quay.io/coreos/etcd:v3.6.4"
+        }
+      ],
+      "sources": [
+        {
+          "id": "etcd_snapshot",
+          "name": "One snapshot file from `etcdctl snapshot save`",
+          "pitr": false
+        },
+        {
+          "id": "etcd_snapshot_dir",
+          "name": "A directory of snapshot files; the newest file is restored (a snapshot carries no timestamp of its own)",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/etcd/README.md"
+    },
+    {
       "id": "mariadb",
       "name": "MariaDB",
       "status": "experimental",

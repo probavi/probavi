@@ -1,0 +1,24 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. The official etcd images are distroless; the suite runs their binaries in the wrapper image the adapter README documents, built FROM the listed image. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "etcd",
+  "name": "etcd",
+  "status": "experimental",
+  "engine_name": "etcd",
+  "conformance_verified": true,
+  "docs": "adapters/etcd/README.md",
+  "verified": [
+    {
+      "engine_version": "3.5",
+      "image": "quay.io/coreos/etcd:v3.5.21",
+      "baseline": true
+    },
+    {
+      "engine_version": "3.6",
+      "image": "quay.io/coreos/etcd:v3.6.4"
+    }
+  ],
+  "sources": {
+    "etcd_snapshot": "One snapshot file from `etcdctl snapshot save`",
+    "etcd_snapshot_dir": "A directory of snapshot files; the newest file is restored (a snapshot carries no timestamp of its own)"
+  }
+}

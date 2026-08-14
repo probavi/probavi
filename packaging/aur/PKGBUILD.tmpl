@@ -12,7 +12,8 @@
 pkgbase=probavi
 pkgname=('probavi' 'probavi-adapter-postgres' 'probavi-adapter-mysql'
          'probavi-adapter-mongodb' 'probavi-adapter-mssql'
-         'probavi-adapter-clickhouse' 'probavi-adapter-mariadb')
+         'probavi-adapter-clickhouse' 'probavi-adapter-mariadb'
+         'probavi-adapter-etcd')
 pkgver=${PKGVER}
 pkgrel=1
 # The git tag, which differs from pkgver for a pre-release: makepkg
@@ -78,4 +79,5 @@ package_probavi-adapter-mysql()    { _package_adapter mysql; }
 package_probavi-adapter-mongodb()  { _package_adapter mongodb; }
 package_probavi-adapter-clickhouse() { _package_adapter clickhouse; }
 package_probavi-adapter-mariadb()  { _package_adapter mariadb; }
+package_probavi-adapter-etcd()     { _package_adapter etcd; }
 package_probavi-adapter-mssql()    { _package_adapter mssql; }

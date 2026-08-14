@@ -50,6 +50,7 @@ process, so the core alone cannot run a drill:
 | `probavi-adapter-mongodb` | you drill MongoDB |
 | `probavi-adapter-clickhouse` | you drill ClickHouse |
 | `probavi-adapter-mariadb` | you drill MariaDB |
+| `probavi-adapter-etcd` | you drill etcd |
 | `probavi-adapter-mssql` | you drill SQL Server |
 
 **Verifying an evidence log needs only `probavi`.** `probavi evidence
@@ -136,7 +137,7 @@ $ makepkg -si
 ### Gentoo
 
 Each release attaches `probavi-<version>.ebuild`. Adapters are USE flags
-(`postgres`, `mysql`, `mariadb`, `mongodb`, `mssql`, `clickhouse`) rather than separate packages,
+(`postgres`, `mysql`, `mariadb`, `mongodb`, `mssql`, `clickhouse`, `etcd`) rather than separate packages,
 since the tree builds from source anyway. Drop it into a local overlay:
 
 ```console

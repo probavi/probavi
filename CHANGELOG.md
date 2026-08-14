@@ -49,6 +49,33 @@ always called out explicitly.
 
 ### Added
 
+- **An etcd adapter** (`adapters/etcd` 0.1.0), the seventh engine — the
+  smallest adapter in the repository and arguably the highest stakes per
+  byte, because an etcd snapshot that does not restore is a Kubernetes
+  cluster that does not come back. It restores `etcdctl snapshot save`
+  artifacts (`etcd_snapshot`, or newest-in-directory via
+  `etcd_snapshot_dir`), starts the server on the restored data, and
+  serves checks written as etcdctl argument lines. Zero core changes,
+  conformance 15/15, verified against etcd 3.5 and 3.6.
+
+  The engine forced two design points worth knowing. **The official etcd
+  images are distroless** — measured, they contain `etcd`, `etcdctl` and
+  `etcdutl` and nothing else, no shell — while a snapshot restore
+  *requires* starting the server after `etcdutl` writes the data
+  directory, which needs a shell to detach the process. The drill sandbox
+  therefore runs a two-line wrapper image (alpine plus the three binaries
+  copied from the official image; the recipe is in the adapter README),
+  and a drill pointed at the raw official image fails up front with a
+  message that says so. **A snapshot cannot date itself**: it records
+  revisions and raft terms, not wall clocks, so `backup.created_at` is
+  always null, `backup_timezone` is refused rather than ignored, and the
+  directory kind ranks by file time with the shared in-flight guard.
+
+  Snapshots lacking the integrity hash `etcdctl snapshot save` appends —
+  `db` files copied out of a live data directory — are refused with a
+  message that says how to take the backup instead, because the hash is
+  the only self-verification this format has.
+
 - **A MariaDB adapter** (`adapters/mariadb` 0.1.0), the sixth engine.
   Logical restores of `mariadb-dump`/`mysqldump` SQL files
   (`mariadb_dump`), plain or gzip-compressed, single file or
