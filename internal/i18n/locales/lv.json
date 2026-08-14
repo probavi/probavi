@@ -75,5 +75,6 @@
   "members[%d]: duplicate dependency %q": "members[%d]: atkārtota atkarība %q",
   "members[%d]: depends_on references unknown member %q": "members[%d]: depends_on atsaucas uz nezināmu dalībnieku %q",
   "dependency cycle involving members: %s": "atkarību cikls, kas ietver dalībniekus: %s",
-  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "dalībnieki %s un %s koplieto pierādījumu žurnālu %s, kamēr max_parallel ir %d — vienlaicīgas mācības, kas raksta vienā žurnālā, neizdodas tā viena rakstītāja slēdzenes dēļ; izmantojiet atsevišķu žurnālu katram dalībniekam vai max_parallel: 1"
+  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "dalībnieki %s un %s koplieto pierādījumu žurnālu %s, kamēr max_parallel ir %d — vienlaicīgas mācības, kas raksta vienā žurnālā, neizdodas tā viena rakstītāja slēdzenes dēļ; izmantojiet atsevišķu žurnālu katram dalībniekam vai max_parallel: 1",
+  "probavi evidence verify: the log is intact but holds no records — nothing has been proven, and this exits 0 exactly as a log of verified drills does\n": "probavi evidence verify: žurnāls ir vesels, bet nesatur nevienu pierādījumu ierakstu — nekas nav pierādīts, un izejas kods ir 0 tāpat kā žurnālam ar pārbaudītām mācībām\n"
 }

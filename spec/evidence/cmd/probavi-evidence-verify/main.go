@@ -99,6 +99,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
+	// An intact, empty log is VALID — the right answer to the question this
+	// tool asks, which is whether the file was tampered with rather than
+	// whether drills were run. It also exits 0, exactly like a log of
+	// verified drills, so the case that proves nothing says so. The exit
+	// code is normative (evidence-schema.md §9) and does not move.
+	if res.Status == evidence.StatusValid && res.Records == 0 {
+		fmt.Fprintln(stderr, "probavi-evidence-verify: the log is intact but holds no records — "+
+			"nothing has been proven, and this exits 0 exactly as a log of verified drills does")
+	}
+
 	switch res.Status {
 	case evidence.StatusValid:
 		return exitValid

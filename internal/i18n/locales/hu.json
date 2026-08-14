@@ -75,5 +75,6 @@
   "members[%d]: duplicate dependency %q": "members[%d]: ismétlődő függőség: %q",
   "members[%d]: depends_on references unknown member %q": "members[%d]: a depends_on ismeretlen tagra hivatkozik: %q",
   "dependency cycle involving members: %s": "körkörös függőség a következő tagok között: %s",
-  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "a(z) %s és %s tag közös bizonyítéknaplót ír (%s), miközben a max_parallel %d — az ugyanarra a naplóra egyszerre futó drillek elakadnak a napló egyíró-zárján; használj tagonkénti naplót vagy max_parallel: 1-et"
+  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "a(z) %s és %s tag közös bizonyítéknaplót ír (%s), miközben a max_parallel %d — az ugyanarra a naplóra egyszerre futó drillek elakadnak a napló egyíró-zárján; használj tagonkénti naplót vagy max_parallel: 1-et",
+  "probavi evidence verify: the log is intact but holds no records — nothing has been proven, and this exits 0 exactly as a log of verified drills does\n": "probavi evidence verify: a napló sértetlen, de egyetlen bizonyítékrekordot sem tartalmaz — semmi nincs bizonyítva, és a kilépési kód 0, ugyanúgy, mint egy ellenőrzött drilleket tartalmazó naplónál\n"
 }

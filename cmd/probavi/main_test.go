@@ -150,6 +150,51 @@ func TestVerifyDamagedLog(t *testing.T) {
 	}
 }
 
+// TestVerifyEmptyLogWarnsWithoutChangingTheVerdict pins the one verdict a
+// reader can mistake for good news. An intact, empty log is VALID and exits
+// 0 — the specification says so (§9), and the exit code is not ours to move
+// — so the difference between "nothing was ever proven" and "every drill
+// verified" is stated on stderr instead. The machine-readable result on
+// stdout is untouched: it already carries the record count.
+func TestVerifyEmptyLogWarnsWithoutChangingTheVerdict(t *testing.T) {
+	_, _, pubPath := setupLog(t)
+	empty := filepath.Join(t.TempDir(), "empty.jsonl")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatalf("write empty log: %v", err)
+	}
+
+	code, stdout, stderr := runCLI(t, "evidence", "verify", "--log", empty, "--key", pubPath)
+	if code != exitValid {
+		t.Fatalf("exit = %d, want %d — the §9 exit code must not move", code, exitValid)
+	}
+	var res struct {
+		Status  string `json:"status"`
+		Records int    `json:"records"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("stdout is not JSON (%q): %v", stdout, err)
+	}
+	if res.Status != "VALID" || res.Records != 0 {
+		t.Errorf("result = %s with %d records, want VALID with 0", res.Status, res.Records)
+	}
+	if !strings.Contains(stderr, "holds no records") {
+		t.Errorf("stderr = %q, want it to say the log proves nothing", stderr)
+	}
+}
+
+// TestVerifyNonEmptyLogStaysQuiet is the other half: the warning must not
+// fire for a log that did prove something, or it becomes noise nobody reads.
+func TestVerifyNonEmptyLogStaysQuiet(t *testing.T) {
+	logPath, _, pubPath := setupLog(t)
+	code, _, stderr := runCLI(t, "evidence", "verify", "--log", logPath, "--key", pubPath)
+	if code != exitValid {
+		t.Fatalf("exit = %d, want %d (stderr: %s)", code, exitValid, stderr)
+	}
+	if strings.Contains(stderr, "holds no records") {
+		t.Errorf("stderr = %q, want no empty-log warning for a log with records", stderr)
+	}
+}
+
 func TestVerifyTamperedLog(t *testing.T) {
 	logPath, _, pubPath := setupLog(t)
 	raw, err := os.ReadFile(logPath)

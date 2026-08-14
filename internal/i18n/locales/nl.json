@@ -75,5 +75,6 @@
   "members[%d]: duplicate dependency %q": "members[%d]: dubbele afhankelijkheid %q",
   "members[%d]: depends_on references unknown member %q": "members[%d]: depends_on verwijst naar onbekend lid %q",
   "dependency cycle involving members: %s": "afhankelijkheidscyclus met leden: %s",
-  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "leden %s en %s delen bewijslog %s terwijl max_parallel %d is — gelijktijdige oefeningen op één log stranden op zijn single-writer-vergrendeling; gebruik per lid een eigen log of max_parallel: 1"
+  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "leden %s en %s delen bewijslog %s terwijl max_parallel %d is — gelijktijdige oefeningen op één log stranden op zijn single-writer-vergrendeling; gebruik per lid een eigen log of max_parallel: 1",
+  "probavi evidence verify: the log is intact but holds no records — nothing has been proven, and this exits 0 exactly as a log of verified drills does\n": "probavi evidence verify: het log is intact maar bevat geen bewijsrecords — er is niets bewezen, en de afsluitcode is 0 net als bij een log met geverifieerde oefeningen\n"
 }

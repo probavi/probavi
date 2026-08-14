@@ -75,5 +75,6 @@
   "members[%d]: duplicate dependency %q": "members[%d]: διπλότυπη εξάρτηση %q",
   "members[%d]: depends_on references unknown member %q": "members[%d]: το depends_on αναφέρεται σε άγνωστο μέλος %q",
   "dependency cycle involving members: %s": "κύκλος εξαρτήσεων μεταξύ των μελών: %s",
-  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "τα μέλη %s και %s μοιράζονται το αρχείο καταγραφής τεκμηρίων %s ενώ το max_parallel είναι %d — ταυτόχρονες ασκήσεις στο ίδιο αρχείο αποτυγχάνουν στο κλείδωμα μοναδικού εγγραφέα του· χρησιμοποιήστε χωριστό αρχείο ανά μέλος ή max_parallel: 1"
+  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "τα μέλη %s και %s μοιράζονται το αρχείο καταγραφής τεκμηρίων %s ενώ το max_parallel είναι %d — ταυτόχρονες ασκήσεις στο ίδιο αρχείο αποτυγχάνουν στο κλείδωμα μοναδικού εγγραφέα του· χρησιμοποιήστε χωριστό αρχείο ανά μέλος ή max_parallel: 1",
+  "probavi evidence verify: the log is intact but holds no records — nothing has been proven, and this exits 0 exactly as a log of verified drills does\n": "probavi evidence verify: το αρχείο καταγραφής είναι ακέραιο αλλά δεν περιέχει εγγραφές τεκμηρίου — τίποτα δεν αποδείχθηκε, και ο κωδικός εξόδου είναι 0 όπως ακριβώς και σε αρχείο με επαληθευμένες ασκήσεις\n"
 }

@@ -75,5 +75,6 @@
   "members[%d]: duplicate dependency %q": "members[%d]: dependență duplicată %q",
   "members[%d]: depends_on references unknown member %q": "members[%d]: depends_on face referire la membrul necunoscut %q",
   "dependency cycle involving members: %s": "ciclu de dependențe care implică membrii: %s",
-  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "membrii %s și %s împart jurnalul de dovezi %s în timp ce max_parallel este %d — exercițiile simultane pe același jurnal eșuează pe blocarea sa cu un singur scriitor; folosiți câte un jurnal per membru sau max_parallel: 1"
+  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "membrii %s și %s împart jurnalul de dovezi %s în timp ce max_parallel este %d — exercițiile simultane pe același jurnal eșuează pe blocarea sa cu un singur scriitor; folosiți câte un jurnal per membru sau max_parallel: 1",
+  "probavi evidence verify: the log is intact but holds no records — nothing has been proven, and this exits 0 exactly as a log of verified drills does\n": "probavi evidence verify: jurnalul este intact, dar nu conține nicio înregistrare de dovadă — nu s-a dovedit nimic, iar codul de ieșire este 0 exact ca pentru un jurnal cu exerciții verificate\n"
 }

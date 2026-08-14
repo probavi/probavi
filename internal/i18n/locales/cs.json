@@ -75,5 +75,6 @@
   "members[%d]: duplicate dependency %q": "members[%d]: duplicitní závislost %q",
   "members[%d]: depends_on references unknown member %q": "members[%d]: depends_on odkazuje na neznámého člena %q",
   "dependency cycle involving members: %s": "cyklus závislostí zahrnující členy: %s",
-  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "členové %s a %s sdílejí důkazní log %s, zatímco max_parallel je %d — souběžná cvičení nad jedním logem selžou na jeho zámku jediného zapisovatele; použijte log pro každého člena zvlášť, nebo max_parallel: 1"
+  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "členové %s a %s sdílejí důkazní log %s, zatímco max_parallel je %d — souběžná cvičení nad jedním logem selžou na jeho zámku jediného zapisovatele; použijte log pro každého člena zvlášť, nebo max_parallel: 1",
+  "probavi evidence verify: the log is intact but holds no records — nothing has been proven, and this exits 0 exactly as a log of verified drills does\n": "probavi evidence verify: log je neporušený, ale neobsahuje žádné důkazní záznamy — nic nebylo dokázáno a návratový kód je 0 stejně jako u logu s ověřenými cvičeními\n"
 }

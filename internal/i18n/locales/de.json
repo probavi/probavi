@@ -75,5 +75,6 @@
   "members[%d]: duplicate dependency %q": "members[%d]: doppelte Abhängigkeit %q",
   "members[%d]: depends_on references unknown member %q": "members[%d]: depends_on verweist auf unbekanntes Mitglied %q",
   "dependency cycle involving members: %s": "Abhängigkeitszyklus zwischen den Mitgliedern: %s",
-  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "die Mitglieder %s und %s teilen sich das Nachweisprotokoll %s, während max_parallel %d ist — gleichzeitige Drills gegen ein Protokoll scheitern an dessen Single-Writer-Sperre; verwenden Sie je Mitglied ein eigenes Protokoll oder max_parallel: 1"
+  "members %s and %s share evidence log %s while max_parallel is %d — concurrent drills against one log fail on its single-writer lock; use per-member logs or max_parallel: 1": "die Mitglieder %s und %s teilen sich das Nachweisprotokoll %s, während max_parallel %d ist — gleichzeitige Drills gegen ein Protokoll scheitern an dessen Single-Writer-Sperre; verwenden Sie je Mitglied ein eigenes Protokoll oder max_parallel: 1",
+  "probavi evidence verify: the log is intact but holds no records — nothing has been proven, and this exits 0 exactly as a log of verified drills does\n": "probavi evidence verify: das Nachweisprotokoll ist unversehrt, enthält aber keine Nachweisdatensätze — nichts wurde bewiesen, und der Exit-Code ist 0 wie bei einem Protokoll voller verifizierter Drills\n"
 }
