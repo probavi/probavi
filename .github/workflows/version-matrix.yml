@@ -16,15 +16,13 @@
 name: Version matrix
 
 on:
+  # Every pull request restores from each adapter's baseline here — this
+  # workflow *is* the adapter half of the everyday gate, which is why
+  # ci.yml's integration job covers only the packages below adapters/.
   # A pull request that edits what is claimed, or the machinery that turns
-  # a claim into a job, proves itself. Everything else keeps the everyday
-  # gate short by running only the baselines in ci.yml.
+  # a claim into a job, widens to the full matrix instead (see the scope
+  # step below).
   pull_request:
-    paths:
-      - "adapters/*/adapter.json"
-      - ".github/workflows/version-matrix.yml"
-      - "internal/tools/versionmatrix/**"
-      - "internal/capabilities/adapters.go"
   schedule:
     # Weekly, offset from the other scheduled workflows so a slow matrix
     # never queues behind the vulnerability scan or the scorecard.
@@ -53,12 +51,38 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The scope decision below diffs against the pull request's base.
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - name: decide how wide this run has to be
+        id: scope
+        # A schedule, a manual run, and a release tag always run everything.
+        # A pull request runs the baselines — the everyday gate — unless it
+        # touches what is claimed or the machinery that turns a claim into
+        # a job, in which case it has to prove the whole matrix before the
+        # claim can merge (docs/engine-versions.md §3).
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "full=1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          changed=$(git diff --name-only "$BASE_SHA"...HEAD)
+          if printf '%s\n' "$changed" | grep -qE '^(adapters/[^/]+/adapter\.json|internal/tools/versionmatrix/|internal/capabilities/adapters\.go|\.github/workflows/version-matrix\.yml)'; then
+            echo "full=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "full=0" >> "$GITHUB_OUTPUT"
+          fi
       - name: read the versions the manifests claim
         id: list
-        run: echo "targets=$(go run ./internal/tools/versionmatrix)" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ "${{ steps.scope.outputs.full }}" = "1" ]; then
+            echo "targets=$(go run ./internal/tools/versionmatrix)" >> "$GITHUB_OUTPUT"
+          else
+            echo "targets=$(go run ./internal/tools/versionmatrix -baselines-only)" >> "$GITHUB_OUTPUT"
+          fi
 
   restore:
     name: ${{ matrix.target.adapter }} ${{ matrix.target.engine_version }}
