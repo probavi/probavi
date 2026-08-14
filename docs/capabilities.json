@@ -70,6 +70,57 @@
       "docs": "adapters/clickhouse/README.md"
     },
     {
+      "id": "mariadb",
+      "name": "MariaDB",
+      "status": "experimental",
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "mariadb",
+        "name": "MariaDB"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "10.11",
+          "image": "mariadb:10.11"
+        },
+        {
+          "engine_version": "11.4",
+          "image": "mariadb:11.4"
+        },
+        {
+          "engine_version": "11.8",
+          "image": "mariadb:11.8"
+        },
+        {
+          "engine_version": "12.3",
+          "image": "mariadb:12.3"
+        }
+      ],
+      "sources": [
+        {
+          "id": "mariadb_backup",
+          "name": "An unprepared mariadb-backup full backup (physical restore)",
+          "pitr": false
+        },
+        {
+          "id": "mariadb_dump",
+          "name": "One mariadb-dump (or mysqldump) SQL file, plain or gzip-compressed",
+          "pitr": false
+        },
+        {
+          "id": "mariadb_dump_dir",
+          "name": "A directory of dump files, plain or gzip-compressed; the one whose own trailer records the newest time is restored",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/mariadb/README.md"
+    },
+    {
       "id": "mongodb",
       "name": "MongoDB",
       "status": "experimental",

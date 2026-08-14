@@ -49,6 +49,42 @@ always called out explicitly.
 
 ### Added
 
+- **A MariaDB adapter** (`adapters/mariadb` 0.1.0), the sixth engine.
+  Logical restores of `mariadb-dump`/`mysqldump` SQL files
+  (`mariadb_dump`), plain or gzip-compressed, single file or
+  newest-in-directory (`mariadb_dump_dir`), and **physical restores of
+  unprepared `mariadb-backup` full backups** (`mariadb_backup`) — for
+  which, unlike the sibling adapter's XtraBackup flow, no separate tool
+  image is needed: the official `mariadb` images carry everything. Zero
+  core changes, conformance 15/15, verified against MariaDB 10.11, 11.4,
+  11.8 and 12.3.
+
+  A separate adapter rather than a second engine under `adapters/mysql`,
+  and the deciding fact is measured: **the official `mariadb:12` image no
+  longer ships `mysql`-named binaries at all**, so the sibling adapter —
+  which drives the `mysql` client — cannot even start against the newest
+  MariaDB line. Every drill here runs the `mariadb`-named tools, and every
+  evidence record names `engine: mariadb`, which is what an auditor should
+  read for a MariaDB restore.
+
+  Two lessons from the sibling's open defects are built in rather than
+  inherited: dumps are fed to the client on **stdin**, never through the
+  client-side `source` command whose handling shifted under the MySQL 9
+  client; and `mariadbd` having no `--daemonize` (measured) means the
+  physical flow backgrounds the server and, when readiness times out,
+  reads the server's own error log so a start failure names the engine's
+  reason instead of "never became ready". The dump-completeness gate
+  carries over: a dump that announces itself must end with its
+  `-- Dump completed` sign-off, and both banner lineages are recognised.
+  Both metadata generations of the physical format are read too — running
+  every claimed version before claiming it caught that MariaDB 11.0
+  renamed `xtrabackup_checkpoints`/`xtrabackup_info` to
+  `mariadb_backup_*`, which a 10.11-only test would never have shown.
+
+  Not yet ported: the `*_with_users` accounts kind — MariaDB's account and
+  role machinery differs enough from MySQL 8's that the principal-chain
+  verification will be ported measured, not assumed.
+
 - **`evidence verify` now says when an intact log proves nothing.** An empty
   evidence log verifies: no lines, no damage, no failed assertion, so the
   schema's algorithm returns VALID (§9) and the command exits `0` — exactly
