@@ -1,0 +1,93 @@
+# Probavi fuzzing — runs the fuzz targets as fuzzers rather than as
+# regression tests.
+#
+# Every ordinary `go test` run already executes each target's seed corpus,
+# which catches regressions against inputs somebody thought of. That is not
+# fuzzing. This workflow gives each target a bounded budget to look for the
+# inputs nobody thought of, weekly and on demand, and keeps whatever it
+# finds: a crasher is written into testdata/fuzz/ and uploaded, so the
+# failing input survives the runner and can be committed as a permanent
+# seed.
+#
+# The targets are discovered rather than listed. A target added to a package
+# joins this run by existing, which is the same rule the version matrix
+# follows for engine versions.
+
+name: Fuzz
+
+on:
+  schedule:
+    # Weekly, offset from the other scheduled workflows.
+    - cron: "19 3 * * 3"
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: "Budget per target (Go duration)"
+        required: false
+        default: "60s"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      # A crasher in one module says nothing about the other, and the run
+      # exists to learn about both.
+      fail-fast: false
+      matrix:
+        # The two modules of this repository. spec/evidence is separate on
+        # purpose — it is the independent verifier — so it needs its own
+        # invocation here exactly as it does for every other gate.
+        module: [".", "spec/evidence"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: fuzz every target
+        working-directory: ${{ matrix.module }}
+        env:
+          FUZZTIME: ${{ inputs.fuzztime || '60s' }}
+        run: |
+          set -euo pipefail
+          status=0
+          found=0
+          for pkg in $(go list ./...); do
+            for target in $(go test -list '^Fuzz' "$pkg" 2>/dev/null | grep '^Fuzz' || true); do
+              found=$((found + 1))
+              echo "::group::$pkg $target ($FUZZTIME)"
+              if ! go test "$pkg" -run "^${target}$" -fuzz "^${target}$" -fuzztime="$FUZZTIME"; then
+                echo "::error::$target found a failing input"
+                status=1
+              fi
+              echo "::endgroup::"
+            done
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no fuzz targets found in ${{ matrix.module }} — this job would pass vacuously"
+            exit 1
+          fi
+          echo "fuzzed $found targets"
+          exit "$status"
+
+      - name: keep what it found
+        # Only reached when a target failed. The crasher Go wrote is the
+        # whole value of the run: without it the input is lost with the
+        # runner, and the finding becomes a story rather than a test.
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-crashers-${{ strategy.job-index }}
+          path: ${{ matrix.module }}/**/testdata/fuzz/**
+          if-no-files-found: ignore
