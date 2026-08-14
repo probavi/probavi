@@ -19,8 +19,17 @@ permissions:
   contents: read
 
 jobs:
+  # A tagged version publishes docs/capabilities.json, and every engine
+  # version in it says CI restores from that version. The everyday CI run
+  # only proves the baseline, so the full matrix runs here: a release
+  # cannot ship a claim this tag has not re-earned.
+  version-matrix:
+    name: Version matrix
+    uses: ./.github/workflows/version-matrix.yml
+
   release:
     name: Build artifacts and draft release
+    needs: version-matrix
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

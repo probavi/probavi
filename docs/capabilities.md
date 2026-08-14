@@ -30,7 +30,9 @@ describe; on any disagreement, those documents win.
    so a listed version is one CI exercises. Render it as *"verified
    against PostgreSQL 16"*. Do **not** render it as a supported-version
    range: this project makes no such claim, and inventing one is exactly
-   the drift this file exists to prevent.
+   the drift this file exists to prevent. How versions get on the list,
+   and when CI re-earns each of them, is normative in
+   [`engine-versions.md`](engine-versions.md).
 
 4. **Deterministic.** No timestamps, no build metadata, no version stamp.
    The bytes change when a capability changes and at no other time.

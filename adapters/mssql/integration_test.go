@@ -47,17 +47,19 @@ const orphanedUsersSQL = "SET NOCOUNT ON; SELECT dp.name FROM sys.database_princ
 	"LEFT JOIN sys.server_principals sp ON dp.sid = sp.sid " +
 	"WHERE dp.type = 'S' AND dp.authentication_type = 1 AND sp.sid IS NULL ORDER BY dp.name"
 
-// verifiedImage is the engine image adapter.json declares this adapter
-// verified against. The manifest and this suite read the same value, so
-// docs/capabilities.json can never claim an engine version CI does not
-// actually restore from (docs/capabilities.md §1).
+// verifiedImage is the engine image this run restores from: the manifest's
+// baseline, or the version-matrix job's PROBAVI_IT_IMAGE when it names one
+// the manifest already lists. The manifest and this suite read the same
+// values, so docs/capabilities.json can never claim an engine version CI
+// does not actually restore from (docs/capabilities.md §1,
+// docs/engine-versions.md §2).
 func verifiedImage(t *testing.T) string {
 	t.Helper()
 	m, err := capabilities.LoadAdapterManifest(".")
 	if err != nil {
 		t.Fatalf("load adapter manifest: %v", err)
 	}
-	image, err := m.VerifiedImage()
+	image, err := m.SandboxImage(os.Getenv("PROBAVI_IT_IMAGE"))
 	if err != nil {
 		t.Fatalf("adapter manifest: %v", err)
 	}

@@ -169,6 +169,12 @@ jobs:
         # with the setup steps above, an unreachable cluster or ssh target
         # is a hard failure — these tests must never silently skip the axes
         # this job exists to prove.
+        #
+        # PROBAVI_IT_IMAGE is deliberately unset: every adapter restores
+        # from its manifest baseline here, which keeps the everyday gate in
+        # minutes. The other engine versions the manifests claim run in
+        # version-matrix.yml — weekly, on demand, and before every release
+        # tag (docs/engine-versions.md §3).
         run: PROBAVI_IT_K8S=1 PROBAVI_IT_SSH=1 PROBAVI_IT_REMOTEHOST=1 go test -race -tags integration ./...
 
   capabilities:

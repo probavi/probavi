@@ -1,0 +1,89 @@
+# Probavi version matrix — restores from every engine version the adapter
+# manifests claim, not only the baseline the everyday CI run exercises.
+#
+# docs/capabilities.json states which engine versions this repository
+# restores from, and downstream surfaces may claim nothing else. That claim
+# is only worth the run behind it, so the matrix is derived from the same
+# manifests rather than written here: `go run ./internal/tools/versionmatrix`
+# turns every verified entry into one job, and a version nobody can run is
+# a version nobody can claim (docs/engine-versions.md).
+#
+# It runs weekly, on demand, and — through workflow_call — before every
+# release tag. Third-party actions are pinned to commit SHAs (AGENTS.md
+# §3.3), and no job here writes to the repository, so each checkout drops
+# the token it was handed.
+
+name: Version matrix
+
+on:
+  # A pull request that edits what is claimed, or the machinery that turns
+  # a claim into a job, proves itself. Everything else keeps the everyday
+  # gate short by running only the baselines in ci.yml.
+  pull_request:
+    paths:
+      - "adapters/*/adapter.json"
+      - ".github/workflows/version-matrix.yml"
+      - "internal/tools/versionmatrix/**"
+      - "internal/capabilities/adapters.go"
+  schedule:
+    # Weekly, offset from the other scheduled workflows so a slow matrix
+    # never queues behind the vulnerability scan or the scorecard.
+    - cron: "37 2 * * 2"
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# Deliberately no cancel-in-progress: a run of this workflow is the
+# evidence behind a published claim, and a release gate that a scheduled
+# run can cancel is not a gate.
+concurrency:
+  group: version-matrix-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  enumerate:
+    name: Enumerate claimed versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      targets: ${{ steps.list.outputs.targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: read the versions the manifests claim
+        id: list
+        run: echo "targets=$(go run ./internal/tools/versionmatrix)" >> "$GITHUB_OUTPUT"
+
+  restore:
+    name: ${{ matrix.target.adapter }} ${{ matrix.target.engine_version }}
+    needs: enumerate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # One engine version failing must not hide the others: the point of
+      # this workflow is to learn which claims still hold, not to stop at
+      # the first that does not.
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.enumerate.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: restore from ${{ matrix.target.image }}
+        # PROBAVI_IT_IMAGE overrides the manifest baseline for this job.
+        # The suite refuses an image the manifest does not list, so a typo
+        # here fails loudly instead of reporting a green run for a version
+        # this repository never claimed.
+        env:
+          PROBAVI_IT_IMAGE: ${{ matrix.target.image }}
+        run: go test -race -tags integration ./adapters/${{ matrix.target.adapter }}/...

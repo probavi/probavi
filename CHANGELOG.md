@@ -49,6 +49,55 @@ always called out explicitly.
 
 ### Added
 
+- **Adapters are now verified against several engine versions, and the
+  claim has to earn itself.** `docs/capabilities.json` named one version
+  per adapter — PostgreSQL 16, MySQL 8.4, MongoDB 7, SQL Server 2022 —
+  because the accessor the integration suites called returned the *first*
+  entry of a list that could already hold many. Listing more would have
+  published claims nothing exercised, which is the failure that file exists
+  to prevent.
+
+  Exactly one entry per adapter is now the `baseline` every push restores
+  from; the rest run in a matrix that fires weekly, on any pull request
+  that edits a manifest, and again before every release tag. The jobs are
+  generated from the manifests rather than written into a workflow, a test
+  fails when the jobs and the published claims disagree in either
+  direction, and the suites refuse an image the manifest does not list — so
+  no workflow can report a green run for a version this project never
+  claimed.
+
+  Now verified: **PostgreSQL 14, 15, 16, 17**, **MySQL 8.4**, **MongoDB 7.0
+  and 8.0**, **SQL Server 2019, 2022 and 2025**.
+
+  Policy in `docs/engine-versions.md`: what qualifies for the list, when
+  each version runs, and the two things `verified` never means — that an
+  unlisted version fails, or that a listed one says anything about your
+  data. Physical restores get a paragraph of their own, because for
+  pgBackRest and XtraBackup sources the matrix is correctness rather than
+  test hygiene: those formats restore into their own major version and no
+  other.
+
+- **Three engine versions do not work, and the matrix found all three on
+  its first run.** They are named here rather than left as gaps, because a
+  drill failing for the adapter's reasons is worse than one that never ran:
+
+  - **MySQL 9.x** — the adapter loads a dump with `mysql -e "source …"`.
+    The 8.4 client still interprets that client-side command; the 9.7
+    client hands it to the server, which rejects it. Every logical restore
+    fails, and the verdict is `source_corrupt` — the drill blames a
+    perfectly good backup for an adapter defect.
+  - **PostgreSQL 18** — the official image moved `PGDATA` from
+    `/var/lib/postgresql/data` to `/var/lib/postgresql/18/docker`, and the
+    adapter holds the old path as a constant. Logical dumps restore fine;
+    both pgBackRest paths, plain and PITR, fail before they start.
+  - **SQL Server 2017** — the adapter runs
+    `/opt/mssql-tools18/bin/sqlcmd`, which that image does not ship; its
+    client is at `/opt/mssql-tools/bin/sqlcmd`. The engine starts and
+    reports itself ready, then every command fails and the drill times out
+    blaming the engine.
+
+  All three are tracked and none is listed as verified until it is fixed.
+
 - **The postgres adapter restores plain-SQL dumps, and gzip-compressed
   dumps of either format** (postgres 0.9.0). `pg_dump`'s *default* output
   is plain SQL, and `pg_dump … | gzip > db.sql.gz` is what a great many

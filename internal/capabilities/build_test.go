@@ -54,7 +54,7 @@ func validManifest() map[string]any {
 		"conformance_verified": true,
 		"docs":                 "docs/capabilities.md",
 		"verified": []any{
-			map[string]any{"engine_version": "16", "image": "demo:16"},
+			map[string]any{"engine_version": "16", "image": "demo:16", "baseline": true},
 		},
 		"sources": map[string]any{"dump": "One demo dump file"},
 	}
@@ -192,6 +192,46 @@ func TestBuildRejectsInconsistentAdapters(t *testing.T) {
 			wantErr: "does not appear in image tag",
 		},
 		{
+			// Without a baseline the everyday integration job has no image
+			// to restore from, and the matrix would rest on whichever
+			// entry happened to be written first.
+			name: "no entry marked baseline",
+			mutate: func(_ *testing.T, a *fixtureAdapter) {
+				a.manifest["verified"] = []any{map[string]any{"engine_version": "16", "image": "demo:16"}}
+			},
+			wantErr: "marked baseline, want exactly 1",
+		},
+		{
+			name: "several entries marked baseline",
+			mutate: func(_ *testing.T, a *fixtureAdapter) {
+				a.manifest["verified"] = []any{
+					map[string]any{"engine_version": "16", "image": "demo:16", "baseline": true},
+					map[string]any{"engine_version": "17", "image": "demo:17", "baseline": true},
+				}
+			},
+			wantErr: "marked baseline, want exactly 1",
+		},
+		{
+			name: "the same engine version listed twice",
+			mutate: func(_ *testing.T, a *fixtureAdapter) {
+				a.manifest["verified"] = []any{
+					map[string]any{"engine_version": "16", "image": "demo:16", "baseline": true},
+					map[string]any{"engine_version": "16", "image": "other/demo:16"},
+				}
+			},
+			wantErr: "is listed twice",
+		},
+		{
+			name: "the same image listed twice",
+			mutate: func(_ *testing.T, a *fixtureAdapter) {
+				a.manifest["verified"] = []any{
+					map[string]any{"engine_version": "16", "image": "demo:16.1", "baseline": true},
+					map[string]any{"engine_version": "16.1", "image": "demo:16.1"},
+				}
+			},
+			wantErr: "is listed twice",
+		},
+		{
 			name:    "docs path that does not exist",
 			mutate:  func(_ *testing.T, a *fixtureAdapter) { a.manifest["docs"] = "docs/no-such-file.md" },
 			wantErr: "is not in the repository",
@@ -295,26 +335,42 @@ func TestBuildRejectsAMissingDocument(t *testing.T) {
 	}
 }
 
-// TestVerifiedImageIsTheOneTestsUse pins the accessor the adapter
+// TestSandboxImageIsTheOneTestsUse pins the accessor the adapter
 // integration suites call, which is what stops a verified version from
 // being one CI never exercises.
-func TestVerifiedImageIsTheOneTestsUse(t *testing.T) {
+func TestSandboxImageIsTheOneTestsUse(t *testing.T) {
 	for _, dir := range adapterDirs(t) {
 		m, err := capabilities.LoadAdapterManifest(dir)
 		if err != nil {
 			t.Fatalf("load %s: %v", dir, err)
 		}
-		image, err := m.VerifiedImage()
+		image, err := m.SandboxImage("")
 		if err != nil {
 			t.Fatalf("%s: %v", dir, err)
 		}
-		if image != m.Verified[0].Image {
-			t.Errorf("%s: VerifiedImage returned %q", dir, image)
+		var baseline string
+		for _, v := range m.Verified {
+			if v.Baseline {
+				baseline = v.Image
+			}
+		}
+		if image != baseline {
+			t.Errorf("%s: SandboxImage(\"\") returned %q, want the baseline %q", dir, image, baseline)
+		}
+		// The matrix names an image the manifest already lists...
+		last := m.Verified[len(m.Verified)-1].Image
+		if got, err := m.SandboxImage(last); err != nil || got != last {
+			t.Errorf("%s: SandboxImage(%q) = %q, %v", dir, last, got, err)
+		}
+		// ...and anything else is refused, so a typo in a workflow cannot
+		// publish a green run for a version this repository never claimed.
+		if _, err := m.SandboxImage(last + "-typo"); err == nil {
+			t.Errorf("%s: SandboxImage accepted an image the manifest does not list", dir)
 		}
 	}
 	empty := &capabilities.AdapterManifest{ID: "demo"}
-	if _, err := empty.VerifiedImage(); err == nil {
-		t.Error("VerifiedImage accepted a manifest with no verified entry")
+	if _, err := empty.SandboxImage(""); err == nil {
+		t.Error("SandboxImage accepted a manifest with no baseline entry")
 	}
 }
 
