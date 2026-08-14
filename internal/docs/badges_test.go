@@ -62,9 +62,19 @@ func TestBadgesPointAtThisRepository(t *testing.T) {
 	}
 }
 
+// bestPracticesProject is this project's registration on the OpenSSF Best
+// Practices site. Unlike every other badge service, bestpractices.dev keys
+// entries by its own numeric id rather than by repository slug, so the
+// slug check below cannot see that the URL is ours — the id is pinned
+// here instead. Entry 14080 declares https://github.com/probavi/probavi
+// as its repository; if the registration is ever redone, this constant
+// must move with it or the badge shows another project's level.
+const bestPracticesProject = "https://www.bestpractices.dev/projects/14080"
+
 // assertReadsThisRepository accepts a badge URL only if it can be traced
 // back to something in this repository: a path that is here, a shields.io
-// badge rendering text of its own, or a service reading this slug.
+// badge rendering text of its own, a service reading this slug, or the
+// pinned Best Practices entry that declares this repository.
 func assertReadsThisRepository(t *testing.T, url string) {
 	t.Helper()
 	if !strings.Contains(url, "://") {
@@ -74,6 +84,9 @@ func assertReadsThisRepository(t *testing.T, url string) {
 		return
 	}
 	if strings.HasPrefix(url, staticBadgePrefix) {
+		return
+	}
+	if url == bestPracticesProject || strings.HasPrefix(url, bestPracticesProject+"/") {
 		return
 	}
 	if !strings.Contains(url, repoSlug) {
