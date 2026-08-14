@@ -66,8 +66,8 @@ always called out explicitly.
   no workflow can report a green run for a version this project never
   claimed.
 
-  Now verified: **PostgreSQL 14, 15, 16, 17**, **MySQL 8.4**, **MongoDB 7.0
-  and 8.0**, **SQL Server 2019, 2022 and 2025**.
+  Now verified: **PostgreSQL 14, 15, 16, 17**, **MySQL 8.4**, **MongoDB
+  7.0**, **SQL Server 2019, 2022 and 2025**.
 
   Policy in `docs/engine-versions.md`: what qualifies for the list, when
   each version runs, and the two things `verified` never means — that an
@@ -97,6 +97,10 @@ always called out explicitly.
     blaming the engine.
 
   All three are tracked and none is listed as verified until it is fixed.
+  A fourth version, **MongoDB 8.0**, restores correctly but is not listed
+  either: one test builds its oplog scenario with a server failpoint 8.0
+  no longer has, and a version stays off the list while anything about it
+  is red — the rule is what makes the rest of the list worth reading.
 
 - **The postgres adapter restores plain-SQL dumps, and gzip-compressed
   dumps of either format** (postgres 0.9.0). `pg_dump`'s *default* output
