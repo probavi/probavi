@@ -1,0 +1,33 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "mariadb",
+  "name": "MariaDB",
+  "status": "experimental",
+  "engine_name": "MariaDB",
+  "conformance_verified": true,
+  "docs": "adapters/mariadb/README.md",
+  "verified": [
+    {
+      "engine_version": "10.11",
+      "image": "mariadb:10.11",
+      "baseline": true
+    },
+    {
+      "engine_version": "11.4",
+      "image": "mariadb:11.4"
+    },
+    {
+      "engine_version": "11.8",
+      "image": "mariadb:11.8"
+    },
+    {
+      "engine_version": "12.3",
+      "image": "mariadb:12.3"
+    }
+  ],
+  "sources": {
+    "mariadb_dump": "One mariadb-dump (or mysqldump) SQL file, plain or gzip-compressed",
+    "mariadb_dump_dir": "A directory of dump files, plain or gzip-compressed; the one whose own trailer records the newest time is restored",
+    "mariadb_backup": "An unprepared mariadb-backup full backup (physical restore)"
+  }
+}
