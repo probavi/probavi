@@ -154,6 +154,38 @@ func TestMatrixCoversEveryClaimedVersion(t *testing.T) {
 	}
 }
 
+// TestBaselinesCoverEveryAdapterExactlyOnce pins what -baselines-only
+// emits: the everyday gate must lose versions, never adapters. A filter
+// that quietly dropped an adapter would leave an engine untested on every
+// push while the run still went green.
+func TestBaselinesCoverEveryAdapterExactlyOnce(t *testing.T) {
+	all, err := enumerate(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatalf("enumerate: %v", err)
+	}
+	adapters := map[string]bool{}
+	for _, t := range all {
+		adapters[t.Adapter] = true
+	}
+
+	got := baselines(all)
+	if len(got) != len(adapters) {
+		t.Fatalf("got %d baselines for %d adapters", len(got), len(adapters))
+	}
+	seen := map[string]int{}
+	for _, tgt := range got {
+		if !tgt.Baseline {
+			t.Errorf("%s %s is not a baseline", tgt.Adapter, tgt.EngineVersion)
+		}
+		seen[tgt.Adapter]++
+	}
+	for adapter := range adapters {
+		if seen[adapter] != 1 {
+			t.Errorf("adapter %s appears %d times in the baseline set, want 1", adapter, seen[adapter])
+		}
+	}
+}
+
 // TestExactlyOneBaselinePerAdapter pins what the everyday integration job
 // runs: one version per adapter, chosen in the manifest rather than by
 // list order.

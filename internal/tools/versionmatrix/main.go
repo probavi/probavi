@@ -34,6 +34,8 @@ type target struct {
 
 func main() {
 	root := flag.String("root", ".", "repository root")
+	baselinesOnly := flag.Bool("baselines-only", false,
+		"emit only each adapter's baseline version — the everyday gate")
 	flag.Parse()
 
 	targets, err := enumerate(*root)
@@ -41,12 +43,28 @@ func main() {
 		fmt.Fprintf(os.Stderr, "versionmatrix: %v\n", err)
 		os.Exit(1)
 	}
+	if *baselinesOnly {
+		targets = baselines(targets)
+	}
 	out, err := json.Marshal(targets)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "versionmatrix: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println(string(out))
+}
+
+// baselines keeps one target per adapter: the version every push has to
+// restore from. The manifest gate guarantees exactly one exists per
+// adapter, so this cannot silently drop an adapter from the run.
+func baselines(targets []target) []target {
+	out := make([]target, 0, len(targets))
+	for _, t := range targets {
+		if t.Baseline {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // enumerate reads every adapter manifest and flattens it into one job per

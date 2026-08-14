@@ -170,12 +170,17 @@ jobs:
         # is a hard failure — these tests must never silently skip the axes
         # this job exists to prove.
         #
-        # PROBAVI_IT_IMAGE is deliberately unset: every adapter restores
-        # from its manifest baseline here, which keeps the everyday gate in
-        # minutes. The other engine versions the manifests claim run in
-        # version-matrix.yml — weekly, on demand, and before every release
-        # tag (docs/engine-versions.md §3).
-        run: PROBAVI_IT_K8S=1 PROBAVI_IT_SSH=1 PROBAVI_IT_REMOTEHOST=1 go test -race -tags integration ./...
+        # Everything except adapters/. Those run in version-matrix.yml,
+        # one job per adapter, which is the same work on more runners:
+        # measured on this job before the split, five engine suites cost
+        # 611 s of its 649 s and did not overlap — a four-vCPU runner
+        # driving five databases under the race detector saturates, so the
+        # wall clock was the sum. Splitting them off takes the everyday
+        # gate from ~13 minutes to under five, and removes the duplication
+        # where a manifest change ran every baseline twice.
+        run: |
+          PROBAVI_IT_K8S=1 PROBAVI_IT_SSH=1 PROBAVI_IT_REMOTEHOST=1 \
+            go test -race -tags integration $(go list ./... | grep -v '/adapters/')
 
   capabilities:
     name: Capabilities manifest
