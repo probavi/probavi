@@ -32,6 +32,44 @@
   },
   "adapters": [
     {
+      "id": "clickhouse",
+      "name": "ClickHouse",
+      "status": "experimental",
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "clickhouse",
+        "name": "ClickHouse"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "26.3",
+          "image": "clickhouse:26.3"
+        },
+        {
+          "engine_version": "26.7",
+          "image": "clickhouse:26.7"
+        }
+      ],
+      "sources": [
+        {
+          "id": "clickhouse_backup",
+          "name": "One native ClickHouse backup archive (BACKUP … TO File('name.zip'))",
+          "pitr": false
+        },
+        {
+          "id": "clickhouse_backup_dir",
+          "name": "A directory of backup archives; the one whose own manifest records the newest backup time is restored",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/clickhouse/README.md"
+    },
+    {
       "id": "mongodb",
       "name": "MongoDB",
       "status": "experimental",
