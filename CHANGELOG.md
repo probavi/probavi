@@ -49,6 +49,18 @@ always called out explicitly.
 
 ### Added
 
+- **Community documents**: [CONTRIBUTING.md](CONTRIBUTING.md),
+  [GOVERNANCE.md](GOVERNANCE.md) and
+  [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). The rules themselves are not
+  new — AGENTS.md has carried the engineering gates and the DCO decision
+  from the start — but a contributor had to assemble them from a document
+  written for coding agents. Now one file says how to contribute, one how
+  decisions are made, one what conduct is expected; and GOVERNANCE.md
+  writes the standing commitments down in one place — verification never
+  paywalled, the open-core list closed, evidence append-only, no
+  telemetry — so a future maintainer inherits them explicitly instead of
+  by folklore.
+
 - **An etcd adapter** (`adapters/etcd` 0.1.0), the seventh engine — the
   smallest adapter in the repository and arguably the highest stakes per
   byte, because an etcd snapshot that does not restore is a Kubernetes
