@@ -5,7 +5,7 @@
 # so what CI proves is exactly what a release publishes. Run from the
 # repository root:
 #
-#   VERSION=0.8.0 ARCH=amd64 packaging/build-packages.sh dist/pkgroot dist
+#   VERSION=0.9.0 ARCH=amd64 packaging/build-packages.sh dist/pkgroot dist
 #
 # Arguments: <staging dir holding the built binaries> <output dir>.
 #

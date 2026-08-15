@@ -11,6 +11,12 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-15
+
+The standing cadence again: exactly one new engine in this cycle —
+Valkey — together with the cross-dialect fence its ROADMAP line
+demanded, enforced on both sides of the fork.
+
 ### Added
 
 - **A Valkey adapter** (`adapters/valkey` 0.1.0), the ninth engine — a
@@ -1851,7 +1857,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/probavi/probavi/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/probavi/probavi/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/probavi/probavi/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/probavi/probavi/compare/v0.6.0...v0.7.0
