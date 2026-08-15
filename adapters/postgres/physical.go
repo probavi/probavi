@@ -60,6 +60,9 @@ func provisionPhysical(ctx context.Context, c *core, req *provisionRequest, src 
 	if perr := checkIdleSandbox(ctx, c); perr != nil {
 		return nil, perr
 	}
+	if perr := checkEngineVersion(ctx, c, repoDBVersion(src.path, stanza)); perr != nil {
+		return nil, perr
+	}
 
 	put, perr := c.putFile(ctx, putFileArgs{SourcePath: src.path, DestPath: repoInSandbox, Mode: "0755"})
 	if perr != nil {
@@ -133,6 +136,51 @@ func checkIdleSandbox(ctx context.Context, c *core) *protoError {
 			"sandbox image lacks pgbackrest (%s): use an image with postgres, pgbackrest, and gosu", firstLine(stderr))
 	}
 	return nil
+}
+
+// engineVersionPattern finds the server version in `postgres --version`
+// output ("postgres (PostgreSQL) 16.9 (Debian 16.9-1.pgdg120+1)").
+var engineVersionPattern = regexp.MustCompile(`\d+(?:\.\d+)*`)
+
+// checkEngineVersion refuses the one pairing a physical restore can never
+// survive: a repository from one PostgreSQL major handed to a sandbox
+// running another (docs/engine-versions.md §5). It refuses only on
+// positive evidence — an unreadable manifest arrives here as "", an
+// unanswerable or unparseable version query skips the check — and the
+// restore then speaks for itself.
+func checkEngineVersion(ctx context.Context, c *core, backupVersion string) *protoError {
+	if backupVersion == "" {
+		return nil
+	}
+	val, stdout, _, perr := c.exec(ctx, execArgs{Argv: []string{"postgres", "--version"}})
+	if perr != nil {
+		return perr
+	}
+	if val.ExitCode != 0 {
+		return nil
+	}
+	engine := engineVersionPattern.FindString(string(stdout))
+	if engine == "" {
+		return nil
+	}
+	// Compare at the granularity the backup states: "16" against the
+	// engine's major, "9.6" against its first two components.
+	series := seriesOf(engine, 1+strings.Count(backupVersion, "."))
+	if series == backupVersion {
+		return nil
+	}
+	return protoErr("invalid_request", false,
+		"the pgBackRest repository holds a PostgreSQL %s backup, but the sandbox engine is PostgreSQL %s: a physical backup restores only into its own major version — use a PostgreSQL %s sandbox image",
+		backupVersion, series, backupVersion)
+}
+
+// seriesOf truncates a version to its first n dot-separated components.
+func seriesOf(version string, n int) string {
+	parts := strings.Split(version, ".")
+	if len(parts) > n {
+		parts = parts[:n]
+	}
+	return strings.Join(parts, ".")
 }
 
 // prepareRestore writes the pgbackrest config, empties the data directory,

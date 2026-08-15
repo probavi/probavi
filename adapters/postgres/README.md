@@ -134,6 +134,16 @@ adapter waits until `pg_is_in_recovery()` reports false — checks never run
 against a still-recovering instance — and the measured `engine_ready` phase
 covers server start plus the full recovery.
 
+Before anything is transferred, the adapter compares the repository's own
+manifest (`db-version` in `backup.info`'s `[db]` section) against the
+sandbox engine's `postgres --version`: a physical backup restores only
+into its own major (docs/engine-versions.md §5), and an impossible
+pairing is refused up front as `invalid_request` with a message naming
+both versions — instead of surfacing whatever pgbackrest prints minutes
+later. The check refuses only on positive evidence: an encrypted or
+otherwise unreadable manifest simply skips it, and the restore speaks for
+itself.
+
 ## Point-in-time recovery (pitr)
 
 The `pgbackrest` kind accepts the protocol's `pitr.target_time` (sent by the

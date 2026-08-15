@@ -195,6 +195,15 @@ declares `pitr: false`.
   Msg 3254 "volume ... is empty", Msg 3242 "not a valid ... backup set")
   is classified `source_corrupt`; restores that run and fail are
   `restore_failed`.
+- SQL Server's version rule is asymmetric: a backup restores onto an
+  engine of the same or a newer major — that is the supported upgrade
+  path — but never onto an older one. The backup header states its origin
+  (`SoftwareVersionMajor`, read from the same `RESTORE HEADERONLY` the
+  selection uses), so a newer backup handed to an older engine is refused
+  before the restore is attempted, as `invalid_request` with a message
+  naming both product versions (docs/engine-versions.md §5). Only the
+  downgrade is refused, and only on positive evidence — a header that
+  does not state a version skips the check.
 
 ## The bak_with_logins kind (server logins first)
 

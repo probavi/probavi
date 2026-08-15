@@ -11,6 +11,27 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **Physical restores refuse the wrong engine version before they start**
+  (postgres 0.10.0, mysql 0.10.0, mariadb 0.2.0, mssql 0.8.0). A physical
+  backup restores only into its own major (PostgreSQL) or release series
+  (MySQL, MariaDB) — `docs/engine-versions.md` §5 recorded the
+  requirement when the version matrix shipped — and every physical format
+  here names its origin server: pgBackRest's `backup.info`,
+  `xtrabackup_info` / `mariadb_backup_info`, and the `.bak` header row
+  the mssql adapter already reads. Each adapter now compares that against
+  the engine in the sandbox and refuses an impossible pairing as
+  `invalid_request`, with a message naming both sides and what to change
+  — where the backup is read host-side, before a byte is transferred —
+  instead of letting the engine fail minutes later in its own words.
+  SQL Server's rule is asymmetric and encoded as such: only the downgrade
+  is refused, because restoring an older backup onto a newer engine is
+  the supported upgrade path. The check refuses only on positive
+  evidence: an encrypted manifest, a missing `server_version`, a header
+  that stops short, or an unanswerable engine skips it, and the restore
+  speaks for itself.
+
 ## [0.7.1] - 2026-08-15
 
 This release corrects the record of v0.7.0, whose git tag was placed one

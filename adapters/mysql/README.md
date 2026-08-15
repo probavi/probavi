@@ -302,6 +302,15 @@ always `root` on the `mysql` system schema (the only database guaranteed
 to exist in an arbitrary restored server). Point checks at restored data
 with schema-qualified table names (e.g. `table: shop.orders`).
 
+Before anything is transferred, the adapter compares the backup's own
+metadata (`server_version` in `xtrabackup_info`) against the sandbox
+engine's `mysqld --version`: a physical backup restores only into its own
+release series — 8.0 into 8.0, 8.4 into 8.4
+(docs/engine-versions.md §5) — and an impossible pairing is refused up
+front as `invalid_request` with a message naming both sides. The check
+refuses only on positive evidence: a backup without a readable
+`server_version` simply skips it, and the restore speaks for itself.
+
 ## The ANSI_QUOTES bridge
 
 The core validates and quotes check identifiers in SQL-standard form

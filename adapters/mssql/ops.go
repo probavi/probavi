@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "mssql"
-	adapterVersion = "0.7.0"
+	adapterVersion = "0.8.0"
 
 	defaultUser     = "sa"
 	defaultDatabase = "probavi"
@@ -177,16 +177,10 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	// only the engine can answer, so the choice happens here rather than on
 	// the host (see backupset.go).
 	bakInSandbox := scratch + "/probavi-restore.bak"
-	chosen, perr := selectBackup(ctx, c, plan, bakInSandbox)
+	chosen, src, perr := selectAndVet(ctx, c, plan, bakInSandbox, logger)
 	if perr != nil {
 		return nil, perr
 	}
-	src, perr := plan.identity(chosen.hostPath, chosen.createdAt)
-	if perr != nil {
-		return nil, perr
-	}
-	logger.Info("source resolved", "path", src.path, "size_bytes", src.sizeBytes,
-		"backup_set", chosen.position)
 
 	state := map[string]any{"database": database}
 	// Server logins go in before the restore: that is the order of the
@@ -229,6 +223,28 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		transfer:    loginsTransfer + chosen.transfer,
 		restore:     loginsLoad + restore.DurationSeconds,
 	}), nil
+}
+
+// selectAndVet picks the backup set the drill restores, resolves its
+// identity, and runs the engine-version pre-check — everything that must
+// be settled about the artifact before any more recovery work is spent on
+// it.
+func selectAndVet(ctx context.Context, c *core, plan *sourcePlan, bakInSandbox string,
+	logger *slog.Logger) (*selection, *resolvedSource, *protoError) {
+	chosen, perr := selectBackup(ctx, c, plan, bakInSandbox)
+	if perr != nil {
+		return nil, nil, perr
+	}
+	src, perr := plan.identity(chosen.hostPath, chosen.createdAt)
+	if perr != nil {
+		return nil, nil, perr
+	}
+	logger.Info("source resolved", "path", src.path, "size_bytes", src.sizeBytes,
+		"backup_set", chosen.position)
+	if perr := checkEngineVersion(ctx, c, chosen.softwareMajor); perr != nil {
+		return nil, nil, perr
+	}
+	return chosen, src, nil
 }
 
 // parseProvisionTarget validates the request's operator-supplied values

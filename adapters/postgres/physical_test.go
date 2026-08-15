@@ -343,6 +343,43 @@ func TestRepoWithAnUnreadableManifest(t *testing.T) {
 	}
 }
 
+// writeVersionedRepoFixture writes a repository whose manifest carries a
+// real [db] section, so the version pre-check has something to read.
+func writeVersionedRepoFixture(t *testing.T, version string) string {
+	t.Helper()
+	repo := writeRepoFixture(t)
+	manifest := "[backup:current]\n" +
+		`20260810-003749F={"backup-timestamp-start":1786289869,"backup-timestamp-stop":1786289873}` + "\n\n" +
+		"[db]\ndb-version=\"" + version + "\"\n"
+	if err := os.WriteFile(filepath.Join(repo, "backup/demo/backup.info"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return repo
+}
+
+// versionAnswering wraps physicalHandler with an answer for the engine
+// version probe; an empty out simulates an image whose PATH has no
+// postgres binary.
+func versionAnswering(t *testing.T, sequence *[]string, out string) func(verbCall) (any, *protoError) {
+	inner := physicalHandler(t, sequence)
+	return func(call verbCall) (any, *protoError) {
+		if call.Verb == "exec" {
+			args := execArgs{}
+			if err := json.Unmarshal(call.Args, &args); err != nil {
+				t.Fatalf("exec args: %v", err)
+			}
+			if args.Argv[0] == "postgres" {
+				*sequence = append(*sequence, "postgres --version")
+				if out == "" {
+					return errExec(127, "postgres: not found"), nil
+				}
+				return outExec(out), nil
+			}
+		}
+		return inner(call)
+	}
+}
+
 // TestRepoIsDatedByItsManifest proves the wiring: a repository carrying a
 // real manifest dates itself, and — unlike every other kind here — needs
 // no declared zone, because pgBackRest records epoch seconds.
@@ -360,4 +397,62 @@ func TestRepoIsDatedByItsManifest(t *testing.T) {
 	if src.createdAt == nil || *src.createdAt != "2026-08-09T15:37:53.000Z" {
 		t.Errorf("createdAt = %v, want the repository's own completion instant", src.createdAt)
 	}
+}
+
+// driveVersionedProvision runs a pgbackrest provision against a repository
+// whose manifest states version, with the engine answering out.
+func driveVersionedProvision(t *testing.T, version, out string) (finalResponse, string) {
+	t.Helper()
+	repo := writeVersionedRepoFixture(t, version)
+	var sequence []string
+	line, _, _ := driveOp(t, "provision", pgbackrestPayload(repo, "demo"),
+		versionAnswering(t, &sequence, out))
+	return parseFinal(t, line), strings.Join(sequence, " | ")
+}
+
+func TestPhysicalVersionPrecheckRefusesAMismatch(t *testing.T) {
+	f, sequence := driveVersionedProvision(t, "16", "postgres (PostgreSQL) 15.7 (Debian 15.7-1.pgdg120+1)")
+	if f.OK || f.Error.Code != "invalid_request" {
+		t.Fatalf("final = %+v, want invalid_request", f)
+	}
+	for _, want := range []string{"PostgreSQL 16 backup", "PostgreSQL 15"} {
+		if !strings.Contains(f.Error.Message, want) {
+			t.Errorf("message %q missing %q", f.Error.Message, want)
+		}
+	}
+	if strings.Contains(sequence, "put_file") {
+		t.Error("a refused pairing must not transfer the repository")
+	}
+}
+
+func TestPhysicalVersionPrecheckPasses(t *testing.T) {
+	t.Run("match proceeds and runs before the transfer", func(t *testing.T) {
+		f, sequence := driveVersionedProvision(t, "16", "postgres (PostgreSQL) 16.9 (Debian 16.9-1.pgdg120+1)")
+		if !f.OK {
+			t.Fatalf("final = %+v", f)
+		}
+		if !strings.Contains(sequence, "postgres --version") {
+			t.Fatalf("sequence %q missing the version probe", sequence)
+		}
+		if strings.Index(sequence, "postgres --version") > strings.Index(sequence, "put_file") {
+			t.Error("the version pre-check must run before the repo transfer")
+		}
+	})
+	t.Run("unanswerable engine version skips the check", func(t *testing.T) {
+		f, _ := driveVersionedProvision(t, "16", "")
+		if !f.OK {
+			t.Fatalf("final = %+v — a refusal needs positive evidence, not a failed probe", f)
+		}
+	})
+	t.Run("unreadable manifest skips the check", func(t *testing.T) {
+		repo := writeRepoFixture(t) // placeholder backup.info: no version to read
+		var sequence []string
+		line, _, _ := driveOp(t, "provision", pgbackrestPayload(repo, "demo"), physicalHandler(t, &sequence))
+		if f := parseFinal(t, line); !f.OK {
+			t.Fatalf("final = %+v", f)
+		}
+		if strings.Contains(strings.Join(sequence, " | "), "postgres --version") {
+			t.Error("no version in the manifest — the engine must not be queried")
+		}
+	})
 }
