@@ -11,6 +11,42 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-15
+
+This release corrects the record of v0.7.0, whose git tag was placed one
+merge too early: on the roadmap update that preceded the release
+preparation, not on the preparation itself. Everything v0.7.0 *shipped*
+is correct — the binaries take their version from the tag name at build
+time, nothing but documentation and version strings differs between the
+two commits, and the release notes describe what the binaries do. What
+is wrong is the tagged tree's account of itself: its README says
+"Released as v0.6.0" and names four engines instead of seven, its
+changelog holds the release's content under Unreleased with no [0.7.0]
+section — the very section the release notes link to — and its install
+examples point at 0.6.0 artifacts.
+
+The tag stays where it is. The Go module proxy records a version
+permanently on first fetch, so moving a published tag can leave anyone
+who already resolved it with an unrepairable checksum mismatch — the
+same immutability that froze v0.1.0 under its old module path. A project
+whose product is an append-only record corrects its record the same way
+it expects its users to: not by rewriting the entry, but by appending
+the correction. This entry is that correction, and v0.7.1 is cut on a
+tree that describes itself truthfully. `spec/evidence/v0.4.0` needs no
+successor: the verifier code at that tag is exactly what [0.7.0]
+announced, and the only stale line in it — the module README's own
+install pin — is documentation, not code.
+
+### Fixed
+
+- Nothing in the software. The only changes since v0.7.0 are the version
+  references this repository's documentation gates hold to the current
+  release: the README status line and install examples, the Docker and
+  packaging documentation, the packaging scripts' usage comments, and
+  the binary's dev-version stamp. The v0.7.0 and v0.7.1 binaries behave
+  identically; upgrading matters only if you build from the tagged
+  source or cite the tagged tree.
+
 ## [0.7.0] - 2026-08-15
 
 This release deviates, once and on record, from the roadmap's standing rule
@@ -1723,7 +1759,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/probavi/probavi/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/probavi/probavi/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/probavi/probavi/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/probavi/probavi/compare/v0.4.0...v0.5.0
