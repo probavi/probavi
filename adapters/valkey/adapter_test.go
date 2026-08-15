@@ -122,16 +122,17 @@ func errExec(exit int, stderr string) any {
 	return execValue{ExitCode: exit, StderrB64: base64.StdEncoding.EncodeToString([]byte(stderr))}
 }
 
-// engineVersionOut is what a 7.4 server prints for --version.
-const engineVersionOut = "Redis server v=7.4.2 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=abc"
+// engineVersionOut is what an 8.0 server prints for --version (measured;
+// 7.2 prints the same line without the leading engine name).
+const engineVersionOut = "Valkey server v=8.0.10 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=abc"
 
 // writeRDB writes an RDB-shaped fixture dated and versioned by its own
-// header.
-func writeRDB(t *testing.T, dir, name, redisVer string, ctime string) string {
+// header, in the pre-9 layout an 8.x server saves.
+func writeRDB(t *testing.T, dir, name, valkeyVer string, ctime string) string {
 	t.Helper()
 	aux := [][2]string{}
-	if redisVer != "" {
-		aux = append(aux, [2]string{"redis-ver", redisVer})
+	if valkeyVer != "" {
+		aux = append(aux, [2]string{"valkey-ver", valkeyVer})
 	}
 	if ctime != "" {
 		aux = append(aux, [2]string{"ctime", ctime})
@@ -208,16 +209,16 @@ func handlePut(t *testing.T, call verbCall) any {
 // simulated result; an empty label means the call was not expected.
 func classifyExec(argv []string, started *bool) (string, any) {
 	switch {
-	case argv[0] == "redis-server" && argv[1] == "--version":
+	case argv[0] == "valkey-server" && argv[1] == "--version":
 		return "version", outExec(engineVersionOut)
 	case argv[0] == "mkdir":
 		return "mkdir", okExec()
-	case argv[0] == "redis-check-rdb":
+	case argv[0] == "valkey-check-rdb":
 		return "check", okExec()
-	case argv[0] == "redis-server":
+	case argv[0] == "valkey-server":
 		*started = true
 		return "start", execValue{ExitCode: 0, DurationSeconds: 0.2}
-	case argv[0] == "redis-cli":
+	case argv[0] == "valkey-cli":
 		return "ping", outExec("PONG\n")
 	}
 	return "", nil
@@ -262,7 +263,7 @@ func TestRunnerExpansionIsNotShellParsing(t *testing.T) {
 		"get `touch " + marker + "`",
 		"get k | touch " + marker,
 	} {
-		// Run the template's argv with a stand-in for redis-cli that
+		// Run the template's argv with a stand-in for valkey-cli that
 		// ignores its arguments: only the shell's treatment of $0 is
 		// under test.
 		script := "set -f; exec true $0"
@@ -277,10 +278,10 @@ func TestRunnerExpansionIsNotShellParsing(t *testing.T) {
 }
 
 func TestProvisionRestoresRDB(t *testing.T) {
-	rdb := writeRDB(t, t.TempDir(), "dump.rdb", "7.2.5", "1786289869")
+	rdb := writeRDB(t, t.TempDir(), "dump.rdb", "8.0.10", "1786289869")
 	var sequence []string
 	line, _, exit := driveOp(t, "provision",
-		provisionPayload(t, "redis_rdb", rdb, nil), provisionHandler(t, &sequence))
+		provisionPayload(t, "valkey_rdb", rdb, nil), provisionHandler(t, &sequence))
 	f := parseFinal(t, line)
 	if exit != 0 || !f.OK {
 		t.Fatalf("exit=%d final=%+v", exit, f)
@@ -324,7 +325,7 @@ func TestProvisionRestoresRDB(t *testing.T) {
 
 // TestProvisionWithoutMetadata pins the bonus-only nature of the header
 // read: a file the parser cannot date or version still provisions, with
-// created_at null and the version pre-check silent.
+// created_at null and every pre-check silent.
 func TestProvisionWithoutMetadata(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "opaque.rdb")
 	if err := os.WriteFile(path, []byte("not an rdb at all"), 0o600); err != nil {
@@ -332,10 +333,10 @@ func TestProvisionWithoutMetadata(t *testing.T) {
 	}
 	var sequence []string
 	line, _, _ := driveOp(t, "provision",
-		provisionPayload(t, "redis_rdb", path, nil), provisionHandler(t, &sequence))
+		provisionPayload(t, "valkey_rdb", path, nil), provisionHandler(t, &sequence))
 	f := parseFinal(t, line)
 	if !f.OK {
-		t.Fatalf("final = %+v — redis-check-rdb in the sandbox is the authority, not the host parser", f)
+		t.Fatalf("final = %+v — valkey-check-rdb in the sandbox is the authority, not the host parser", f)
 	}
 	got := struct {
 		SourceIdentity struct {
@@ -352,14 +353,14 @@ func TestProvisionWithoutMetadata(t *testing.T) {
 
 func TestProvisionRefusals(t *testing.T) {
 	dir := t.TempDir()
-	rdb := writeRDB(t, dir, "dump.rdb", "7.2.5", "")
+	rdb := writeRDB(t, dir, "dump.rdb", "8.0.10", "")
 	gz := filepath.Join(dir, "dump.rdb.gz")
 	if err := os.WriteFile(gz, []byte{0x1f, 0x8b, 0x08, 0x00}, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	foreign := filepath.Join(dir, "valkey.rdb")
-	if err := os.WriteFile(foreign, rdbFixture(
-		[2]string{"valkey-ver", "8.0.10"}), 0o600); err != nil {
+	foreign := filepath.Join(dir, "redis.rdb")
+	if err := os.WriteFile(foreign, rdbFixtureMagic("REDIS0012",
+		[2]string{"redis-ver", "7.4.2"}), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -368,18 +369,18 @@ func TestProvisionRefusals(t *testing.T) {
 		payload string
 		want    string
 	}{
-		{"unknown source kind", provisionPayload(t, "redis_backup", rdb, nil), "unsupported_source"},
-		{"missing file", provisionPayload(t, "redis_rdb", filepath.Join(dir, "gone.rdb"), nil), "source_not_found"},
-		{"a directory for the file kind", provisionPayload(t, "redis_rdb", dir, nil), "invalid_request"},
+		{"unknown source kind", provisionPayload(t, "valkey_backup", rdb, nil), "unsupported_source"},
+		{"missing file", provisionPayload(t, "valkey_rdb", filepath.Join(dir, "gone.rdb"), nil), "source_not_found"},
+		{"a directory for the file kind", provisionPayload(t, "valkey_rdb", dir, nil), "invalid_request"},
 		{"gzip-compressed artifact named for what it is",
-			provisionPayload(t, "redis_rdb", gz, nil), "unsupported_source"},
-		{"a Valkey artifact is the other dialect's",
-			provisionPayload(t, "redis_rdb", foreign, nil), "unsupported_source"},
+			provisionPayload(t, "valkey_rdb", gz, nil), "unsupported_source"},
+		{"a Redis artifact is the other dialect's",
+			provisionPayload(t, "valkey_rdb", foreign, nil), "unsupported_source"},
 		{"backup_timezone has nothing to add to epoch seconds",
-			provisionPayload(t, "redis_rdb", rdb, map[string]string{"backup_timezone": "UTC"}), "invalid_request"},
+			provisionPayload(t, "valkey_rdb", rdb, map[string]string{"backup_timezone": "UTC"}), "invalid_request"},
 		{"malformed payload", `"not an object"`, "invalid_request"},
 		{"pitr is not supported",
-			`{"source":{"kind":"redis_rdb","path":"` + rdb + `"},"pitr":{"target_time":"2026-08-01T00:00:00Z"}}`,
+			`{"source":{"kind":"valkey_rdb","path":"` + rdb + `"},"pitr":{"target_time":"2026-08-01T00:00:00Z"}}`,
 			"invalid_request"},
 	}
 	for _, tc := range tests {
@@ -403,15 +404,15 @@ func TestProvisionRefusals(t *testing.T) {
 // RDB whose header names a newer server than the sandbox runs must be
 // refused after the version probe, before anything is transferred.
 func TestVersionPrecheckThroughProvision(t *testing.T) {
-	rdb := writeRDB(t, t.TempDir(), "dump.rdb", "8.0.3", "")
+	rdb := writeRDB(t, t.TempDir(), "dump.rdb", "9.0.5", "")
 	var sequence []string
 	line, _, _ := driveOp(t, "provision",
-		provisionPayload(t, "redis_rdb", rdb, nil), provisionHandler(t, &sequence))
+		provisionPayload(t, "valkey_rdb", rdb, nil), provisionHandler(t, &sequence))
 	f := parseFinal(t, line)
 	if f.OK || f.Error.Code != "invalid_request" {
 		t.Fatalf("final = %+v, want invalid_request", f)
 	}
-	for _, want := range []string{"Redis 8.0", "Redis 7.4"} {
+	for _, want := range []string{"Valkey 9.0", "Valkey 8.0"} {
 		if !strings.Contains(f.Error.Message, want) {
 			t.Errorf("message %q missing %q", f.Error.Message, want)
 		}
@@ -424,26 +425,24 @@ func TestVersionPrecheckThroughProvision(t *testing.T) {
 func TestSandboxPreconditions(t *testing.T) {
 	rdb := writeRDB(t, t.TempDir(), "dump.rdb", "", "")
 
-	t.Run("an image without redis-server is named", func(t *testing.T) {
-		line, _, _ := driveOp(t, "provision", provisionPayload(t, "redis_rdb", rdb, nil),
+	t.Run("an image without valkey-server is named", func(t *testing.T) {
+		line, _, _ := driveOp(t, "provision", provisionPayload(t, "valkey_rdb", rdb, nil),
 			func(call verbCall) (any, *protoError) {
-				return errExec(127, "redis-server: not found"), nil
+				return errExec(127, "valkey-server: not found"), nil
 			})
 		f := parseFinal(t, line)
-		if f.OK || f.Error.Code != "invalid_request" || !strings.Contains(f.Error.Message, "redis-server") {
+		if f.OK || f.Error.Code != "invalid_request" || !strings.Contains(f.Error.Message, "valkey-server") {
 			t.Errorf("final = %+v, want invalid_request naming the missing binary", f)
 		}
 	})
 
-	t.Run("an engine reporting itself as Valkey is refused", func(t *testing.T) {
-		line, _, _ := driveOp(t, "provision", provisionPayload(t, "redis_rdb", rdb, nil),
+	t.Run("an engine reporting itself as Redis is refused", func(t *testing.T) {
+		line, _, _ := driveOp(t, "provision", provisionPayload(t, "valkey_rdb", rdb, nil),
 			func(call verbCall) (any, *protoError) {
-				// The Valkey images ship redis-* compatibility symlinks,
-				// so the exec succeeds — the version line is the evidence.
-				return outExec("Valkey server v=8.0.10 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=abc"), nil
+				return outExec("Redis server v=7.4.2 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=abc"), nil
 			})
 		f := parseFinal(t, line)
-		if f.OK || f.Error.Code != "invalid_request" || !strings.Contains(f.Error.Message, "Valkey") {
+		if f.OK || f.Error.Code != "invalid_request" || !strings.Contains(f.Error.Message, "Redis") {
 			t.Errorf("final = %+v, want invalid_request naming the wrong engine", f)
 		}
 	})
@@ -452,19 +451,19 @@ func TestSandboxPreconditions(t *testing.T) {
 func TestRDBVerdicts(t *testing.T) {
 	rdb := writeRDB(t, t.TempDir(), "dump.rdb", "", "")
 
-	t.Run("a file redis-check-rdb rejects is the backup's fault", func(t *testing.T) {
-		line, _, _ := driveOp(t, "provision", provisionPayload(t, "redis_rdb", rdb, nil),
+	t.Run("a file valkey-check-rdb rejects is the backup's fault", func(t *testing.T) {
+		line, _, _ := driveOp(t, "provision", provisionPayload(t, "valkey_rdb", rdb, nil),
 			func(call verbCall) (any, *protoError) {
 				if call.Verb == "put_file" {
 					return putFileValue{}, nil
 				}
 				argv := argvOf(t, call)
 				switch argv[0] {
-				case "redis-server":
+				case "valkey-server":
 					return outExec(engineVersionOut), nil
 				case "mkdir":
 					return okExec(), nil
-				case "redis-check-rdb":
+				case "valkey-check-rdb":
 					return execValue{ExitCode: 1, StdoutB64: base64.StdEncoding.EncodeToString(
 						[]byte("[offset 9] Unexpected EOF reading RDB file\nRDB CRC error"))}, nil
 				}
@@ -480,8 +479,8 @@ func TestRDBVerdicts(t *testing.T) {
 
 func TestLastErrorLine(t *testing.T) {
 	log := []byte(`1:M 15 Aug 2026 12:00:00.000 * Ready to accept connections
-1:M 15 Aug 2026 12:00:01.000 # Can't handle RDB format version 12
-1:M 15 Aug 2026 12:00:01.000 # Fatal error loading the DB: Invalid argument. Exiting.`)
+1:M 15 Aug 2026 12:00:01.000 # Can't handle RDB format version 80
+1:M 15 Aug 2026 12:00:01.000 # Fatal error loading the DB, check server logs. Exiting.`)
 	got := lastErrorLine(log)
 	if !strings.Contains(got, "Fatal error loading the DB") {
 		t.Errorf("lastErrorLine = %q, want the final failure report", got)
@@ -547,7 +546,7 @@ func TestHealthcheck(t *testing.T) {
 	})
 	t.Run("an unanswering server is unhealthy, not an error", func(t *testing.T) {
 		line, _, _ := driveOp(t, "healthcheck", `{"state":{}}`,
-			func(verbCall) (any, *protoError) { return errExec(1, "Could not connect to Redis"), nil })
+			func(verbCall) (any, *protoError) { return errExec(1, "Could not connect to Valkey"), nil })
 		f := parseFinal(t, line)
 		if !f.OK {
 			t.Fatalf("an unhealthy verdict must still be ok:true (§6.3): %+v", f)

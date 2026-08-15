@@ -24,7 +24,7 @@ S="${WORKDIR}/${PN}-${MY_PV}"
 LICENSE="Apache-2.0"
 SLOT="0"
 KEYWORDS="~amd64 ~arm64"
-IUSE="+postgres mysql mongodb mssql clickhouse mariadb etcd redis"
+IUSE="+postgres mysql mongodb mssql clickhouse mariadb etcd redis valkey"
 
 # Nothing is a hard runtime dependency: `probavi evidence verify` reads a
 # log and a public key and needs no runtime at all. A sandbox runtime
@@ -40,7 +40,7 @@ src_compile() {
 	# which lands in every signed evidence record as adapter.version, and a
 	# second disagreeing number would leave an auditor guessing.
 	local id
-	for id in postgres mysql mongodb mssql clickhouse mariadb etcd redis; do
+	for id in postgres mysql mongodb mssql clickhouse mariadb etcd redis valkey; do
 		use "${id}" || continue
 		ego build -trimpath -ldflags '-s -w -buildid=' \
 			-o "probavi-adapter-${id}" "./adapters/${id}"
@@ -53,7 +53,7 @@ src_install() {
 	dobin probavi
 
 	local id
-	for id in postgres mysql mongodb mssql clickhouse mariadb etcd redis; do
+	for id in postgres mysql mongodb mssql clickhouse mariadb etcd redis valkey; do
 		use "${id}" || continue
 		dobin "probavi-adapter-${id}"
 		dodoc "adapters/${id}/README.md"

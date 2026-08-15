@@ -1,0 +1,36 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "valkey",
+  "name": "Valkey",
+  "status": "experimental",
+  "engine_name": "valkey",
+  "conformance_verified": true,
+  "docs": "adapters/valkey/README.md",
+  "verified": [
+    {
+      "engine_version": "7.2",
+      "image": "valkey/valkey:7.2.14",
+      "baseline": true
+    },
+    {
+      "engine_version": "8.0",
+      "image": "valkey/valkey:8.0.10"
+    },
+    {
+      "engine_version": "8.1",
+      "image": "valkey/valkey:8.1.9"
+    },
+    {
+      "engine_version": "9.0",
+      "image": "valkey/valkey:9.0.5"
+    },
+    {
+      "engine_version": "9.1",
+      "image": "valkey/valkey:9.1.1"
+    }
+  ],
+  "sources": {
+    "valkey_rdb": "One RDB file (a copied dump.rdb, or the output of `valkey-cli --rdb`)",
+    "valkey_rdb_dir": "A directory of RDB files; the newest by the artifact's own save instant (the ctime header field) is restored"
+  }
+}

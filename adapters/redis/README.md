@@ -96,6 +96,22 @@ check refuses only on positive evidence: an RDB without a readable
 `redis-ver` — or one from an unstable build, which writes 255.255.255 —
 skips it, and the load speaks for itself.
 
+## The dialect fence: Valkey artifacts are refused by name
+
+Since the fork the two RDB dialects diverge above format version 11, and
+a drill that restores a Valkey backup into Redis — even a pre-fork one
+that would load — proves recovery into an engine the backup does not
+belong to, the false green ROADMAP.md names. So the adapter refuses,
+before a byte is transferred, on positive evidence of a Valkey save
+(measured against the official images): a `valkey-ver` aux field, which
+Valkey has always written and Redis never has, or the `VALKEY` magic its
+9.x writes. Both refusals are `unsupported_source` and point at the
+valkey adapter; absence stays silent — positive evidence only. The
+sandbox side is fenced the same way: the Valkey images ship `redis-*`
+compatibility symlinks, so a sandbox whose `redis-server --version`
+reports Valkey is refused as `invalid_request`. The mirror-image fence
+lives in the valkey adapter.
+
 ## Backup identity
 
 `source_identity.checksum` is sha256 over the artifact's bytes, exactly as
@@ -123,10 +139,9 @@ unused. The adapter never prints secrets, and there are none to print.
 - **Compressed artifacts.** A gzip-compressed RDB is refused by name
   (`unsupported_source`) rather than handed to the server to fail
   cryptically — decompress first, or back up uncompressed.
-- **Valkey.** Since the fork, the two RDB dialects are not interchangeable
-  in either direction above format version 11, and a Valkey artifact
-  claiming a Valkey version number would be compared against Redis
-  versions. Valkey is a distinct engine with its own matrix
-  (ROADMAP.md); nothing here is verified against it.
+- **Valkey.** The other side of the dialect fence above: a Valkey
+  artifact is refused by name and belongs to the valkey adapter, a
+  distinct engine with its own matrix (ROADMAP.md). Nothing here is
+  verified against Valkey.
 - **PITR.** Redis has no point-in-time recovery to drive; every source
   kind probes `pitr: false`.

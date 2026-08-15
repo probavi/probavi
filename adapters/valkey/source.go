@@ -17,15 +17,15 @@ type resolvedSource struct {
 	checksum  string // "sha256:<hex>" over the artifact bytes
 	sizeBytes int64
 	createdAt *string // the RDB's own ctime aux field, nil when it has none
-	redisVer  string  // the origin server's version, "" when unstated
+	valkeyVer string  // the origin server's version, "" when unstated
 }
 
 // resolveSource maps a source kind to one restorable artifact.
 //
-//	redis_rdb     — path is one RDB file (a copied dump.rdb, or the output
-//	                of `redis-cli --rdb`)
-//	redis_rdb_dir — path is a directory of them; the newest by the
-//	                artifact's own save instant is restored
+//	valkey_rdb     — path is one RDB file (a copied dump.rdb, or the
+//	                 output of `valkey-cli --rdb`)
+//	valkey_rdb_dir — path is a directory of them; the newest by the
+//	                 artifact's own save instant is restored
 //
 // An RDB records when it was saved (the ctime aux field, epoch seconds —
 // see rdbmeta.go), so both the reported created_at and the directory
@@ -35,12 +35,12 @@ type resolvedSource struct {
 // one.
 func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *protoError) {
 	switch kind {
-	case "redis_rdb":
+	case "valkey_rdb":
 		if perr := refuseDirectory(path); perr != nil {
 			return nil, perr
 		}
 		return resolveFile(path)
-	case "redis_rdb_dir":
+	case "valkey_rdb_dir":
 		latest, perr := latestRDBIn(ctx, path)
 		if perr != nil {
 			return nil, perr
@@ -48,7 +48,7 @@ func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *pr
 		return resolveFile(latest)
 	default:
 		return nil, protoErr("unsupported_source", false,
-			"unsupported source kind: %s (supported: redis_rdb, redis_rdb_dir)", kind)
+			"unsupported source kind: %s (supported: valkey_rdb, valkey_rdb_dir)", kind)
 	}
 }
 
@@ -61,7 +61,7 @@ func refuseDirectory(path string) *protoError {
 		return protoErr("source_unreadable", false, "stat backup source: %v", err)
 	case info.IsDir():
 		return protoErr("invalid_request", false,
-			"source path %s is a directory; use kind redis_rdb_dir for directories", path)
+			"source path %s is a directory; use kind valkey_rdb_dir for directories", path)
 	}
 	return nil
 }
@@ -77,13 +77,14 @@ func resolveFile(path string) (*resolvedSource, *protoError) {
 	if perr := refuseGzip(path); perr != nil {
 		return nil, perr
 	}
-	// Metadata is a bonus: an unparseable head resolves with nothing
-	// dated and nothing versioned, and redis-check-rdb inside the sandbox
-	// stays the authority on whether the file restores — except where the
-	// head is positive evidence of a Valkey save, the one verdict only
-	// this side can deliver by name (see refuseValkeyDialect).
+	// Metadata is a bonus — an unparseable head resolves with nothing
+	// dated and nothing versioned, and valkey-check-rdb inside the
+	// sandbox stays the authority on whether the file restores — except
+	// where the head is positive evidence of the other dialect, which is
+	// the one verdict only this side can deliver in time (see
+	// refuseRedisDialect).
 	meta := readRDBMeta(path)
-	if perr := refuseValkeyDialect(meta); perr != nil {
+	if perr := refuseRedisDialect(meta); perr != nil {
 		return nil, perr
 	}
 	checksum, perr := fileChecksum(path)
@@ -91,33 +92,43 @@ func resolveFile(path string) (*resolvedSource, *protoError) {
 		return nil, perr
 	}
 	src := &resolvedSource{path: path, checksum: checksum, sizeBytes: info.Size()}
-	src.redisVer = meta.redisVer
+	src.valkeyVer = meta.valkeyVer
 	if meta.ctime != 0 {
 		src.createdAt = formatCreatedAt(time.Unix(meta.ctime, 0).UTC())
 	}
 	return src, nil
 }
 
-// refuseValkeyDialect refuses an artifact whose head is positive evidence
-// of a Valkey save: the valkey-ver aux field Valkey has written — and
-// redis-ver never — since the fork, or the VALKEY magic its 9.x writes
-// (both measured against the official images). A pre-divergence Valkey
-// RDB would in fact load — the formats are identical through version 11 —
-// but a drill that restores a Valkey backup into Redis proves recovery
-// into an engine the operator does not run, the false green ROADMAP.md
-// names; the valkey adapter exists for that artifact. Absence stays
-// silent: positive evidence only.
-func refuseValkeyDialect(meta rdbMeta) *protoError {
-	switch {
-	case meta.valkeyVer != "":
+// refuseRedisDialect refuses an artifact whose head is positive evidence
+// of a Redis save. Two grounds, both measured:
+//
+// A redis-ver aux field: Valkey has written valkey-ver and never
+// redis-ver since the fork, so the field can only come from Redis. A
+// pre-divergence Redis RDB would in fact load — the formats are identical
+// through version 11 — but a drill that restores a Redis backup into
+// Valkey proves recovery into an engine the operator does not run, which
+// is the false green ROADMAP.md names; the redis adapter exists for that
+// artifact.
+//
+// A REDIS-magic format version of 12 or above: only post-fork Redis
+// writes those, no Valkey engine loads them, and valkey-check-rdb passes
+// them anyway — the server would then die at startup ("Can't handle RDB
+// format version 12") minutes after a clean integrity check. Refusing
+// here, before a byte is transferred, is the only timely place.
+//
+// Absence stays silent: an artifact with neither field is refused by
+// nothing — positive evidence only.
+func refuseRedisDialect(meta rdbMeta) *protoError {
+	if meta.redisVer != "" && meta.valkeyVer == "" {
 		return protoErr("unsupported_source", false,
-			"the RDB was saved by Valkey %s: restoring a Valkey backup into Redis would prove "+
-				"recovery into an engine the backup does not belong to — use the valkey adapter "+
-				"for this artifact", meta.valkeyVer)
-	case meta.valkeyMagic:
+			"the RDB was saved by Redis %s: restoring a Redis backup into Valkey would prove "+
+				"recovery into an engine the backup does not belong to — use the redis adapter "+
+				"for this artifact", meta.redisVer)
+	}
+	if meta.valid && !meta.valkeyMagic && meta.formatVersion >= redisDialectFloor {
 		return protoErr("unsupported_source", false,
-			"the RDB carries the VALKEY magic only Valkey 9+ writes — use the valkey adapter "+
-				"for this artifact")
+			"the RDB carries format version %d, a post-fork Redis dialect no Valkey engine "+
+				"loads — use the redis adapter for this artifact", meta.formatVersion)
 	}
 	return nil
 }
@@ -150,9 +161,9 @@ type rdbCandidate struct {
 
 // latestRDBIn picks the directory's newest RDB by what each artifact
 // records about itself. Files without either RDB magic are skipped as
-// non-candidates (checksum sidecars, README files); a Valkey artifact is
-// a candidate, so that when it is the newest it is refused by name rather
-// than silently passed over for an older neighbour — the same
+// non-candidates (checksum sidecars, README files); a Redis-dialect
+// artifact is a candidate, so that when it is the newest it is refused by
+// name rather than silently passed over for an older neighbour — the same
 // not-a-filter principle as settle.go. If nothing qualifies, the skipped
 // names are counted so the refusal says what was passed over.
 func latestRDBIn(ctx context.Context, dir string) (string, *protoError) {
@@ -188,7 +199,7 @@ func latestRDBIn(ctx context.Context, dir string) (string, *protoError) {
 	if best == nil {
 		if skipped > 0 {
 			return "", protoErr("source_not_found", false,
-				"backup directory %s holds no RDB files (%d files without the REDIS header were passed over)",
+				"backup directory %s holds no RDB files (%d files without an RDB header were passed over)",
 				dir, skipped)
 		}
 		return "", protoErr("source_not_found", false, "backup directory %s contains no files", dir)

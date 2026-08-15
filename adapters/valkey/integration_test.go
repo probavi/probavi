@@ -1,0 +1,325 @@
+//go:build integration
+
+package main_test
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/probavi/probavi/internal/adapter"
+	"github.com/probavi/probavi/internal/capabilities"
+	"github.com/probavi/probavi/internal/sandbox"
+	"github.com/probavi/probavi/internal/sandbox/docker"
+)
+
+// verifiedImage is the official valkey image this run restores from: the
+// manifest's baseline, or the version-matrix job's PROBAVI_IT_IMAGE when
+// it names one the manifest already lists (docs/engine-versions.md §2).
+func verifiedImage(t *testing.T) string {
+	t.Helper()
+	m, err := capabilities.LoadAdapterManifest(".")
+	if err != nil {
+		t.Fatalf("load adapter manifest: %v", err)
+	}
+	image, err := m.SandboxImage(os.Getenv("PROBAVI_IT_IMAGE"))
+	if err != nil {
+		t.Fatalf("adapter manifest: %v", err)
+	}
+	return image
+}
+
+func sandboxParams(image string) map[string]string {
+	return map[string]string{"image": image, "command": "sleep infinity", "memory": "256m"}
+}
+
+// TestEndToEndRestoreDrill proves the engine through the unchanged core:
+// the docker provider, the core-side protocol client, and this adapter —
+// as separate processes — restore a genuine `valkey-cli save` RDB, start
+// the server on it, and validate the restored keys through the
+// probe-declared runner.
+func TestEndToEndRestoreDrill(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := verifiedImage(t)
+	provider := docker.New(nil)
+
+	fixture := filepath.Join(t.TempDir(), "dump.rdb")
+	makeRDBFixture(t, ctx, provider, image, fixture)
+
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("valkey", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if probe.Name != "valkey" || len(probe.SQLRunner.Argv) == 0 {
+		t.Fatalf("probe = %+v", probe)
+	}
+
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "valkey_rdb", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if res.Timings.EngineReadySeconds <= 0 || res.Timings.RestoreSeconds < 0 {
+		t.Errorf("timings = %+v, want real measurements", res.Timings)
+	}
+	if !strings.HasPrefix(res.SourceIdentity.Checksum, "sha256:") || res.SourceIdentity.SizeBytes == 0 {
+		t.Errorf("source identity = %+v", res.SourceIdentity)
+	}
+	// An RDB dates itself: the server wrote ctime moments ago, and the
+	// reported instant must reflect it without any declared timezone.
+	if res.SourceIdentity.CreatedAt == nil {
+		t.Error("created_at = nil, want the RDB's own save instant")
+	} else if saved, err := time.Parse(time.RFC3339, *res.SourceIdentity.CreatedAt); err != nil {
+		t.Errorf("created_at %q does not parse: %v", *res.SourceIdentity.CreatedAt, err)
+	} else if age := time.Since(saved); age < 0 || age > time.Hour {
+		t.Errorf("created_at = %s, want the save instant of moments ago", *res.SourceIdentity.CreatedAt)
+	}
+
+	health, err := runner.Healthcheck(ctx, &res.Connection, res.State, sbx)
+	if err != nil {
+		t.Fatalf("healthcheck: %v", err)
+	}
+	if !health.Healthy {
+		t.Fatalf("healthcheck = %+v, want healthy", health)
+	}
+
+	// The check dialect this adapter documents: a line of valkey-cli
+	// arguments, run through the probe-declared template exactly as
+	// internal/checks would run it.
+	assertCheck(t, ctx, sbx, probe, "get probavi:config", "restored-ok")
+	assertCheck(t, ctx, sbx, probe, "dbsize", "501")
+
+	teardown, err := runner.Teardown(ctx, res.State, "completed", sbx)
+	if err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+	if !teardown.Released {
+		t.Errorf("teardown = %+v", teardown)
+	}
+}
+
+// TestCorruptRDBVerdict proves a broken backup yields the right verdict
+// through the whole stack: valkey-check-rdb inside the sandbox is the
+// authority, and its refusal must surface as a claim about the backup.
+func TestCorruptRDBVerdict(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := verifiedImage(t)
+
+	corrupt := filepath.Join(t.TempDir(), "corrupt.rdb")
+	if err := os.WriteFile(corrupt, []byte("REDIS0011this is no rdb payload"), 0o600); err != nil {
+		t.Fatalf("write corrupt fixture: %v", err)
+	}
+
+	provider := docker.New(nil)
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("valkey", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	_, err = runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "valkey_rdb", Path: corrupt},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	var aerr *adapter.Error
+	if err == nil || !errors.As(err, &aerr) || aerr.Code != "source_corrupt" {
+		t.Fatalf("provision error = %v, want source_corrupt", err)
+	}
+}
+
+// TestNewerRDBIsRefusedByVersion proves the pre-check against the real
+// engine: an RDB whose header names a server far newer than the sandbox
+// runs must be refused up front, before anything is transferred
+// (docs/engine-versions.md §5).
+func TestNewerRDBIsRefusedByVersion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := verifiedImage(t)
+
+	// A synthetic head is enough: the refusal must come before the
+	// artifact's bytes matter.
+	future := filepath.Join(t.TempDir(), "future.rdb")
+	head := append([]byte("REDIS0011"), 0xFA)
+	head = append(head, byte(len("valkey-ver")))
+	head = append(head, "valkey-ver"...)
+	head = append(head, byte(len("99.9")))
+	head = append(head, "99.9"...)
+	head = append(head, 0xFE, 0x00)
+	if err := os.WriteFile(future, head, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := docker.New(nil)
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("valkey", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	_, err = runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "valkey_rdb", Path: future},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	var aerr *adapter.Error
+	if err == nil || !errors.As(err, &aerr) || aerr.Code != "invalid_request" ||
+		!strings.Contains(aerr.Message, "Valkey 99.9") {
+		t.Fatalf("provision error = %v, want invalid_request naming the origin version", err)
+	}
+}
+
+// TestDirectoryDrillPicksTheDatedArtifact proves the directory kind end
+// to end with the ranking this format allows: an RDB records its own save
+// instant, so a dated artifact outranks an undated one regardless of file
+// times — and the README says exactly that, so the rule an operator reads
+// is the rule that runs.
+func TestDirectoryDrillPicksTheDatedArtifact(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := verifiedImage(t)
+	provider := docker.New(nil)
+
+	dir := t.TempDir()
+	real := filepath.Join(dir, "a-real.rdb")
+	makeRDBFixture(t, ctx, provider, image, real)
+	past := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(real, past, past); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh undated decoy: RDB magic, no ctime — newest by mtime, and
+	// still not the one a drill should prove.
+	decoy := filepath.Join(dir, "z-decoy.rdb")
+	if err := os.WriteFile(decoy, []byte("REDIS0011\xFE\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("valkey", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if _, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "valkey_rdb_dir", Path: dir},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	assertCheck(t, ctx, sbx, probe, "get probavi:config", "restored-ok")
+}
+
+// assertCheck runs one check line through the probe-declared runner —
+// exactly how internal/checks runs checks without engine knowledge — and
+// asserts the last line of its output.
+func assertCheck(t *testing.T, ctx context.Context, sbx *docker.Sandbox,
+	probe *adapter.ProbeResult, checkText, want string) {
+	t.Helper()
+	argv := make([]string, 0, len(probe.SQLRunner.Argv))
+	for _, a := range probe.SQLRunner.Argv {
+		argv = append(argv, strings.ReplaceAll(a, "{{sql}}", checkText))
+	}
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: argv})
+	if err != nil {
+		t.Fatalf("runner exec: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out.Stdout)), "\n")
+	got := strings.TrimSpace(lines[len(lines)-1])
+	if out.ExitCode != 0 || got != want {
+		t.Fatalf("check %q = %q (exit %d, stderr %s), want %q",
+			checkText, got, out.ExitCode, out.Stderr, want)
+	}
+}
+
+// buildAdapterOnPath builds the adapter binary and puts it on PATH under
+// its protocol name.
+func buildAdapterOnPath(t *testing.T, ctx context.Context) {
+	t.Helper()
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-valkey"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// makeRDBFixture seeds a real server in a container and takes a genuine
+// `valkey-cli save` snapshot: 501 keys, ctime written by the server itself.
+func makeRDBFixture(t *testing.T, ctx context.Context, provider *docker.Provider, image, dest string) {
+	t.Helper()
+	seed, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+
+	seedScript := `set -e
+mkdir -p /tmp/seed
+valkey-server --daemonize yes --dir /tmp/seed --dbfilename dump.rdb --save "" --logfile /tmp/seed.log
+i=0
+until valkey-cli -e ping >/dev/null 2>&1; do
+  i=$((i+1)); [ "$i" -gt 60 ] && { tail -n 5 /tmp/seed.log >&2; exit 1; }
+  sleep 1
+done
+valkey-cli -e set probavi:config restored-ok >/dev/null
+valkey-cli -e eval "for i=1,500 do redis.call('SET','probavi:key'..i,'v'..i) end return 1" 0 >/dev/null
+valkey-cli -e save >/dev/null`
+	res, err := seed.Exec(ctx, sandbox.ExecRequest{Argv: []string{"sh", "-c", seedScript}})
+	if err != nil {
+		t.Fatalf("seed exec: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("seed fixture: exit %d: %s", res.ExitCode, res.Stderr)
+	}
+	if out, err := exec.CommandContext(ctx, "docker", "cp", seed.ID()+":/tmp/seed/dump.rdb", dest).CombinedOutput(); err != nil {
+		t.Fatalf("extract fixture: %v: %s", err, out)
+	}
+}
+
+func destroy(t *testing.T, sbx *docker.Sandbox) {
+	t.Helper()
+	if err := sbx.Destroy(context.Background()); err != nil {
+		t.Errorf("destroy sandbox: %v", err)
+	}
+}

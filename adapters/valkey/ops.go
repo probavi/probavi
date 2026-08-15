@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	adapterName    = "redis"
-	adapterVersion = "0.2.0"
+	adapterName    = "valkey"
+	adapterVersion = "0.1.0"
 
 	// Where the restored server serves inside the sandbox. No TLS and no
 	// auth: a Probavi sandbox is zero-ingress (--network none, no ports
@@ -26,13 +26,13 @@ const (
 	// dataDir is where the RDB is placed and the server started from. It
 	// is adapter-composed under the sandbox's own filesystem, never
 	// operator input.
-	dataDir      = "/probavi-redis/data"
+	dataDir      = "/probavi-valkey/data"
 	rdbName      = "dump.rdb"
 	rdbInSandbox = dataDir + "/" + rdbName
 	// serverLog is where the daemonized server writes; the readiness
 	// timeout path reads it so a start failure names the engine's own
 	// reason instead of "never became ready".
-	serverLog = "/probavi-redis/redis.log"
+	serverLog = "/probavi-valkey/valkey.log"
 
 	readinessBudget = 2 * time.Minute
 	readinessPoll   = 500 * time.Millisecond
@@ -45,14 +45,14 @@ func probePayload() any {
 		"name":              adapterName,
 		"adapter_version":   adapterVersion,
 		"protocol_versions": []string{protocolVersion},
-		"engine":            map[string]string{"name": "redis"},
+		"engine":            map[string]string{"name": "valkey"},
 		"sources": []map[string]any{
-			{"kind": "redis_rdb", "capabilities": map[string]bool{"pitr": false}},
-			{"kind": "redis_rdb_dir", "capabilities": map[string]bool{"pitr": false}},
+			{"kind": "valkey_rdb", "capabilities": map[string]bool{"pitr": false}},
+			{"kind": "valkey_rdb_dir", "capabilities": map[string]bool{"pitr": false}},
 		},
 		"sql_runner": map[string]any{
-			// Redis has no SQL: the check text the core passes through
-			// {{sql}} is a line of redis-cli arguments (documented in the
+			// Valkey has no SQL: the check text the core passes through
+			// {{sql}} is a line of valkey-cli arguments (documented in the
 			// adapter README), expanded by the shell into words. This is
 			// word splitting only, not shell parsing: a POSIX shell does
 			// not re-read expansions as syntax, so operators like ; and |
@@ -62,7 +62,7 @@ func probePayload() any {
 			// engine dialect is absorbed here, declaratively — the core
 			// never learns it (§6.1).
 			"argv": []string{"sh", "-c",
-				"set -f; exec redis-cli -e -h 127.0.0.1 -p " + strconv.Itoa(defaultPort) + " $0", "{{sql}}"},
+				"set -f; exec valkey-cli -e -h 127.0.0.1 -p " + strconv.Itoa(defaultPort) + " $0", "{{sql}}"},
 			"env": map[string]string{},
 		},
 		"verbs_required": []string{"exec", "put_file"},
@@ -87,7 +87,7 @@ type provisionRequest struct {
 }
 
 // opProvision restores the RDB into the idle sandbox and starts the
-// server on it: preflight (redis-server present, versions compatible),
+// server on it: preflight (valkey-server present, versions compatible),
 // place the file, integrity check, daemonized start, readiness.
 //
 // The whole lifecycle belongs to the adapter because it has to: an RDB is
@@ -118,7 +118,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if perr != nil {
 		return nil, perr
 	}
-	if perr := checkEngineVersion(src.redisVer, engine); perr != nil {
+	if perr := checkEngineVersion(src.valkeyVer, engine); perr != nil {
 		return nil, perr
 	}
 
@@ -143,8 +143,10 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	return map[string]any{
 		"connection": map[string]any{
 			"scheme": "redis", "host": "127.0.0.1", "port": defaultPort,
-			// Redis numbers its databases; the server starts on 0 and the
-			// declared runner does not select — a check may SELECT itself.
+			// Valkey numbers its databases and speaks RESP, so the scheme
+			// stays the redis:// every client library dials; the server
+			// starts on database 0 and the declared runner does not select
+			// — a check may SELECT itself.
 			"database": "0", "user": "",
 		},
 		"source_identity": map[string]any{
@@ -160,40 +162,40 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	}, nil
 }
 
-// engineVersionPattern finds the release series in `redis-server
-// --version` output ("Redis server v=7.2.5 sha=00000000:0
-// malloc=jemalloc-5.3.0 bits=64 build=…").
+// engineVersionPattern finds the release series in `valkey-server
+// --version` output. Measured: 7.2 prints "Server v=7.2.14 sha=…" — no
+// engine name at all — and 8.0 onwards prints "Valkey server v=8.0.10
+// sha=…", so the version is matched by the v= key alone.
 var engineVersionPattern = regexp.MustCompile(`v=(\d+)\.(\d+)`)
 
-// checkEngine verifies the image carries redis-server — one probe, three
+// checkEngine verifies the image carries valkey-server — one probe, three
 // duties: presence gates the flow, the reported version feeds the
-// pre-check below, and a version line naming Valkey is refused outright —
-// positive evidence that the sandbox runs the other engine (the Valkey
-// images ship redis-* compatibility symlinks, so the presence check alone
-// would pass there), which would green a drill against an engine the
-// backup does not belong to. The 7.2-line Valkey names no engine in that
-// line, so the refusal fires only where the evidence is positive.
+// pre-check below, and a version line naming Redis is refused outright —
+// positive evidence that the sandbox runs the other engine (the redis
+// images carry no valkey-server, but an operator can point a drill at an
+// image with both on PATH), which would green a drill against an engine
+// the backup does not belong to.
 func checkEngine(ctx context.Context, c *core) (string, *protoError) {
-	val, stdout, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"redis-server", "--version"}})
+	val, stdout, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"valkey-server", "--version"}})
 	if perr != nil {
 		return "", perr
 	}
 	if val.ExitCode != 0 {
 		return "", protoErr("invalid_request", false,
-			"sandbox image lacks redis-server (%s): use an official redis image with "+
+			"sandbox image lacks valkey-server (%s): use an official valkey/valkey image with "+
 				"command: sleep infinity", firstLine(stderr))
 	}
 	out := string(stdout)
-	if strings.Contains(out, "Valkey") {
+	if strings.Contains(out, "Redis server") {
 		return "", protoErr("invalid_request", false,
-			"the sandbox engine reports itself as Valkey (%s): restoring a Redis backup there "+
+			"the sandbox engine reports itself as Redis (%s): restoring a Valkey backup there "+
 				"would prove recovery into an engine the backup does not belong to — use an "+
-				"official redis image", firstLine(stdout))
+				"official valkey/valkey image", firstLine(stdout))
 	}
 	return out, nil
 }
 
-// originSeriesPattern extracts major.minor from a redis-ver aux value.
+// originSeriesPattern extracts major.minor from a valkey-ver aux value.
 var originSeriesPattern = regexp.MustCompile(`^(\d+)\.(\d+)`)
 
 // seriesInts converts a two-group version match to integers.
@@ -209,26 +211,28 @@ func seriesInts(m []string) (major, minor int, ok bool) {
 	return major, minor, true
 }
 
-// originSeries extracts major.minor from the RDB's redis-ver aux value.
+// originSeries extracts major.minor from the RDB's valkey-ver aux value.
 // The bounds discard what real servers never state about a restorable
-// backup — notably 255.255.255, which unstable builds write.
-func originSeries(redisVer string) (major, minor int, ok bool) {
-	major, minor, ok = seriesInts(originSeriesPattern.FindStringSubmatch(redisVer))
+// backup — notably 255.255.255, the unstable-build marker Valkey kept
+// from before the fork.
+func originSeries(valkeyVer string) (major, minor int, ok bool) {
+	major, minor, ok = seriesInts(originSeriesPattern.FindStringSubmatch(valkeyVer))
 	if !ok || major < 2 || major > 99 || minor > 99 {
 		return 0, 0, false
 	}
 	return major, minor, true
 }
 
-// checkEngineVersion refuses the restore direction Redis does not have: a
-// newer server's RDB handed to an older engine, which refuses the format
-// version at load ("Can't handle RDB format version …") minutes later —
-// the reverse, an older RDB on a newer server, is the supported path and
-// passes (docs/engine-versions.md §5). It refuses only on positive
-// evidence: an RDB without a readable redis-ver, or an engine whose
-// version does not parse, skips the check and the load speaks for itself.
-func checkEngineVersion(redisVer, engineOut string) *protoError {
-	oMajor, oMinor, ok := originSeries(redisVer)
+// checkEngineVersion refuses the restore direction Valkey does not have:
+// a newer server's RDB handed to an older engine, which refuses the
+// format version at load ("Can't handle RDB format version …") minutes
+// later — the reverse, an older RDB on a newer server, is the supported
+// path and passes (docs/engine-versions.md §5). It refuses only on
+// positive evidence: an RDB without a readable valkey-ver, or an engine
+// whose version does not parse, skips the check and the load speaks for
+// itself.
+func checkEngineVersion(valkeyVer, engineOut string) *protoError {
+	oMajor, oMinor, ok := originSeries(valkeyVer)
 	if !ok {
 		return nil
 	}
@@ -240,14 +244,14 @@ func checkEngineVersion(redisVer, engineOut string) *protoError {
 		return nil
 	}
 	return protoErr("invalid_request", false,
-		"the RDB was saved by Redis %d.%d, but the sandbox engine is Redis %d.%d: a newer "+
-			"server's RDB does not load on an older one — use a redis image at least as new as %d.%d",
+		"the RDB was saved by Valkey %d.%d, but the sandbox engine is Valkey %d.%d: a newer "+
+			"server's RDB does not load on an older one — use a valkey image at least as new as %d.%d",
 		oMajor, oMinor, eMajor, eMinor, oMajor, oMinor)
 }
 
 // prepareDataDir creates the directory the server will load from. No
 // shell: every step of this flow is direct argv, so the adapter works on
-// any image that carries the redis binaries and mkdir.
+// any image that carries the valkey binaries and mkdir.
 func prepareDataDir(ctx context.Context, c *core) *protoError {
 	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"mkdir", "-p", dataDir}})
 	if perr != nil {
@@ -259,12 +263,14 @@ func prepareDataDir(ctx context.Context, c *core) *protoError {
 	return nil
 }
 
-// checkRDB asks redis-check-rdb whether the transferred file is a loadable
-// RDB before the server is pointed at it. The tool prints its findings to
-// stdout and keeps stderr for usage errors, so the verdict line is taken
-// from whichever spoke.
+// checkRDB asks valkey-check-rdb whether the transferred file is a
+// loadable RDB before the server is pointed at it. The tool prints its
+// findings to stdout and keeps stderr for usage errors, so the verdict
+// line is taken from whichever spoke. It vets integrity, not dialect:
+// a post-fork Redis file passes it and still refuses to load (measured),
+// which is why source.go fences the dialect before the transfer.
 func checkRDB(ctx context.Context, c *core) *protoError {
-	val, stdout, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"redis-check-rdb", rdbInSandbox}})
+	val, stdout, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"valkey-check-rdb", rdbInSandbox}})
 	if perr != nil {
 		return perr
 	}
@@ -275,7 +281,7 @@ func checkRDB(ctx context.Context, c *core) *protoError {
 	if line == "" {
 		line = lastLine(stdout)
 	}
-	return protoErr("source_corrupt", false, "redis-check-rdb rejected the RDB: %s", line)
+	return protoErr("source_corrupt", false, "valkey-check-rdb rejected the RDB: %s", line)
 }
 
 // startEngine launches the daemonized server on the restored data and
@@ -283,14 +289,14 @@ func checkRDB(ctx context.Context, c *core) *protoError {
 // (--appendonly no, --save "") so the server loads the placed RDB rather
 // than an AOF and never rewrites the artifact under the drill.
 //
-// Redis answers clients while it loads the RDB (-LOADING), which is what
+// Valkey answers clients while it loads the RDB (-LOADING), which is what
 // splits the wait into the protocol's phases: engine_ready ends at the
 // server's first answer of any kind, and the load that follows is the
 // restore this drill measures. A dataset small enough to load between two
 // polls measures as zero restore — a real measurement at the poll's
 // resolution, not an estimate.
 func startEngine(ctx context.Context, c *core) (restoreSeconds, readySeconds float64, perr *protoError) {
-	start, stderr, perr := execChecked(ctx, c, "redis-server",
+	start, stderr, perr := execChecked(ctx, c, "valkey-server",
 		"--dir", dataDir, "--dbfilename", rdbName, "--port", strconv.Itoa(defaultPort),
 		"--appendonly", "no", "--save", "", "--daemonize", "yes", "--logfile", serverLog)
 	if perr != nil {
@@ -308,7 +314,7 @@ func startEngine(ctx context.Context, c *core) (restoreSeconds, readySeconds flo
 }
 
 func pingArgv() []string {
-	return []string{"redis-cli", "-e", "-h", "127.0.0.1", "-p", strconv.Itoa(defaultPort), "ping"}
+	return []string{"valkey-cli", "-e", "-h", "127.0.0.1", "-p", strconv.Itoa(defaultPort), "ping"}
 }
 
 // awaitEngine polls PING until it succeeds. upSeconds is when the server
@@ -347,7 +353,7 @@ func awaitEngine(ctx context.Context, c *core) (upSeconds, totalSeconds float64,
 
 // describeStartFailure enriches a readiness timeout with the server log's
 // own last error line: an RDB from a newer format version, for instance,
-// makes redis exit immediately with a precise message.
+// makes valkey exit immediately with a precise message.
 func describeStartFailure(ctx context.Context, c *core, perr *protoError) *protoError {
 	if perr.Code != "engine_not_ready" {
 		return perr
@@ -396,7 +402,7 @@ func opHealthcheck(ctx context.Context, c *core, payload json.RawMessage) (any, 
 	healthy := val.ExitCode == 0
 	detail := "PING answered"
 	if !healthy {
-		detail = fmt.Sprintf("redis-cli ping exited %d", val.ExitCode)
+		detail = fmt.Sprintf("valkey-cli ping exited %d", val.ExitCode)
 	}
 	return map[string]any{
 		"healthy": healthy, "latency_seconds": val.DurationSeconds, "detail": detail,

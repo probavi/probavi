@@ -11,28 +11,30 @@ import (
 
 // rdbmeta.go reads what an RDB file states about itself, out of the file.
 //
-// A Redis RDB begins with the magic "REDIS" plus a four-digit format
-// version, followed by auxiliary fields the server writes before any
-// data: among them `ctime`, the save instant as epoch seconds, and
-// `redis-ver`, the version of the server that saved it (both measured).
-// Epoch seconds
-// carry no zone question, so — like the postgres adapter's pgBackRest
-// kind, and unlike every wall-clock format — an RDB dates itself with no
-// declared timezone, and `redis-ver` gives the version pre-check
-// (docs/engine-versions.md §5) its backup side.
+// Valkey writes two RDB headers, both measured against the official
+// images: through 8.x the magic is "REDIS" plus a four-digit format
+// version (11 — the pre-fork layout), and from 9.0 it is "VALKEY" plus a
+// three-digit format version in Valkey's own numbering (80). Every Valkey
+// since the fork writes a `valkey-ver` auxiliary field naming the server
+// that saved the file, and never writes `redis-ver` — while Redis writes
+// `redis-ver` and never `valkey-ver`. Those aux fields are therefore
+// positive evidence of the artifact's dialect, which source.go turns into
+// refusals; `ctime`, the save instant as epoch seconds, dates the backup
+// with no timezone question, exactly as in the redis adapter.
 //
 // The parser reads only the head of the file and only the encodings those
 // fields use. Anything it does not recognise ends the parse with what was
 // collected so far: metadata is a bonus, never a verdict — except where a
-// field is positive evidence that the artifact is Valkey's (the
-// `valkey-ver` aux Valkey has always written, or the `VALKEY` magic its
-// 9.x writes), which source.go refuses — and the authority on everything
-// else is redis-check-rdb, inside the sandbox.
+// field is positive evidence of a dialect this engine does not load, and
+// the authority on everything else is valkey-check-rdb, inside the
+// sandbox.
 
 const (
-	rdbMagic = "REDIS"
-	// rdbMagicValkey opens the layout Valkey writes from 9.0: "VALKEY"
-	// plus three format-version digits — the same nine header bytes.
+	// rdbMagicRedis opens the pre-fork layout Valkey kept through 8.x;
+	// four format-version digits follow.
+	rdbMagicRedis = "REDIS"
+	// rdbMagicValkey opens Valkey's own layout from 9.0; three
+	// format-version digits follow. Both headers are nine bytes.
 	rdbMagicValkey = "VALKEY"
 	// rdbHeadMax bounds the read: the aux fields sit immediately after
 	// the nine-byte header, well inside this.
@@ -40,12 +42,19 @@ const (
 	// rdbOpcodeAux introduces one key/value auxiliary field.
 	rdbOpcodeAux = 0xFA
 
-	auxRedisVer  = "redis-ver"
 	auxValkeyVer = "valkey-ver"
+	auxRedisVer  = "redis-ver"
 	auxCtime     = "ctime"
+
+	// redisDialectFloor is the first REDIS-magic format version no Valkey
+	// engine loads: Redis moved to 12 with 7.4, after the fork, while
+	// Valkey stayed on 11 until it switched to its own magic. Measured:
+	// Valkey 9 refuses such a file at startup ("Can't handle RDB format
+	// version 12") even though valkey-check-rdb passes it.
+	redisDialectFloor = 12
 )
 
-// rdbVersionShape accepts only version-shaped redis-ver values, so an aux
+// rdbVersionShape accepts only version-shaped aux values, so an aux
 // oddity cannot reach a refusal message.
 var rdbVersionShape = regexp.MustCompile(`^\d+(?:\.\d+)*$`)
 
@@ -54,18 +63,21 @@ type rdbMeta struct {
 	// valid reports either magic plus its format-version digits — the
 	// artifact is RDB-shaped. It says nothing about restorability.
 	valid bool
+	// formatVersion is the number after the magic: Redis-numbered under
+	// the REDIS magic (11, 12, …), Valkey-numbered under VALKEY (80, …).
+	formatVersion int
 	// valkeyMagic reports the VALKEY magic — the layout only Valkey 9+
-	// writes, positive evidence the artifact is the other engine's.
+	// writes.
 	valkeyMagic bool
-	// redisVer is the origin server's version ("7.2.5"), "" when the aux
-	// field is absent or not version-shaped. Unstable builds write
-	// 255.255.255 (measured convention); the shape passes here and the
-	// version pre-check's plausibility bounds discard it.
-	redisVer string
-	// valkeyVer is the origin Valkey server's version — Valkey has
-	// written this aux and never redis-ver since the fork (measured), so
-	// its presence is positive evidence source.go refuses on.
+	// valkeyVer is the origin Valkey server's version ("8.0.10"), ""
+	// when the aux field is absent or not version-shaped. Unstable
+	// builds write 255.255.255 (a convention Valkey kept); the shape
+	// passes here and the version pre-check's plausibility bounds
+	// discard it.
 	valkeyVer string
+	// redisVer is the origin Redis server's version — positive evidence
+	// that the artifact is the other dialect's, which source.go refuses.
+	redisVer string
 	// ctime is the save instant in epoch seconds, 0 when absent or
 	// implausible.
 	ctime int64
@@ -105,11 +117,12 @@ func readHead(path string, max int) ([]byte, error) {
 // parseRDBMeta walks the auxiliary fields at the head of an RDB.
 func parseRDBMeta(head []byte) rdbMeta {
 	m := rdbMeta{}
-	isValkey, ok := rdbHeaderValid(head)
+	version, isValkey, ok := parseRDBHeader(head)
 	if !ok {
 		return m
 	}
 	m.valid = true
+	m.formatVersion = version
 	m.valkeyMagic = isValkey
 	pos := headerLen
 	for pos < len(head) && head[pos] == rdbOpcodeAux {
@@ -131,40 +144,39 @@ func parseRDBMeta(head []byte) rdbMeta {
 // digits, or "VALKEY" plus three.
 const headerLen = 9
 
-// rdbHeaderValid recognises either magic plus its format-version digits.
-// The VALKEY layout is parsed rather than dismissed so that a Valkey
-// artifact can be refused by name instead of failing as corrupt.
-func rdbHeaderValid(head []byte) (isValkey, ok bool) {
+// parseRDBHeader recognises either magic and returns its format version.
+func parseRDBHeader(head []byte) (version int, isValkey, ok bool) {
 	if len(head) < headerLen {
-		return false, false
+		return 0, false, false
 	}
 	var digits []byte
 	switch {
 	case string(head[:len(rdbMagicValkey)]) == rdbMagicValkey:
 		digits, isValkey = head[len(rdbMagicValkey):headerLen], true
-	case string(head[:len(rdbMagic)]) == rdbMagic:
-		digits = head[len(rdbMagic):headerLen]
+	case string(head[:len(rdbMagicRedis)]) == rdbMagicRedis:
+		digits = head[len(rdbMagicRedis):headerLen]
 	default:
-		return false, false
+		return 0, false, false
 	}
 	for _, d := range digits {
 		if d < '0' || d > '9' {
-			return false, false
+			return 0, false, false
 		}
+		version = version*10 + int(d-'0')
 	}
-	return isValkey, true
+	return version, isValkey, true
 }
 
 // recordAux keeps the aux fields this adapter reads, when plausible.
 func recordAux(m *rdbMeta, key, value string) {
 	switch key {
-	case auxRedisVer:
-		if rdbVersionShape.MatchString(value) {
-			m.redisVer = value
-		}
 	case auxValkeyVer:
 		if rdbVersionShape.MatchString(value) {
 			m.valkeyVer = value
+		}
+	case auxRedisVer:
+		if rdbVersionShape.MatchString(value) {
+			m.redisVer = value
 		}
 	case auxCtime:
 		if n, err := strconv.ParseInt(value, 10, 64); err == nil && plausibleEpoch(n) {
