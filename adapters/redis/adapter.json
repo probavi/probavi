@@ -1,0 +1,32 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "redis",
+  "name": "Redis",
+  "status": "experimental",
+  "engine_name": "redis",
+  "conformance_verified": true,
+  "docs": "adapters/redis/README.md",
+  "verified": [
+    {
+      "engine_version": "7.2",
+      "image": "redis:7.2.15",
+      "baseline": true
+    },
+    {
+      "engine_version": "7.4",
+      "image": "redis:7.4.10"
+    },
+    {
+      "engine_version": "8.2",
+      "image": "redis:8.2.8"
+    },
+    {
+      "engine_version": "8.10",
+      "image": "redis:8.10.0"
+    }
+  ],
+  "sources": {
+    "redis_rdb": "One RDB file (a copied dump.rdb, or the output of `redis-cli --rdb`)",
+    "redis_rdb_dir": "A directory of RDB files; the newest by the artifact's own save instant (the ctime header field) is restored"
+  }
+}

@@ -1,0 +1,132 @@
+# probavi-adapter-redis
+
+Restores Redis RDB snapshots into a disposable sandbox and serves the
+restored keys, implementing `probavi-adapter/0` (docs/adapter-protocol.md).
+Self-contained: standard library only, no imports from the Probavi core.
+
+## Supported source kinds
+
+| Kind            | Path points at |
+|-----------------|----------------|
+| `redis_rdb`     | One RDB file — a copied `dump.rdb`, or the output of `redis-cli --rdb` |
+| `redis_rdb_dir` | A directory of RDB files; the newest **by the artifact's own save instant** is restored |
+
+RDB is what Redis itself recommends for backups. What this adapter does
+not restore, on purpose, is in "Deliberately not here" below.
+
+## Sandbox image: start it idle
+
+The official `redis` images carry everything the flow needs — `redis-server`,
+`redis-cli`, `redis-check-rdb` — but their default command boots an empty
+server on the port the restored one needs. Start the sandbox idle and let
+the adapter own the lifecycle:
+
+```yaml
+sandbox:
+  provider: docker
+  params:
+    image: redis:7.2.15
+    command: sleep infinity
+    memory: 256m
+source:
+  kind: redis_rdb
+  path: /backups/redis/dump.rdb
+```
+
+The adapter places the RDB in its own data directory, has `redis-check-rdb`
+vet it, then starts the server daemonized with persistence pinned off
+(`--appendonly no`, `--save ""`): the server loads the placed RDB and never
+rewrites the artifact under the drill. No shell is required for the engine
+flow — every step is direct argv — though the check runner below does use
+`sh` for word splitting, which every official image carries.
+
+There is no auth to reset, unlike every sibling engine: `requirepass` and
+ACLs live in server configuration, not in the RDB, so the restored data
+carries no credentials. The server serves without auth inside a sandbox
+that has no network exposure whatsoever (`--network none`, no ports
+expressible).
+
+## Checks: lines of redis-cli arguments
+
+Redis has no SQL, so the generating built-in checks (`row_count`,
+`table_exists`, `freshness`) do not apply — the same consequence the
+MongoDB and etcd adapters document. A check's text is one line of
+`redis-cli` arguments, run through the probe-declared template:
+
+```yaml
+checks:
+  - kind: query
+    sql: get probavi:config
+    expect: restored-ok
+  - kind: query
+    sql: dbsize
+    expect: "501"
+```
+
+The template word-splits the text without shell parsing (`set -f`, `$0`
+expansion), so `;`, `|`, `$()` and glob characters in a check stay literal
+arguments. `redis-cli -e` makes a command-level error exit non-zero, which
+is how a failing check fails.
+
+## When the backup was taken
+
+An RDB records its save instant in the header (`ctime`, epoch seconds —
+measured). Epoch seconds carry no zone question, so `backup.created_at` is
+exact with **no** `backup_timezone` declaration — like the postgres
+adapter's pgBackRest kind, and unlike every wall-clock format. Declaring
+`backup_timezone` anyway is refused rather than ignored.
+
+The same rule ranks the directory kind: the newest artifact **by its own
+ctime** wins, a dated artifact outranks every undated one, and only
+artifacts with no readable ctime fall back to file time. Files without the
+RDB magic (checksum sidecars, READMEs) are not candidates; if the chosen
+artifact turns out broken, the drill fails rather than quietly restoring
+an older neighbour.
+
+## Engine-version pre-check
+
+The RDB header also names the server that saved it (`redis-ver`), and the
+version rule is asymmetric: an older RDB loads on a newer server — the
+supported path — but a newer server's RDB does not load on an older one
+("Can't handle RDB format version …"). Before anything is transferred,
+the adapter compares the header against the sandbox's
+`redis-server --version` and refuses that one direction up front as
+`invalid_request`, naming both sides (docs/engine-versions.md §5). The
+check refuses only on positive evidence: an RDB without a readable
+`redis-ver` — or one from an unstable build, which writes 255.255.255 —
+skips it, and the load speaks for itself.
+
+## Backup identity
+
+`source_identity.checksum` is sha256 over the artifact's bytes, exactly as
+stored. For the directory kind, the checksum covers the one file chosen
+for restore.
+
+## Source params
+
+| Param             | Meaning |
+|-------------------|---------|
+| `backup_timezone` | Refused — an RDB dates itself in epoch seconds; the declaration has nothing to add. |
+
+## Environment
+
+No credentials are needed to read an RDB file; `source.credential_env` is
+unused. The adapter never prints secrets, and there are none to print.
+
+## Deliberately not here
+
+- **AOF restores.** Redis 7's append-only state is a directory (manifest,
+  base RDB, incremental AOFs) whose members must be captured atomically —
+  Redis's own docs recommend RDB snapshots for backups and call AOF
+  copying more delicate. An AOF kind would be a separate, measured piece
+  of work; claiming it untested would be a false capability.
+- **Compressed artifacts.** A gzip-compressed RDB is refused by name
+  (`unsupported_source`) rather than handed to the server to fail
+  cryptically — decompress first, or back up uncompressed.
+- **Valkey.** Since the fork, the two RDB dialects are not interchangeable
+  in either direction above format version 11, and a Valkey artifact
+  claiming a Valkey version number would be compared against Redis
+  versions. Valkey is a distinct engine with its own matrix
+  (ROADMAP.md); nothing here is verified against it.
+- **PITR.** Redis has no point-in-time recovery to drive; every source
+  kind probes `pitr: false`.

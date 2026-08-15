@@ -7,12 +7,20 @@
 /mysql
 /mongodb
 /mssql
+/clickhouse
+/mariadb
+/etcd
+/redis
 # …and `go build ./...` run from inside an adapter drops it beside the
 # source, where the rules above do not reach
 /adapters/*/postgres
 /adapters/*/mysql
 /adapters/*/mongodb
 /adapters/*/mssql
+/adapters/*/clickhouse
+/adapters/*/mariadb
+/adapters/*/etcd
+/adapters/*/redis
 
 # Test and coverage artifacts
 *.test
