@@ -11,82 +11,81 @@ always called out explicitly.
 
 ## [Unreleased]
 
-### Changed
+## [0.7.0] - 2026-08-15
 
-- **A mysql restore now has to prove the dump was whole** (mysql adapter
-  0.9.0). The postgres work below turned up a defect the same survey found
-  in exactly one other adapter. The mysql client reports that no statement
-  it ran failed; it does not report that it reached the end of a complete
-  dump, and a dump that stops on a statement boundary is valid SQL as far
-  as it goes. Measured against a real server: a three-table dump cut where
-  mysqldump would have died after the first restores that one table, the
-  client exits 0, the decompressor exits 0, and the drill passed — having
-  proved a third of the backup. For the `mysqldump_with_users` accounts
-  script the hole was wider, because that replay runs with `--force` and so
-  cannot abort at all.
-
-  A member is now a pass only when mysqldump's `-- Dump completed` sign-off
-  arrives with it; for a compressed member the stream is tapped while the
-  client consumes it, rather than inflating the artifact twice. A member
-  without that line fails as `source_corrupt` saying the backup stops
-  early, which is a claim about the job that wrote it rather than about the
-  restore.
-
-  **Comment-free dumps stay exempt.** Measured across the flags a backup
-  job plausibly uses, the mysqldump banner and the sign-off travel
-  together: the default and `--skip-dump-date` write both, `--compact` and
-  `--skip-comments` write neither. So only a dump that announces itself is
-  held to its ending, and the residual is documented rather than hidden — a
-  truncated `--compact` dump cannot be detected, because nothing in that
-  format says where it should have stopped. Restoring a compressed member
-  now also needs `mkfifo` and `tee` in the engine image alongside `gzip`;
-  the official `mysql:8.x` images have all three.
-
-  The other two adapters were measured and need nothing: `mongorestore`
-  exits non-zero on a truncated archive, and SQL Server refuses a truncated
-  `.bak` outright (`Msg 3287`), because both formats describe their own
-  extent where a SQL script does not.
+This release deviates, once and on record, from the roadmap's standing rule
+of at most one new engine per release cycle: ClickHouse, MariaDB, and etcd
+all ship in it. The rule stays. What it protects — that no adapter ships
+which nobody keeps green — is protected here by machinery rather than pace:
+each of the three landed as its own reviewed pull request with conformance
+15/15, and the engine-version matrix below re-proves every claimed engine
+version weekly, on every manifest change, and again before this tag was
+allowed to build.
 
 ### Added
 
-- **Community documents**: [CONTRIBUTING.md](CONTRIBUTING.md),
-  [GOVERNANCE.md](GOVERNANCE.md) and
-  [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). The rules themselves are not
-  new — AGENTS.md has carried the engineering gates and the DCO decision
-  from the start — but a contributor had to assemble them from a document
-  written for coding agents. Now one file says how to contribute, one how
-  decisions are made, one what conduct is expected; and GOVERNANCE.md
-  writes the standing commitments down in one place — verification never
-  paywalled, the open-core list closed, evidence append-only, no
-  telemetry — so a future maintainer inherits them explicitly instead of
-  by folklore.
+- **The postgres adapter restores plain-SQL dumps, and gzip-compressed
+  dumps of either format** (postgres 0.9.0). `pg_dump`'s *default* output
+  is plain SQL, and `pg_dump … | gzip > db.sql.gz` is what a great many
+  backup jobs write, yet every logical kind accepted only an uncompressed
+  custom-format archive. A gzipped archive was worse than unsupported: it
+  reached `pg_restore`, which reported "input file does not appear to be a
+  valid archive", and the drill recorded `source_corrupt` — telling an
+  auditor the backup was damaged when it was merely compressed.
 
-- **An etcd adapter** (`adapters/etcd` 0.1.0), the seventh engine — the
-  smallest adapter in the repository and arguably the highest stakes per
-  byte, because an etcd snapshot that does not restore is a Kubernetes
-  cluster that does not come back. It restores `etcdctl snapshot save`
-  artifacts (`etcd_snapshot`, or newest-in-directory via
-  `etcd_snapshot_dir`), starts the server on the restored data, and
-  serves checks written as etcdctl argument lines. Zero core changes,
-  conformance 15/15, verified against etcd 3.5 and 3.6.
+  Format and compression are both recognised from the artifact's bytes,
+  never from its name, and the artifact is restored **as stored**: the
+  decompression happens inside the sandbox, streamed into the client, so
+  `backup.checksum` and `size_bytes` cover the bytes the backup archive
+  actually retains. A plain-SQL dump is replayed by `psql -v
+  ON_ERROR_STOP=1`, an archive by `pg_restore`, and either may be fed by
+  `gzip -dc`. The `pgdump_with_globals` members are sniffed independently,
+  so a job may compress one and not the other. The `-Ft` tar format stays
+  unsupported and is now refused by name instead of being handed to a
+  client that would misreport it.
 
-  The engine forced two design points worth knowing. **The official etcd
-  images are distroless** — measured, they contain `etcd`, `etcdctl` and
-  `etcdutl` and nothing else, no shell — while a snapshot restore
-  *requires* starting the server after `etcdutl` writes the data
-  directory, which needs a shell to detach the process. The drill sandbox
-  therefore runs a two-line wrapper image (alpine plus the three binaries
-  copied from the official image; the recipe is in the adapter README),
-  and a drill pointed at the raw official image fails up front with a
-  message that says so. **A snapshot cannot date itself**: it records
-  revisions and raft terms, not wall clocks, so `backup.created_at` is
-  always null, `backup_timezone` is refused rather than ignored, and the
-  directory kind ranks by file time with the shared in-flight guard.
+  Directory ranking is unaffected by either dimension: both formats record
+  when the dump began in their *head* — the archive header, or the
+  `-- Started on` line `pg_dump` writes under `--verbose` — so a candidate
+  stored compressed is inflated a few kilobytes rather than whole, and the
+  ordering still comes only from what each artifact records about itself.
+  A plain dump taken without `--verbose` carries no date at all and ranks
+  below every dump that does, as an undatable artifact always has.
 
-  Snapshots lacking the integrity hash `etcdctl snapshot save` appends —
-  `db` files copied out of a live data directory — are refused with a
-  message that says how to take the backup instead, because the hash is
-  the only self-verification this format has.
+- **A ClickHouse adapter** (`adapters/clickhouse` 0.1.0), the fifth engine
+  and the first one added since the engine catalog went into `ROADMAP.md`.
+  It restores native backup archives — `BACKUP … TO File('name.zip')` —
+  either one named artifact (`clickhouse_backup`) or the newest in a
+  directory (`clickhouse_backup_dir`). Zero core changes, conformance
+  15/15, verified against ClickHouse 26.3 and 26.7.
+
+  Three things are worth knowing before you point a drill at it, and all
+  three are measured rather than assumed:
+
+  - **The built-in checks work unchanged.** ClickHouse speaks SQL, so
+    `row_count`, `table_exists` and `freshness` reach it exactly as the
+    core composes them — the first engine since MongoDB where that is
+    true, and the reason this one was picked first. The end-to-end test
+    validates the restore with the core's own generated statements rather
+    than a hand-written query, so the claim cannot quietly stop being
+    true.
+  - **`backup.created_at` is real.** A ClickHouse archive carries a
+    `.backup` manifest whose header records when the `BACKUP` ran. What it
+    does not carry is an offset, so `source.params.backup_timezone` says
+    where that server stood; without it the record's `created_at` stays
+    null rather than claiming a wrong instant. The same timestamp is what
+    ranks a directory — never the file's modification time, which dates a
+    copy.
+  - **A half-written archive stops the drill instead of being skipped.**
+    A backup job still writing its zip leaves an unreadable archive newer
+    than everything else; quietly restoring last night's instead would
+    leave a record the operator reads as covering tonight's. An unreadable
+    archive *older* than the chosen one is ignored, so one broken artifact
+    does not block every future drill.
+
+  `RESTORE ALL` covers every artifact shape, so the adapter never has to
+  know what you backed up. Unpacked directory backups, `clickhouse-backup`
+  layouts, and PITR are not supported; the README says why for each.
 
 - **A MariaDB adapter** (`adapters/mariadb` 0.1.0), the sixth engine.
   Logical restores of `mariadb-dump`/`mysqldump` SQL files
@@ -124,61 +123,32 @@ always called out explicitly.
   role machinery differs enough from MySQL 8's that the principal-chain
   verification will be ported measured, not assumed.
 
-- **`evidence verify` now says when an intact log proves nothing.** An empty
-  evidence log verifies: no lines, no damage, no failed assertion, so the
-  schema's algorithm returns VALID (§9) and the command exits `0` — exactly
-  as a log full of verified drills does. That is the right answer to the
-  question a verifier asks, which is whether the file was tampered with
-  rather than whether any drill was ever run, but it means a monitoring
-  check that branches on the exit status cannot tell *"every drill
-  verified"* from *"nothing has ever run"*.
+- **An etcd adapter** (`adapters/etcd` 0.1.0), the seventh engine — the
+  smallest adapter in the repository and arguably the highest stakes per
+  byte, because an etcd snapshot that does not restore is a Kubernetes
+  cluster that does not come back. It restores `etcdctl snapshot save`
+  artifacts (`etcd_snapshot`, or newest-in-directory via
+  `etcd_snapshot_dir`), starts the server on the restored data, and
+  serves checks written as etcdctl argument lines. Zero core changes,
+  conformance 15/15, verified against etcd 3.5 and 3.6.
 
-  Both verifiers — `probavi evidence verify` and the independent
-  `probavi-evidence-verify` — now write one line to **stderr** in that case.
-  Nothing else moves: the exit code is normative and stays `0`, and the
-  machine-readable result on stdout is untouched (it already carries the
-  record count, which is what a script should branch on). The message is
-  translated into all 23 shipped locales.
+  The engine forced two design points worth knowing. **The official etcd
+  images are distroless** — measured, they contain `etcd`, `etcdctl` and
+  `etcdutl` and nothing else, no shell — while a snapshot restore
+  *requires* starting the server after `etcdutl` writes the data
+  directory, which needs a shell to detach the process. The drill sandbox
+  therefore runs a two-line wrapper image (alpine plus the three binaries
+  copied from the official image; the recipe is in the adapter README),
+  and a drill pointed at the raw official image fails up front with a
+  message that says so. **A snapshot cannot date itself**: it records
+  revisions and raft terms, not wall clocks, so `backup.created_at` is
+  always null, `backup_timezone` is refused rather than ignored, and the
+  directory kind ranks by file time with the shared in-flight guard.
 
-  Surfaced by the new fuzz targets, which initially asserted that VALID
-  implies something was verified. The specification disagreed, and it was
-  right; the assertion was wrong. What survived was the observation that the
-  two cases look identical from the outside.
-
-- **A ClickHouse adapter** (`adapters/clickhouse` 0.1.0), the fifth engine
-  and the first one added since the engine catalog went into `ROADMAP.md`.
-  It restores native backup archives — `BACKUP … TO File('name.zip')` —
-  either one named artifact (`clickhouse_backup`) or the newest in a
-  directory (`clickhouse_backup_dir`). Zero core changes, conformance
-  15/15, verified against ClickHouse 26.3 and 26.7.
-
-  Three things are worth knowing before you point a drill at it, and all
-  three are measured rather than assumed:
-
-  - **The built-in checks work unchanged.** ClickHouse speaks SQL, so
-    `row_count`, `table_exists` and `freshness` reach it exactly as the
-    core composes them — the first engine since MongoDB where that is
-    true, and the reason this one was picked first. The end-to-end test
-    validates the restore with the core's own generated statements rather
-    than a hand-written query, so the claim cannot quietly stop being
-    true.
-  - **`backup.created_at` is real.** A ClickHouse archive carries a
-    `.backup` manifest whose header records when the `BACKUP` ran. What it
-    does not carry is an offset, so `source.params.backup_timezone` says
-    where that server stood; without it the record's `created_at` stays
-    null rather than claiming a wrong instant. The same timestamp is what
-    ranks a directory — never the file's modification time, which dates a
-    copy.
-  - **A half-written archive stops the drill instead of being skipped.**
-    A backup job still writing its zip leaves an unreadable archive newer
-    than everything else; quietly restoring last night's instead would
-    leave a record the operator reads as covering tonight's. An unreadable
-    archive *older* than the chosen one is ignored, so one broken artifact
-    does not block every future drill.
-
-  `RESTORE ALL` covers every artifact shape, so the adapter never has to
-  know what you backed up. Unpacked directory backups, `clickhouse-backup`
-  layouts, and PITR are not supported; the README says why for each.
+  Snapshots lacking the integrity hash `etcdctl snapshot save` appends —
+  `db` files copied out of a live data directory — are refused with a
+  message that says how to take the backup instead, because the hash is
+  the only self-verification this format has.
 
 - **Adapters are now verified against several engine versions, and the
   claim has to earn itself.** `docs/capabilities.json` named one version
@@ -233,33 +203,45 @@ always called out explicitly.
   no longer has, and a version stays off the list while anything about it
   is red — the rule is what makes the rest of the list worth reading.
 
-- **The postgres adapter restores plain-SQL dumps, and gzip-compressed
-  dumps of either format** (postgres 0.9.0). `pg_dump`'s *default* output
-  is plain SQL, and `pg_dump … | gzip > db.sql.gz` is what a great many
-  backup jobs write, yet every logical kind accepted only an uncompressed
-  custom-format archive. A gzipped archive was worse than unsupported: it
-  reached `pg_restore`, which reported "input file does not appear to be a
-  valid archive", and the drill recorded `source_corrupt` — telling an
-  auditor the backup was damaged when it was merely compressed.
+- **`evidence verify` now says when an intact log proves nothing.** An empty
+  evidence log verifies: no lines, no damage, no failed assertion, so the
+  schema's algorithm returns VALID (§9) and the command exits `0` — exactly
+  as a log full of verified drills does. That is the right answer to the
+  question a verifier asks, which is whether the file was tampered with
+  rather than whether any drill was ever run, but it means a monitoring
+  check that branches on the exit status cannot tell *"every drill
+  verified"* from *"nothing has ever run"*.
 
-  Format and compression are both recognised from the artifact's bytes,
-  never from its name, and the artifact is restored **as stored**: the
-  decompression happens inside the sandbox, streamed into the client, so
-  `backup.checksum` and `size_bytes` cover the bytes the backup archive
-  actually retains. A plain-SQL dump is replayed by `psql -v
-  ON_ERROR_STOP=1`, an archive by `pg_restore`, and either may be fed by
-  `gzip -dc`. The `pgdump_with_globals` members are sniffed independently,
-  so a job may compress one and not the other. The `-Ft` tar format stays
-  unsupported and is now refused by name instead of being handed to a
-  client that would misreport it.
+  Both verifiers — `probavi evidence verify` and the independent
+  `probavi-evidence-verify` — now write one line to **stderr** in that case.
+  Nothing else moves: the exit code is normative and stays `0`, and the
+  machine-readable result on stdout is untouched (it already carries the
+  record count, which is what a script should branch on). The message is
+  translated into all 23 shipped locales.
 
-  Directory ranking is unaffected by either dimension: both formats record
-  when the dump began in their *head* — the archive header, or the
-  `-- Started on` line `pg_dump` writes under `--verbose` — so a candidate
-  stored compressed is inflated a few kilobytes rather than whole, and the
-  ordering still comes only from what each artifact records about itself.
-  A plain dump taken without `--verbose` carries no date at all and ranks
-  below every dump that does, as an undatable artifact always has.
+  Surfaced by the new fuzz targets, which initially asserted that VALID
+  implies something was verified. The specification disagreed, and it was
+  right; the assertion was wrong. What survived was the observation that the
+  two cases look identical from the outside.
+
+  Because the independent verifier changed, its module moves for the first
+  time since `spec/evidence/v0.3.0`: this release cuts
+  **`spec/evidence/v0.4.0`** (the warning line plus the fuzz targets;
+  format and exit codes untouched), and the documented install pin moves
+  with it. The evidence schema itself is unchanged — a v0.3.0 verifier
+  still accepts every log a v0.4.0 one does.
+
+- **Community documents**: [CONTRIBUTING.md](CONTRIBUTING.md),
+  [GOVERNANCE.md](GOVERNANCE.md) and
+  [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). The rules themselves are not
+  new — AGENTS.md has carried the engineering gates and the DCO decision
+  from the start — but a contributor had to assemble them from a document
+  written for coding agents. Now one file says how to contribute, one how
+  decisions are made, one what conduct is expected; and GOVERNANCE.md
+  writes the standing commitments down in one place — verification never
+  paywalled, the open-core list closed, evidence append-only, no
+  telemetry — so a future maintainer inherits them explicitly instead of
+  by folklore.
 
 - **Code scanning, a published supply-chain score, and a security policy.**
   CodeQL reads the Go of both modules — the core and `spec/evidence`, the
@@ -322,6 +304,40 @@ always called out explicitly.
   `restore_failed`, and a restore that dies on ownership now names the
   `pgdump_with_globals` kind, since a plain dump carries its `OWNER TO`
   statements inline where `pg_restore --no-owner` could have dropped them.
+
+- **A mysql restore now has to prove the dump was whole** (mysql adapter
+  0.9.0). The postgres work above turned up a defect the same survey found
+  in exactly one other adapter. The mysql client reports that no statement
+  it ran failed; it does not report that it reached the end of a complete
+  dump, and a dump that stops on a statement boundary is valid SQL as far
+  as it goes. Measured against a real server: a three-table dump cut where
+  mysqldump would have died after the first restores that one table, the
+  client exits 0, the decompressor exits 0, and the drill passed — having
+  proved a third of the backup. For the `mysqldump_with_users` accounts
+  script the hole was wider, because that replay runs with `--force` and so
+  cannot abort at all.
+
+  A member is now a pass only when mysqldump's `-- Dump completed` sign-off
+  arrives with it; for a compressed member the stream is tapped while the
+  client consumes it, rather than inflating the artifact twice. A member
+  without that line fails as `source_corrupt` saying the backup stops
+  early, which is a claim about the job that wrote it rather than about the
+  restore.
+
+  **Comment-free dumps stay exempt.** Measured across the flags a backup
+  job plausibly uses, the mysqldump banner and the sign-off travel
+  together: the default and `--skip-dump-date` write both, `--compact` and
+  `--skip-comments` write neither. So only a dump that announces itself is
+  held to its ending, and the residual is documented rather than hidden — a
+  truncated `--compact` dump cannot be detected, because nothing in that
+  format says where it should have stopped. Restoring a compressed member
+  now also needs `mkfifo` and `tee` in the engine image alongside `gzip`;
+  the official `mysql:8.x` images have all three.
+
+  The other two adapters were measured and need nothing: `mongorestore`
+  exits non-zero on a truncated archive, and SQL Server refuses a truncated
+  `.bak` outright (`Msg 3287`), because both formats describe their own
+  extent where a SQL script does not.
 
 ## [0.6.0] - 2026-08-10
 
@@ -1707,7 +1723,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/probavi/probavi/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/probavi/probavi/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/probavi/probavi/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/probavi/probavi/compare/v0.3.1...v0.4.0
