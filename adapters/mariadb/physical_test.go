@@ -298,3 +298,99 @@ func TestProvisionPhysicalFailures(t *testing.T) {
 		})
 	}
 }
+
+// versionedBackupFixture writes a backup whose metadata names the origin
+// server, so the version pre-check has something to read.
+func versionedBackupFixture(t *testing.T, serverVersion string) string {
+	t.Helper()
+	backup := writeBackupFixture(t)
+	if err := os.WriteFile(filepath.Join(backup, backupInfoName),
+		[]byte("tool_name = mariadb-backup\nserver_version = "+serverVersion+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return backup
+}
+
+// mariadbdAnswering wraps physicalHandler with an answer for the engine
+// version probe; an empty out simulates an image whose PATH has no
+// mariadbd.
+func mariadbdAnswering(t *testing.T, sequence *[]string, out string) func(verbCall) (any, *protoError) {
+	inner := physicalHandler(t, sequence)
+	return func(call verbCall) (any, *protoError) {
+		if call.Verb == "exec" {
+			args := execArgs{}
+			if err := json.Unmarshal(call.Args, &args); err != nil {
+				t.Fatalf("exec args: %v", err)
+			}
+			if args.Argv[0] == "mariadbd" {
+				*sequence = append(*sequence, "mariadbd-version")
+				if out == "" {
+					return errExec(127, "mariadbd: not found"), nil
+				}
+				return outExec(out), nil
+			}
+		}
+		return inner(call)
+	}
+}
+
+// driveVersionedProvision runs a mariadb_backup provision against a backup
+// whose metadata states serverVersion, with the engine answering out.
+func driveVersionedProvision(t *testing.T, serverVersion, out string) (finalResponse, string) {
+	t.Helper()
+	backup := versionedBackupFixture(t, serverVersion)
+	var sequence []string
+	line, _, _ := driveOp(t, "provision", physicalPayload(backup),
+		mariadbdAnswering(t, &sequence, out))
+	return parseFinal(t, line), strings.Join(sequence, " | ")
+}
+
+func TestPhysicalVersionPrecheckRefusesAMismatch(t *testing.T) {
+	f, sequence := driveVersionedProvision(t, "10.11.8-MariaDB",
+		"mariadbd  Ver 11.4.7-MariaDB-ubu2404-log for debian-linux-gnu on x86_64 (mariadb.org binary distribution)")
+	if f.OK || f.Error.Code != "invalid_request" {
+		t.Fatalf("final = %+v, want invalid_request", f)
+	}
+	for _, want := range []string{"series 10.11", "engine is 11.4", "mariadb:10.11"} {
+		if !strings.Contains(f.Error.Message, want) {
+			t.Errorf("message %q missing %q", f.Error.Message, want)
+		}
+	}
+	if strings.Contains(sequence, "put_file") {
+		t.Error("a refused pairing must not transfer the backup")
+	}
+}
+
+func TestPhysicalVersionPrecheckPasses(t *testing.T) {
+	const engine114 = "mariadbd  Ver 11.4.7-MariaDB-ubu2404-log for debian-linux-gnu on x86_64 (mariadb.org binary distribution)"
+
+	t.Run("match proceeds and runs before the transfer", func(t *testing.T) {
+		f, sequence := driveVersionedProvision(t, "11.4.2-MariaDB", engine114)
+		if !f.OK {
+			t.Fatalf("final = %+v", f)
+		}
+		if !strings.Contains(sequence, "mariadbd-version") {
+			t.Fatalf("sequence %q missing the version probe", sequence)
+		}
+		if strings.Index(sequence, "mariadbd-version") > strings.Index(sequence, "put_file") {
+			t.Error("the version pre-check must run before the backup transfer")
+		}
+	})
+	t.Run("unanswerable engine version skips the check", func(t *testing.T) {
+		f, _ := driveVersionedProvision(t, "10.11.8-MariaDB", "")
+		if !f.OK {
+			t.Fatalf("final = %+v — a refusal needs positive evidence, not a failed probe", f)
+		}
+	})
+	t.Run("backup without metadata skips the check", func(t *testing.T) {
+		backup := writeBackupFixture(t) // no metadata file: no version to read
+		var sequence []string
+		line, _, _ := driveOp(t, "provision", physicalPayload(backup), physicalHandler(t, &sequence))
+		if f := parseFinal(t, line); !f.OK {
+			t.Fatalf("final = %+v", f)
+		}
+		if strings.Contains(strings.Join(sequence, " | "), "mariadbd-version") {
+			t.Error("no version in the backup — the engine must not be queried")
+		}
+	})
+}

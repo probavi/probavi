@@ -115,6 +115,17 @@ writes `xtrabackup_info`/`xtrabackup_checkpoints` (the XtraBackup
 ancestry), 11.0 renamed them to `mariadb_backup_info`/
 `mariadb_backup_checkpoints` (both measured), and a drill accepts either.
 
+The same metadata names the origin server (`server_version`), and before
+anything is transferred the adapter compares it against the sandbox
+engine's `mariadbd --version`: a physical backup restores only into its
+own release series — 10.11 into 10.11, 11.4 into 11.4
+(docs/engine-versions.md §5) — and an impossible pairing is refused up
+front as `invalid_request` with a message naming both sides and the image
+to use instead. The check refuses only on positive evidence: a backup
+without a readable `server_version` simply skips it, and the restore
+speaks for itself (with the error-log surfacing above as the diagnostic
+of last resort).
+
 ## Checks
 
 MariaDB speaks SQL, so the core's built-in checks work unchanged. The

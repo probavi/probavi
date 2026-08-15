@@ -66,6 +66,14 @@ const (
 	headerLastLSNIdx     = 14
 	headerCheckpointIdx  = 15
 	headerDatabaseLSNIdx = 16
+
+	// SoftwareVersionMajor: which SQL Server took the backup. SQL Server
+	// restores an older backup onto a newer engine but never the
+	// reverse, so this is the column the version pre-check
+	// (docs/engine-versions.md §5) compares against the running engine.
+	// Position read off the same measured 2022 header row as the rest.
+	headerVersionIdx   = 25
+	headerVersionCount = 26
 )
 
 // backupMediaMagic are the first four bytes of SQL Server backup media,
@@ -120,6 +128,11 @@ type backupSet struct {
 	lastLSN     string
 	checkpoint  string
 	databaseLSN string
+
+	// softwareMajor is the major version of the SQL Server that took the
+	// backup, 0 when the row stops short of the column or the value is
+	// not a plausible version — the pre-check then has nothing to say.
+	softwareMajor int
 }
 
 // probeBackupSets asks the engine what a transferred file holds. The path
@@ -178,6 +191,9 @@ func parseBackupSets(stdout []byte) ([]backupSet, *protoError) {
 			set.lastLSN = strings.TrimSpace(fields[headerLastLSNIdx])
 			set.checkpoint = strings.TrimSpace(fields[headerCheckpointIdx])
 			set.databaseLSN = strings.TrimSpace(fields[headerDatabaseLSNIdx])
+		}
+		if len(fields) >= headerVersionCount {
+			set.softwareMajor = plausibleSQLServerMajor(fields[headerVersionIdx])
 		}
 		sets = append(sets, set)
 	}
@@ -289,6 +305,20 @@ type selection struct {
 	position  int     // the backup set inside it (RESTORE ... WITH FILE = n)
 	transfer  float64 // seconds spent transferring the chosen artifact
 	createdAt *string // the chosen set's own completion time, if derivable
+	// softwareMajor is the chosen set's origin server major version, 0
+	// when the header did not state one (see backupSet.softwareMajor).
+	softwareMajor int
+}
+
+// softwareMajorOf returns the origin server major of the set at position,
+// 0 when the header did not state one.
+func softwareMajorOf(sets []backupSet, position int) int {
+	for _, s := range sets {
+		if s.position == position {
+			return s.softwareMajor
+		}
+	}
+	return 0
 }
 
 // selectBackup asks the engine what every candidate in the directory is,
@@ -345,7 +375,8 @@ func selectBackup(ctx context.Context, c *core, plan *sourcePlan, destPath strin
 		rank := mediaRank{clock: finished, dated: dated, index: i}
 		if best == nil || rank.beats(bestRank) {
 			best, bestRank = &selection{hostPath: candidate, position: position,
-				createdAt: backupFinishedAt(clock, plan.loc)}, rank
+				createdAt:     backupFinishedAt(clock, plan.loc),
+				softwareMajor: softwareMajorOf(sets, position)}, rank
 		}
 	}
 	if best == nil {
@@ -432,7 +463,8 @@ func selectNamed(ctx context.Context, c *core, hostPath, destPath string, loc *t
 			filepath.Base(hostPath), describeSets(sets))
 	}
 	return &selection{hostPath: hostPath, position: position, transfer: put.DurationSeconds,
-		createdAt: backupFinishedAt(finishedAtOf(sets, position), loc)}, nil
+		createdAt:     backupFinishedAt(finishedAtOf(sets, position), loc),
+		softwareMajor: softwareMajorOf(sets, position)}, nil
 }
 
 // noFullBackup explains an exhausted directory scan: what was examined and

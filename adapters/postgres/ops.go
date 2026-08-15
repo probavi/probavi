@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "postgres"
-	adapterVersion = "0.9.0"
+	adapterVersion = "0.10.0"
 
 	defaultUser     = "postgres"
 	defaultDatabase = "postgres"

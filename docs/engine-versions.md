@@ -107,12 +107,25 @@ says nothing whatsoever about the same adapter on 14, because the format
 underneath changed.
 
 The operator picks the sandbox image in the drill config, so a mismatch is
-possible today and produces whatever error the engine happens to emit.
-Where an adapter can read the version out of the backup itself — pgBackRest
-`backup.info`, `xtrabackup_info`, a `.bak` header — it should compare that
-to the engine it was handed and refuse with its own message instead. That
-work is tracked in `ROADMAP.md`; this document is where the requirement is
-recorded.
+possible. Where an adapter can read the version out of the backup itself,
+it compares that to the engine it was handed and refuses with its own
+message before the restore is attempted — implemented 2026-08-15 by all
+four physical-restore adapters: postgres reads `db-version` from
+pgBackRest's `backup.info`, mysql and mariadb read `server_version` from
+`xtrabackup_info` / `mariadb_backup_info`, and mssql reads
+`SoftwareVersionMajor` from the `RESTORE HEADERONLY` row its selection
+already parses. The refusal is `invalid_request`, named for what it is — a
+drill config pairing a backup with a sandbox that cannot restore it — and
+where the adapter reads the backup host-side it happens before a byte is
+transferred.
+
+Two rules bound the check. It refuses only on positive evidence: an
+unreadable or encrypted manifest, a missing `server_version`, a header row
+that stops short, or an engine that cannot answer skips the check, and the
+restore then speaks for itself. And it encodes each engine's real rule
+rather than one slogan: same major for PostgreSQL, same release series for
+MySQL and MariaDB, and for SQL Server only the downgrade — restoring an
+older backup onto a newer engine is the supported upgrade path and passes.
 
 ## 6. Changing the list
 

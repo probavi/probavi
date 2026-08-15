@@ -120,6 +120,10 @@ func okExec(exit int) any {
 	return execValue{ExitCode: exit}
 }
 
+func outExec(stdout string) any {
+	return execValue{StdoutB64: base64.StdEncoding.EncodeToString([]byte(stdout))}
+}
+
 func errExec(exit int, stderr string) any {
 	return execValue{
 		ExitCode:  exit,

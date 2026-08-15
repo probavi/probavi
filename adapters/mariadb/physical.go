@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 )
 
 // Physical restore (mariadb_backup source kind): a mariadb-backup restore
@@ -42,6 +43,9 @@ func provisionPhysical(ctx context.Context, c *core, req *provisionRequest, src 
 	backupInSandbox := scratch + "/probavi-mariadb-backup"
 
 	if perr := checkIdleSandbox(ctx, c); perr != nil {
+		return nil, perr
+	}
+	if perr := checkEngineVersion(ctx, c, backupSeries(src.path)); perr != nil {
 		return nil, perr
 	}
 
@@ -92,6 +96,38 @@ chown -R mysql:mysql %s`, backupInSandbox, backupInSandbox, datadir, datadir)
 			"database": physicalDatabase, "user": defaultUser, "mode": "physical",
 		},
 	}, nil
+}
+
+// engineSeriesPattern finds the release series in `mariadbd --version`
+// output ("mariadbd  Ver 11.4.7-MariaDB-ubu2404-log for debian-linux-gnu
+// on x86_64 (mariadb.org binary distribution)"). The binary name carries
+// no digits, so the first match is the version.
+var engineSeriesPattern = regexp.MustCompile(`\d+\.\d+`)
+
+// checkEngineVersion refuses the one pairing a physical restore can never
+// survive: a backup from one release series handed to a sandbox running
+// another (docs/engine-versions.md §5). It refuses only on positive
+// evidence — a backup without a readable server_version arrives here as
+// "", an unanswerable or unparseable version query skips the check — and
+// the restore then speaks for itself.
+func checkEngineVersion(ctx context.Context, c *core, series string) *protoError {
+	if series == "" {
+		return nil
+	}
+	val, stdout, _, perr := c.exec(ctx, execArgs{Argv: []string{"mariadbd", "--version"}})
+	if perr != nil {
+		return perr
+	}
+	if val.ExitCode != 0 {
+		return nil
+	}
+	engine := engineSeriesPattern.FindString(string(stdout))
+	if engine == "" || engine == series {
+		return nil
+	}
+	return protoErr("invalid_request", false,
+		"the mariadb-backup backup was taken from server release series %s, but the sandbox engine is %s: a physical backup restores only into its own release series — use a mariadb:%s sandbox image",
+		series, engine, series)
 }
 
 // checkIdleSandbox verifies the preconditions of a physical restore: no

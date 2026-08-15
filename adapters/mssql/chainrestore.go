@@ -171,6 +171,11 @@ func provisionChain(ctx context.Context, c *core, plan *sourcePlan, database, sc
 	logger.Info("chain built", "database", sel.database, "members", len(sel.nodes),
 		"order", chainNames(sel.nodes))
 
+	// The full backup opens the chain; its header names the origin server.
+	if perr := checkEngineVersion(ctx, c, sel.nodes[0].set.softwareMajor); perr != nil {
+		return nil, perr
+	}
+
 	src, perr := plan.chainIdentity(sel, plan.loc)
 	if perr != nil {
 		return nil, perr
