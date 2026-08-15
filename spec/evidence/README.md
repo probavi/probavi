@@ -48,7 +48,7 @@ itself has to be reproducible — an audit that records *which* verifier
 accepted a log has to be able to name it, and `@latest` moves:
 
 ```sh
-go install github.com/probavi/probavi/spec/evidence/cmd/probavi-evidence-verify@v0.3.0
+go install github.com/probavi/probavi/spec/evidence/cmd/probavi-evidence-verify@v0.4.0
 ```
 
 `--key` is repeatable; pass every public key a log may have been signed
