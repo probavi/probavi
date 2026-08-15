@@ -28,7 +28,7 @@ What you get instead:
   workflow from a specific commit, and needs no key from anyone:
 
   ```console
-  $ gh attestation verify probavi_0.7.0_amd64.deb --repo probavi/probavi
+  $ gh attestation verify probavi_0.7.1_amd64.deb --repo probavi/probavi
   ```
 
 Signing the `.deb` files themselves would be close to theatre: `dpkg` does
@@ -91,7 +91,7 @@ own tools run inside the sandbox image, not on the drill host.
 ### Debian, Ubuntu, Mint, Raspbian, Devuan
 
 ```console
-$ ver=0.7.0 arch=amd64
+$ ver=0.7.1 arch=amd64
 $ base="https://github.com/probavi/probavi/releases/download/v${ver}"
 $ curl -fsSLO "${base}/probavi_${ver}_${arch}.deb"
 $ curl -fsSLO "${base}/probavi-adapter-postgres_${ver}_${arch}.deb"
@@ -109,7 +109,7 @@ Upgrade by installing the newer file. Remove with
 ### Fedora, RHEL, CentOS, Rocky, Alma, openSUSE
 
 ```console
-$ sudo dnf install ./probavi-0.7.0-1.x86_64.rpm ./probavi-adapter-postgres-0.7.0-1.x86_64.rpm
+$ sudo dnf install ./probavi-0.7.1-1.x86_64.rpm ./probavi-adapter-postgres-0.7.1-1.x86_64.rpm
 ```
 
 `zypper install` on openSUSE. Remove with `sudo dnf remove probavi-adapter-postgres probavi`.
@@ -117,7 +117,7 @@ $ sudo dnf install ./probavi-0.7.0-1.x86_64.rpm ./probavi-adapter-postgres-0.7.0
 ### Alpine, postmarketOS
 
 ```console
-$ sudo apk add --allow-untrusted ./probavi_0.7.0_x86_64.apk ./probavi-adapter-postgres_0.7.0_x86_64.apk
+$ sudo apk add --allow-untrusted ./probavi_0.7.1_x86_64.apk ./probavi-adapter-postgres_0.7.1_x86_64.apk
 ```
 
 `--allow-untrusted` is required because the package is not signed by an
@@ -130,7 +130,7 @@ Each release attaches a `PKGBUILD` that builds from the source tarball
 and produces the split packages:
 
 ```console
-$ curl -fsSLO "https://github.com/probavi/probavi/releases/download/v0.7.0/PKGBUILD"
+$ curl -fsSLO "https://github.com/probavi/probavi/releases/download/v0.7.1/PKGBUILD"
 $ makepkg -si
 ```
 
@@ -142,8 +142,8 @@ since the tree builds from source anyway. Drop it into a local overlay:
 
 ```console
 $ mkdir -p /var/db/repos/local/app-backup/probavi
-$ cp probavi-0.7.0.ebuild /var/db/repos/local/app-backup/probavi/
-$ ebuild /var/db/repos/local/app-backup/probavi/probavi-0.7.0.ebuild manifest
+$ cp probavi-0.7.1.ebuild /var/db/repos/local/app-backup/probavi/
+$ ebuild /var/db/repos/local/app-backup/probavi/probavi-0.7.1.ebuild manifest
 $ USE="postgres" emerge app-backup/probavi
 ```
 
@@ -164,7 +164,7 @@ Two routes, both supported.
 ### 5.1 The release tarball
 
 ```console
-$ ver=0.7.0 arch=arm64        # or amd64 on an Intel Mac
+$ ver=0.7.1 arch=arm64        # or amd64 on an Intel Mac
 $ base="https://github.com/probavi/probavi/releases/download/v${ver}"
 $ curl -fsSLO "${base}/probavi_${ver}_darwin_${arch}.tar.gz"
 $ curl -fsSLO "${base}/probavi-adapter-postgres_${ver}_darwin_${arch}.tar.gz"
@@ -197,9 +197,9 @@ they work in any:
 ```console
 $ brew tap-new "$USER/probavi"
 $ curl -fsSL -o "$(brew --repository "$USER/probavi")/Formula/probavi.rb" \
-    "https://github.com/probavi/probavi/releases/download/v0.7.0/probavi.rb"
+    "https://github.com/probavi/probavi/releases/download/v0.7.1/probavi.rb"
 $ curl -fsSL -o "$(brew --repository "$USER/probavi")/Formula/probavi-adapter-postgres.rb" \
-    "https://github.com/probavi/probavi/releases/download/v0.7.0/probavi-adapter-postgres.rb"
+    "https://github.com/probavi/probavi/releases/download/v0.7.1/probavi-adapter-postgres.rb"
 $ brew install "$USER/probavi/probavi" "$USER/probavi/probavi-adapter-postgres"
 ```
 

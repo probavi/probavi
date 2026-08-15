@@ -6,7 +6,7 @@
 # published. A missing entry is a hard error: a formula with a wrong or
 # stale sha256 fails at `brew install` time, on the user's machine.
 #
-#   VERSION=0.7.0 packaging/homebrew/render.sh dist/SHA256SUMS dist/Formula
+#   VERSION=0.7.1 packaging/homebrew/render.sh dist/SHA256SUMS dist/Formula
 #
 # Adapters come from the adapters/* glob, the same registry the archives,
 # the packages and the container image use.
