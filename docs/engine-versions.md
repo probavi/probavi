@@ -119,13 +119,27 @@ drill config pairing a backup with a sandbox that cannot restore it — and
 where the adapter reads the backup host-side it happens before a byte is
 transferred.
 
+The RDB engines carry the same check from the artifact's own header: an
+RDB names the server that saved it (`redis-ver`; `valkey-ver` for Valkey,
+which has written its own field and never `redis-ver` since the fork —
+measured), and the redis and valkey adapters compare that against the
+sandbox's `--version` before anything is transferred. The fork adds a
+stricter cousin with the same shape: above format version 11 the Redis
+and Valkey RDB dialects diverge and neither engine loads the other's
+files, so each adapter refuses the other dialect's artifact on positive
+header evidence (`unsupported_source`, pointing at the right adapter) —
+timely precisely because the in-sandbox integrity tool passes a post-fork
+file of the other dialect that the server then refuses at startup
+(measured).
+
 Two rules bound the check. It refuses only on positive evidence: an
 unreadable or encrypted manifest, a missing `server_version`, a header row
 that stops short, or an engine that cannot answer skips the check, and the
 restore then speaks for itself. And it encodes each engine's real rule
 rather than one slogan: same major for PostgreSQL, same release series for
-MySQL and MariaDB, and for SQL Server only the downgrade — restoring an
-older backup onto a newer engine is the supported upgrade path and passes.
+MySQL and MariaDB, and for SQL Server and the RDB engines only the
+downgrade — restoring an older backup onto a newer engine is the supported
+upgrade path and passes.
 
 ## 6. Changing the list
 

@@ -11,6 +11,44 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **A Valkey adapter** (`adapters/valkey` 0.1.0), the ninth engine — a
+  distinct engine with its own version matrix, exactly as ROADMAP.md
+  demanded, because since the fork the two RDB dialects are not
+  interchangeable above format version 11 and restoring one in the
+  other's sandbox would be a false green. It restores RDB snapshots
+  (`valkey_rdb`, newest-in-directory via `valkey_rdb_dir`) the same
+  measured way the redis adapter does — placed in the adapter's own data
+  directory, vetted by `valkey-check-rdb`, loaded by a daemonized
+  `valkey-server` with persistence pinned off — and reads both header
+  layouts Valkey has shipped: the pre-fork `REDIS0011` magic its 7.2/8.x
+  lines write, and the `VALKEY`-magic numbering 9.0 switched to. The
+  `valkey-ver` aux field (written by every Valkey since the fork, never
+  by Redis — measured) feeds the asymmetric version pre-check, and the
+  dialect is fenced on positive evidence before a byte is transferred: a
+  `redis-ver` aux or a `REDIS`-magic format version ≥ 12 refuses the
+  artifact as `unsupported_source`, pointing at the redis adapter —
+  necessary because `valkey-check-rdb` passes a post-fork Redis file
+  that the server then refuses to load ("Can't handle RDB format
+  version 12", measured). A sandbox whose `valkey-server --version`
+  reports Redis is refused the same way. Zero core changes,
+  conformance 15/15, verified against Valkey 7.2, 8.0, 8.1, 9.0, 9.1.
+
+### Changed
+
+- **The redis adapter fences the Valkey dialect by name** (redis 0.2.0),
+  the mirror image of the new adapter's fence: an RDB carrying a
+  `valkey-ver` aux field or the `VALKEY` magic is refused as
+  `unsupported_source` pointing at the valkey adapter — previously a
+  9.x-magic file failed opaquely as `source_corrupt`, and a pre-fork
+  Valkey file restored silently into an engine the backup does not
+  belong to. A sandbox whose `redis-server --version` reports Valkey
+  (the Valkey images ship `redis-*` compatibility symlinks, so presence
+  alone cannot tell) is refused as `invalid_request`. Refusals fire on
+  positive evidence only; artifacts and sandboxes that state nothing
+  keep restoring exactly as before.
+
 ## [0.8.0] - 2026-08-15
 
 Back to the roadmap's standing cadence after the recorded 0.7.0

@@ -11,19 +11,36 @@ import (
 
 func TestResolveFileReadsItsOwnMetadata(t *testing.T) {
 	dir := t.TempDir()
-	path := writeRDB(t, dir, "dump.rdb", "7.2.5", "1786289869")
-	src, perr := resolveSource(context.Background(), "redis_rdb", path)
+	path := writeRDB(t, dir, "dump.rdb", "8.0.10", "1786289869")
+	src, perr := resolveSource(context.Background(), "valkey_rdb", path)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
 	if !strings.HasPrefix(src.checksum, "sha256:") || src.sizeBytes == 0 {
 		t.Errorf("src = %+v", src)
 	}
-	if src.redisVer != "7.2.5" {
-		t.Errorf("redisVer = %q", src.redisVer)
+	if src.valkeyVer != "8.0.10" {
+		t.Errorf("valkeyVer = %q", src.valkeyVer)
 	}
 	if src.createdAt == nil || *src.createdAt != "2026-08-09T15:37:49.000Z" {
 		t.Errorf("createdAt = %v, want the RDB's own save instant", src.createdAt)
+	}
+}
+
+// TestResolveFileValkeyMagic pins the 9.x layout: the VALKEY magic
+// resolves like any RDB, with its own metadata.
+func TestResolveFileValkeyMagic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dump.rdb")
+	if err := os.WriteFile(path, rdbFixtureMagic("VALKEY080",
+		[2]string{"valkey-ver", "9.0.5"}, [2]string{"ctime", "1786289869"}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src, perr := resolveSource(context.Background(), "valkey_rdb", path)
+	if perr != nil {
+		t.Fatalf("resolveSource: %+v", perr)
+	}
+	if src.valkeyVer != "9.0.5" || src.createdAt == nil {
+		t.Errorf("src = %+v, want the 9.x header's own metadata", src)
 	}
 }
 
@@ -37,7 +54,7 @@ func TestResolveFileWithoutDate(t *testing.T) {
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	src, perr := resolveSource(context.Background(), "redis_rdb", path)
+	src, perr := resolveSource(context.Background(), "valkey_rdb", path)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -46,23 +63,27 @@ func TestResolveFileWithoutDate(t *testing.T) {
 	}
 }
 
-// TestRefuseValkeyDialect pins the fence ROADMAP.md demands: positive
-// evidence of a Valkey save refuses the artifact by name, absence refuses
-// nothing. The mirror-image fence lives in the valkey adapter.
-func TestRefuseValkeyDialect(t *testing.T) {
+// TestRefuseRedisDialect pins the fence ROADMAP.md demands: positive
+// evidence of a Redis save refuses the artifact by name, absence refuses
+// nothing.
+func TestRefuseRedisDialect(t *testing.T) {
 	tests := []struct {
 		name    string
 		head    []byte
 		refused bool
 		carries string
 	}{
-		{"a valkey-ver aux names the origin",
-			rdbFixture([2]string{"valkey-ver", "8.0.10"}), true, "Valkey 8.0.10"},
-		{"the VALKEY magic is refused without any aux",
-			[]byte("VALKEY080\xFE\x00"), true, "VALKEY magic"},
+		{"a redis-ver aux names the origin",
+			rdbFixture([2]string{"redis-ver", "7.2.5"}), true, "Redis 7.2.5"},
+		{"a post-fork format version is refused without any aux",
+			rdbFixtureMagic("REDIS0012"), true, "format version 12"},
+		{"a post-fork Redis artifact with its aux",
+			rdbFixtureMagic("REDIS0012", [2]string{"redis-ver", "7.4.2"}), true, "redis adapter"},
 		{"the shared pre-fork layout is not evidence", rdbFixture(), false, ""},
-		{"a redis artifact passes",
-			rdbFixture([2]string{"redis-ver", "7.2.5"}), false, ""},
+		{"a valkey artifact passes",
+			rdbFixture([2]string{"valkey-ver", "8.0.10"}), false, ""},
+		{"the 9.x layout passes",
+			rdbFixtureMagic("VALKEY080", [2]string{"valkey-ver", "9.0.5"}), false, ""},
 		{"no header at all is not evidence", []byte("opaque bytes"), false, ""},
 	}
 	for _, tt := range tests {
@@ -71,7 +92,7 @@ func TestRefuseValkeyDialect(t *testing.T) {
 			if err := os.WriteFile(path, tt.head, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			_, perr := resolveSource(context.Background(), "redis_rdb", path)
+			_, perr := resolveSource(context.Background(), "valkey_rdb", path)
 			if (perr != nil) != tt.refused {
 				t.Fatalf("perr = %+v, refused=%v", perr, tt.refused)
 			}
@@ -84,31 +105,7 @@ func TestRefuseValkeyDialect(t *testing.T) {
 			if !strings.Contains(perr.Message, tt.carries) {
 				t.Errorf("message %q missing %q", perr.Message, tt.carries)
 			}
-			if !strings.Contains(perr.Message, "valkey adapter") {
-				t.Errorf("message %q must point at the valkey adapter", perr.Message)
-			}
 		})
-	}
-}
-
-// TestDirectoryRefusesTheNewestWhenItIsValkey pins the not-a-filter rule
-// for the dialect fence: a Valkey artifact is a candidate, so when it is
-// the one the ranking chooses, the drill refuses it by name instead of
-// quietly proving the older Redis neighbour.
-func TestDirectoryRefusesTheNewestWhenItIsValkey(t *testing.T) {
-	dir := t.TempDir()
-	writeRDB(t, dir, "a-redis-older.rdb", "7.2.5", "1786203469")
-	foreign := filepath.Join(dir, "z-valkey-newest.rdb")
-	if err := os.WriteFile(foreign, rdbFixture(
-		[2]string{"valkey-ver", "8.0.10"}, [2]string{"ctime", "1786289869"}), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, perr := resolveSource(context.Background(), "redis_rdb_dir", dir)
-	if perr == nil || perr.Code != "unsupported_source" {
-		t.Fatalf("perr = %+v, want the chosen Valkey artifact refused, not skipped", perr)
-	}
-	if strings.Contains(perr.Message, "a-redis-older") {
-		t.Error("the drill fell back to the older backup — that would prove a backup the record does not name")
 	}
 }
 
@@ -123,7 +120,7 @@ func TestDirectoryRanking(t *testing.T) {
 		if err := os.Chtimes(newer, past, past); err != nil {
 			t.Fatal(err)
 		}
-		src, perr := resolveSource(context.Background(), "redis_rdb_dir", dir)
+		src, perr := resolveSource(context.Background(), "valkey_rdb_dir", dir)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -141,7 +138,7 @@ func TestDirectoryRanking(t *testing.T) {
 		if err := os.Chtimes(dated, past, past); err != nil {
 			t.Fatal(err)
 		}
-		src, perr := resolveSource(context.Background(), "redis_rdb_dir", dir)
+		src, perr := resolveSource(context.Background(), "valkey_rdb_dir", dir)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -160,7 +157,7 @@ func TestDirectoryRanking(t *testing.T) {
 			t.Fatal(err)
 		}
 		newest := writeRDB(t, dir, "b-new.rdb", "", "")
-		src, perr := resolveSource(context.Background(), "redis_rdb_dir", dir)
+		src, perr := resolveSource(context.Background(), "valkey_rdb_dir", dir)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -168,7 +165,27 @@ func TestDirectoryRanking(t *testing.T) {
 			t.Errorf("picked %s, want the newest by file time", src.path)
 		}
 	})
+}
 
+// TestDirectoryRefusesTheNewestWhenItIsRedis pins the not-a-filter rule
+// for the dialect fence: a Redis artifact is a candidate, so when it is
+// the one the ranking chooses, the drill refuses it by name instead of
+// quietly proving the older Valkey neighbour.
+func TestDirectoryRefusesTheNewestWhenItIsRedis(t *testing.T) {
+	dir := t.TempDir()
+	writeRDB(t, dir, "a-valkey-older.rdb", "8.0.10", "1786203469")
+	foreign := filepath.Join(dir, "z-redis-newest.rdb")
+	if err := os.WriteFile(foreign, rdbFixtureMagic("REDIS0012",
+		[2]string{"redis-ver", "7.4.2"}, [2]string{"ctime", "1786289869"}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, perr := resolveSource(context.Background(), "valkey_rdb_dir", dir)
+	if perr == nil || perr.Code != "unsupported_source" {
+		t.Fatalf("perr = %+v, want the chosen Redis artifact refused, not skipped", perr)
+	}
+	if strings.Contains(perr.Message, "a-valkey-older") {
+		t.Error("the drill fell back to the older backup — that would prove a backup the record does not name")
+	}
 }
 
 func TestDirectoryRefusals(t *testing.T) {
@@ -179,21 +196,21 @@ func TestDirectoryRefusals(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		_, perr := resolveSource(context.Background(), "redis_rdb_dir", dir)
+		_, perr := resolveSource(context.Background(), "valkey_rdb_dir", dir)
 		if perr == nil || perr.Code != "source_not_found" || !strings.Contains(perr.Message, "2 files") {
 			t.Errorf("perr = %+v, want source_not_found counting the passed-over files", perr)
 		}
 	})
 
 	t.Run("an empty directory says so", func(t *testing.T) {
-		_, perr := resolveSource(context.Background(), "redis_rdb_dir", t.TempDir())
+		_, perr := resolveSource(context.Background(), "valkey_rdb_dir", t.TempDir())
 		if perr == nil || perr.Code != "source_not_found" || !strings.Contains(perr.Message, "contains no files") {
 			t.Errorf("perr = %+v", perr)
 		}
 	})
 
 	t.Run("a missing directory says so", func(t *testing.T) {
-		_, perr := resolveSource(context.Background(), "redis_rdb_dir", filepath.Join(t.TempDir(), "gone"))
+		_, perr := resolveSource(context.Background(), "valkey_rdb_dir", filepath.Join(t.TempDir(), "gone"))
 		if perr == nil || perr.Code != "source_not_found" {
 			t.Errorf("perr = %+v", perr)
 		}

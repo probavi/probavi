@@ -358,7 +358,7 @@
       "id": "redis",
       "name": "Redis",
       "status": "experimental",
-      "adapter_version": "0.1.0",
+      "adapter_version": "0.2.0",
       "engine": {
         "id": "redis",
         "name": "redis"
@@ -399,6 +399,56 @@
       "pitr": false,
       "conformance_verified": true,
       "docs": "adapters/redis/README.md"
+    },
+    {
+      "id": "valkey",
+      "name": "Valkey",
+      "status": "experimental",
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "valkey",
+        "name": "valkey"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "7.2",
+          "image": "valkey/valkey:7.2.14"
+        },
+        {
+          "engine_version": "8.0",
+          "image": "valkey/valkey:8.0.10"
+        },
+        {
+          "engine_version": "8.1",
+          "image": "valkey/valkey:8.1.9"
+        },
+        {
+          "engine_version": "9.0",
+          "image": "valkey/valkey:9.0.5"
+        },
+        {
+          "engine_version": "9.1",
+          "image": "valkey/valkey:9.1.1"
+        }
+      ],
+      "sources": [
+        {
+          "id": "valkey_rdb",
+          "name": "One RDB file (a copied dump.rdb, or the output of `valkey-cli --rdb`)",
+          "pitr": false
+        },
+        {
+          "id": "valkey_rdb_dir",
+          "name": "A directory of RDB files; the newest by the artifact's own save instant (the ctime header field) is restored",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/valkey/README.md"
     }
   ],
   "sandbox_providers": [

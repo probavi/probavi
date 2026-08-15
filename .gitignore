@@ -11,6 +11,7 @@
 /mariadb
 /etcd
 /redis
+/valkey
 # …and `go build ./...` run from inside an adapter drops it beside the
 # source, where the rules above do not reach
 /adapters/*/postgres
@@ -21,6 +22,7 @@
 /adapters/*/mariadb
 /adapters/*/etcd
 /adapters/*/redis
+/adapters/*/valkey
 
 # Test and coverage artifacts
 *.test
