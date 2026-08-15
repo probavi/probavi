@@ -32,6 +32,34 @@ always called out explicitly.
   that stops short, or an unanswerable engine skips it, and the restore
   speaks for itself.
 
+- **A Redis adapter** (`adapters/redis` 0.1.0), the eighth engine. It
+  restores RDB snapshots — one named artifact (`redis_rdb`) or the newest
+  in a directory (`redis_rdb_dir`) — by placing the file in its own data
+  directory, having `redis-check-rdb` vet it, and starting a daemonized
+  `redis-server` on it with persistence pinned off, so the artifact is
+  never rewritten under the drill. Zero core changes, conformance 15/15,
+  verified against Redis 7.2, 7.4, 8.2, and 8.10.
+
+  The RDB header pays for itself twice. `ctime` records the save instant
+  in epoch seconds, so `backup.created_at` is exact with no
+  `backup_timezone` declaration — the second format after pgBackRest with
+  that property — and the directory kind ranks candidates by what each
+  artifact records about itself, never by file times alone. And
+  `redis-ver` names the server that saved the backup, which feeds the
+  version pre-check above: Redis's rule is asymmetric like SQL Server's,
+  so only a newer server's RDB handed to an older engine is refused.
+
+  Checks follow the MongoDB/etcd precedent for engines without SQL: a
+  check is a line of redis-cli arguments run through the declared
+  word-splitting runner, with `-e` turning command errors into failing
+  exits. The restored data carries no credentials to reset — requirepass
+  and ACLs live in server config, not in the RDB — and the engine flow
+  needs no shell at all. Deliberately not shipped, with reasons in the
+  adapter README: AOF restores (Redis's own docs recommend RDB snapshots
+  for backups; the 7.x append-only directory is a separate, measured
+  piece of work), compressed artifacts (refused by name), and any Valkey
+  claim — a distinct engine with its own matrix.
+
 ## [0.7.1] - 2026-08-15
 
 This release corrects the record of v0.7.0, whose git tag was placed one
