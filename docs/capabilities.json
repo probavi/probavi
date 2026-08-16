@@ -70,6 +70,49 @@
       "docs": "adapters/clickhouse/README.md"
     },
     {
+      "id": "duckdb",
+      "name": "DuckDB",
+      "status": "experimental",
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "duckdb",
+        "name": "duckdb"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "1.4",
+          "image": "duckdb/duckdb:1.4.5"
+        },
+        {
+          "engine_version": "1.5",
+          "image": "duckdb/duckdb:1.5.5"
+        }
+      ],
+      "sources": [
+        {
+          "id": "duckdb_db",
+          "name": "One database file (a copy of a cleanly closed database)",
+          "pitr": false
+        },
+        {
+          "id": "duckdb_db_dir",
+          "name": "A directory of database files; the newest by file time is restored (the header records no wall clock)",
+          "pitr": false
+        },
+        {
+          "id": "duckdb_export",
+          "name": "One `EXPORT DATABASE` directory (schema.sql, load.sql and one data file per table, CSV or Parquet)",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/duckdb/README.md"
+    },
+    {
       "id": "etcd",
       "name": "etcd",
       "status": "experimental",

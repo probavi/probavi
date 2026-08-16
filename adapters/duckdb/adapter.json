@@ -1,0 +1,25 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. The official duckdb/duckdb images carry only the engine binary — no shell, not even a way to idle (measured) — so the suite runs the wrapper image the adapter README documents, built FROM the listed image; the engine exercised is exactly the listed version's. The baseline is the 1.4 line, DuckDB's designated LTS. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "duckdb",
+  "name": "DuckDB",
+  "status": "experimental",
+  "engine_name": "duckdb",
+  "conformance_verified": true,
+  "docs": "adapters/duckdb/README.md",
+  "verified": [
+    {
+      "engine_version": "1.4",
+      "image": "duckdb/duckdb:1.4.5",
+      "baseline": true
+    },
+    {
+      "engine_version": "1.5",
+      "image": "duckdb/duckdb:1.5.5"
+    }
+  ],
+  "sources": {
+    "duckdb_db": "One database file (a copy of a cleanly closed database)",
+    "duckdb_db_dir": "A directory of database files; the newest by file time is restored (the header records no wall clock)",
+    "duckdb_export": "One `EXPORT DATABASE` directory (schema.sql, load.sql and one data file per table, CSV or Parquet)"
+  }
+}
