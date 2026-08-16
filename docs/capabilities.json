@@ -398,6 +398,49 @@
       "docs": "adapters/postgres/README.md"
     },
     {
+      "id": "prometheus",
+      "name": "Prometheus",
+      "status": "experimental",
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "prometheus",
+        "name": "prometheus"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "3.5",
+          "image": "prom/prometheus:v3.5.5"
+        },
+        {
+          "engine_version": "3.13",
+          "image": "prom/prometheus:v3.13.2"
+        }
+      ],
+      "sources": [
+        {
+          "id": "prometheus_snapshot",
+          "name": "One snapshot directory from `POST /api/v1/admin/tsdb/snapshot`",
+          "pitr": false
+        },
+        {
+          "id": "prometheus_snapshot_dir",
+          "name": "A directory of snapshot directories; the one whose own blocks claim the newest instant is restored",
+          "pitr": false
+        },
+        {
+          "id": "prometheus_snapshot_tar",
+          "name": "One tar archive (plain or gzip) of a snapshot, blocks at the root or under one wrapping directory",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/prometheus/README.md"
+    },
+    {
       "id": "redis",
       "name": "Redis",
       "status": "experimental",
