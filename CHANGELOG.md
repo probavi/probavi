@@ -11,6 +11,12 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-08-16
+
+The standing cadence holds: exactly one new engine in this cycle —
+Apache Cassandra, the thirteenth — with the census and digest fences its
+never-say-no restore tooling demanded, on measured facts.
+
 ### Added
 
 - **An Apache Cassandra adapter** (`adapters/cassandra` 0.1.0), the
@@ -2063,7 +2069,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/probavi/probavi/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/probavi/probavi/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/probavi/probavi/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/probavi/probavi/compare/v0.9.0...v0.10.0
