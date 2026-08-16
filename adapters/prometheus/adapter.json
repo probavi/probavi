@@ -1,0 +1,25 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. The official prom/prometheus images pin the server binary as their entrypoint and cannot idle as a drill sandbox (measured); the suite runs the two-line wrapper the adapter README documents, built FROM the listed image, so the server exercised is exactly the listed version's. The baseline is the 3.5 line, Prometheus's current LTS. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "prometheus",
+  "name": "Prometheus",
+  "status": "experimental",
+  "engine_name": "prometheus",
+  "conformance_verified": true,
+  "docs": "adapters/prometheus/README.md",
+  "verified": [
+    {
+      "engine_version": "3.5",
+      "image": "prom/prometheus:v3.5.5",
+      "baseline": true
+    },
+    {
+      "engine_version": "3.13",
+      "image": "prom/prometheus:v3.13.2"
+    }
+  ],
+  "sources": {
+    "prometheus_snapshot_tar": "One tar archive (plain or gzip) of a snapshot, blocks at the root or under one wrapping directory",
+    "prometheus_snapshot": "One snapshot directory from `POST /api/v1/admin/tsdb/snapshot`",
+    "prometheus_snapshot_dir": "A directory of snapshot directories; the one whose own blocks claim the newest instant is restored"
+  }
+}

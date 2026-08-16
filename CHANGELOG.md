@@ -11,6 +11,52 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **A Prometheus adapter** (`adapters/prometheus` 0.1.0), the twelfth
+  engine — monitoring history is backup-worthy data with a compliance
+  clock of its own, and this is the engine whose forgiveness demanded
+  the most fences. It restores API snapshots in three forms: one tar
+  archive (`prometheus_snapshot_tar`, plain or gzip, blocks at the root
+  or under one wrapping directory — both measured), one snapshot
+  directory (`prometheus_snapshot`), or the newest from a directory of
+  them (`prometheus_snapshot_dir`) — ranked by the instant each
+  snapshot's own blocks claim to cover, never by file times a copy
+  would reset. `created_at` is that same claim, epoch milliseconds,
+  exact. Checks are PromQL through `promtool`, evaluated at the
+  backup's own newest instant: the protocol's `{{database}}`
+  placeholder delivers it into `--time`, so a drill reads the restored
+  data deterministically instead of an empty now. Zero core changes;
+  conformance 15/15; verified against Prometheus 3.5 (the LTS line,
+  baseline) and 3.13, with cross-version restores measured in both
+  directions. The official images pin the server binary as their
+  entrypoint and cannot idle as a drill sandbox (measured), so drills
+  run a two-line wrapper (`ENTRYPOINT []`), recipe in the adapter
+  README — which also names what is deliberately absent: object-store
+  blocks (Thanos/Mimir/Cortex), raw data-directory copies, and a
+  full-chunk read at provision time, because PromQL has no
+  collision-free read-everything query (measured) and the README says
+  exactly what is verified instead.
+- **The census and the probe, fences against a server too forgiving to
+  be trusted alone.** Measured: a block with a corrupted index makes
+  the server refuse to start — surfaced within seconds as
+  `source_corrupt` carrying the server's own log line (both lines'
+  wordings measured), not after the readiness budget — but a block
+  whose meta.json is unreadable is *silently skipped*, the server
+  reports ready, and generic queries answer; and corrupted chunk data
+  is caught only when actually read ("cannot populate chunk …:
+  checksum mismatch", measured). So after readiness the drill compares
+  `prometheus_tsdb_blocks_loaded` from the restored server's own
+  /metrics against the block count the artifact itself states —
+  refusing a partial restore by name — and counts every series at the
+  newest instant the backup claims, refusing a well-formed zero: a
+  server that is up but serves none of the promised data is exactly
+  the false green a monitoring backup invites. The raw-copy fence
+  completes the set: a data directory copied (or tarred) from under a
+  running server carries `wal`, `chunks_head` and `lock` — entries an
+  API snapshot never contains (measured) — and is refused with the
+  snapshot API in the message.
+
 ## [0.11.0] - 2026-08-16
 
 The standing cadence holds: exactly one new engine in this cycle —
