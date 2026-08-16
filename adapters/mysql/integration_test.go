@@ -5,6 +5,7 @@ package main_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1130,5 +1131,138 @@ gzip -c partial.sql > partial.sql.gz`)
 			seed.ID()+":/tmp/"+name, filepath.Join(dest, name)).CombinedOutput(); err != nil {
 			t.Fatalf("extract %s: %v: %s", name, err, out)
 		}
+	}
+}
+
+// buildPerconaToolImage builds (once per base, cached afterwards by
+// docker) the image the Percona variant's physical drill runs: Percona
+// Server plus the matching XtraBackup 8.4 series and gosu — the exact
+// mysqld+xtrabackup+gosu contract the xtrabackup kind documents,
+// assembled from official Percona images (the binaries and their private
+// libraries copied from percona/percona-xtrabackup, measured recipe; the
+// static gosu from the mysql image the sibling tool image already uses).
+func buildPerconaToolImage(t *testing.T, ctx context.Context, base string) string {
+	t.Helper()
+	tag := "probavi-it-percona-xtrabackup:" + strings.ReplaceAll(base[strings.LastIndex(base, ":")+1:], "/", "-")
+	dir := t.TempDir()
+	dockerfile := fmt.Sprintf(`FROM percona/percona-xtrabackup:8.4.0 AS pxb
+FROM mysql:8.0-debian AS gosu
+FROM %s
+USER root
+COPY --from=pxb /usr/bin/xtrabackup /usr/bin/xbstream /usr/bin/
+COPY --from=pxb /usr/lib64/libev.so.4* /usr/lib64/
+COPY --from=pxb /usr/lib/private /usr/lib/private
+COPY --from=gosu /usr/local/bin/gosu /usr/local/bin/gosu
+RUN echo /usr/lib/private > /etc/ld.so.conf.d/pxb-private.conf && ldconfig
+`, base)
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o600); err != nil {
+		t.Fatalf("write dockerfile: %v", err)
+	}
+	if out, err := exec.CommandContext(ctx, "docker", "build", "-q", "-t", tag, dir).CombinedOutput(); err != nil {
+		t.Fatalf("build percona tool image: %v: %s", err, out)
+	}
+	return tag
+}
+
+// TestXtraBackupOnPerconaServer earns the manifest's Percona entry under
+// the variant-image rule (docs/engine-versions.md §1): the logical paths
+// already run on the Percona image through the whole suite, and this
+// test adds what makes the variant a variant — a backup taken by
+// XtraBackup FROM Percona Server, restored INTO Percona Server, the
+// series-matched pairing the adapter README documents. On plain-engine
+// images the test skips, claiming nothing either way.
+func TestXtraBackupOnPerconaServer(t *testing.T) {
+	if !strings.Contains(verifiedImage(t), "percona-server") {
+		t.Skip("the Percona variant matrix job exercises this test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	image := buildPerconaToolImage(t, ctx, verifiedImage(t))
+
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-mysql"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	hostBackup := filepath.Join(t.TempDir(), "backup")
+	makePerconaXtraBackupFixture(t, ctx, image, hostBackup)
+
+	provider := docker.New(nil)
+	sbx, err := provider.Create(ctx, map[string]string{"image": image, "command": "sleep infinity", "memory": engineMemoryLimit})
+	if err != nil {
+		t.Fatalf("create idle sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("mysql", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "xtrabackup", Path: hostBackup},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	health, err := runner.Healthcheck(ctx, &res.Connection, res.State, sbx)
+	if err != nil || !health.Healthy {
+		t.Fatalf("healthcheck = %+v err=%v", health, err)
+	}
+
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	argv := make([]string, 0, len(probe.SQLRunner.Argv))
+	for _, a := range probe.SQLRunner.Argv {
+		a = strings.ReplaceAll(a, "{{user}}", res.Connection.User)
+		a = strings.ReplaceAll(a, "{{database}}", res.Connection.Database)
+		a = strings.ReplaceAll(a, "{{sql}}", `SELECT count(*) FROM "shop"."orders"`)
+		argv = append(argv, a)
+	}
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: argv})
+	if err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if count := strings.TrimSpace(string(out.Stdout)); out.ExitCode != 0 || count != "500" {
+		t.Fatalf("row count = %q (exit %d, stderr %s), want 500", count, out.ExitCode, out.Stderr)
+	}
+	if _, err := runner.Teardown(ctx, res.State, "completed", sbx); err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+}
+
+// makePerconaXtraBackupFixture is makeXtraBackupFixture for the Percona
+// image layout: RHEL-based, so the socket lives wherever /etc/my.cnf
+// says rather than the Debian default — every step pins an explicit
+// socket instead.
+func makePerconaXtraBackupFixture(t *testing.T, ctx context.Context, image, dest string) {
+	t.Helper()
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d",
+		"--label", docker.LabelSandbox+"=1", "--label", "com.probavi.pid="+strconv.Itoa(os.Getpid()),
+		"--network", "none", image, "sleep", "infinity").Output()
+	if err != nil {
+		t.Fatalf("start seed container: %v", err)
+	}
+	id := strings.TrimSpace(string(out))
+	defer exec.Command("docker", "rm", "-f", "-v", id).Run() //nolint:errcheck // best-effort cleanup
+
+	seedScript := `set -e
+chown -R mysql:mysql /var/lib/mysql
+gosu mysql mysqld --initialize-insecure --datadir=/var/lib/mysql
+gosu mysql mysqld --daemonize --socket=/tmp/seed.sock --pid-file=/tmp/seed.pid --log-error=/tmp/seed.err
+mysql --socket=/tmp/seed.sock -u root -e "CREATE DATABASE shop; CREATE TABLE shop.orders (id BIGINT AUTO_INCREMENT PRIMARY KEY, total DECIMAL(10,2) NOT NULL); INSERT INTO shop.orders (total) WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 500) SELECT ROUND(RAND()*100,2) FROM seq;"
+xtrabackup --backup --user=root --socket=/tmp/seed.sock --target-dir=/tmp/backup
+mysqladmin --socket=/tmp/seed.sock -u root shutdown`
+	if out, err := exec.CommandContext(ctx, "docker", "exec", id, "sh", "-c", seedScript).CombinedOutput(); err != nil {
+		t.Fatalf("seed percona xtrabackup fixture: %v: %s", err, out)
+	}
+	if out, err := exec.CommandContext(ctx, "docker", "cp", id+":/tmp/backup", dest).CombinedOutput(); err != nil {
+		t.Fatalf("extract backup: %v: %s", err, out)
 	}
 }

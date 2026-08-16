@@ -248,6 +248,13 @@ func verifyViewsResolve(ctx context.Context, c *core, user, database string) *pr
 // exported from production names the production database — restored under
 // a different name, nothing can reach the target and this gate fires. The
 // message says how to fix it.
+//
+// Built-in accounts are excluded, or the gate would count privileges no
+// backup restored: root, the mysql.% system accounts, and Percona
+// Server's percona.% — measured on the Percona variant image, whose
+// built-in 'percona.telemetry'@'localhost' holds global SELECT and would
+// otherwise satisfy the gate exactly when the wrong-database-name trap
+// should fire.
 func verifyDatabaseReachable(ctx context.Context, c *core, user, database string) *protoError {
 	query := fmt.Sprintf(
 		"SELECT COUNT(*) FROM ("+
@@ -256,7 +263,8 @@ func verifyDatabaseReachable(ctx context.Context, c *core, user, database string
 			"SELECT grantee FROM information_schema.column_privileges WHERE table_schema = '%[1]s' UNION ALL "+
 			"SELECT CONCAT('''', user, '''@''', host, '''') FROM mysql.procs_priv WHERE db = '%[1]s' UNION ALL "+
 			"SELECT grantee FROM information_schema.user_privileges WHERE privilege_type <> 'USAGE'"+
-			") g WHERE g.grantee NOT LIKE '''root''@%%' AND g.grantee NOT LIKE '''mysql.%%'",
+			") g WHERE g.grantee NOT LIKE '''root''@%%' AND g.grantee NOT LIKE '''mysql.%%' "+
+			"AND g.grantee NOT LIKE '''percona.%%'",
 		database)
 	rows, perr := runRows(ctx, c, user, query)
 	if perr != nil {
