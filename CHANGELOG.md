@@ -27,6 +27,17 @@ always called out explicitly.
   records `CREATE EXTENSION` without one), and HNSW/IVFFlat rebuilds
   are part of the measured restore, so a vector-heavy drill's RTO trend
   tracks index build time.
+- **Percona Server joins the mysql adapter's verified matrix** — the
+  second variant-image entry (`percona/percona-server:8.4.10`, the 8.4
+  LTS line), zero adapter-code changes. The variant job runs the whole
+  logical suite on the Percona image — the drop-in claim, exercised on
+  every run — and adds the physical pairing the ROADMAP line named: a
+  backup taken by XtraBackup 8.4 *from* Percona Server, restored *into*
+  Percona Server. The official image ships no XtraBackup, so the suite
+  assembles the mysqld+xtrabackup+gosu contract from official Percona
+  parts (a measured recipe — XtraBackup 8.4's binaries with their
+  private-library layout — which the README ships for operators
+  wanting the same in-sandbox prepare on Percona).
 
 ## [0.13.0] - 2026-08-16
 

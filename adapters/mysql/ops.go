@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "mysql"
-	adapterVersion = "0.10.0"
+	adapterVersion = "0.11.0"
 
 	defaultUser     = "root"
 	defaultDatabase = "probavi"

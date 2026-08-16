@@ -11,6 +11,10 @@
       "engine_version": "8.4",
       "image": "mysql:8.4",
       "baseline": true
+    },
+    {
+      "engine_version": "8.4.10",
+      "image": "percona/percona-server:8.4.10"
     }
   ],
   "sources": {

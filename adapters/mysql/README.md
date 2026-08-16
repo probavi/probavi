@@ -416,3 +416,38 @@ local files). Secrets never appear in protocol messages or logs.
   integration coverage.
 - `teardown` has nothing to release — everything this adapter creates
   lives inside the sandbox, which the provider destroys.
+
+## Percona Server
+
+The `verified` list carries a Percona Server entry
+(`percona/percona-server`, the 8.4 LTS line) under the variant-image
+rule of `docs/engine-versions.md` §1. Its matrix job runs the whole
+logical suite against the Percona image — the drop-in claim, exercised —
+and adds the physical pairing that makes the variant a variant: a backup
+taken by XtraBackup **from** Percona Server, restored **into** Percona
+Server, with the series-matched XtraBackup 8.4.
+
+Two operator notes:
+
+- **Pair XtraBackup with the server series.** An 8.4 server is backed up
+  and restored with XtraBackup 8.4; the sandbox image must carry both
+  (the mysqld + xtrabackup + gosu contract above). The official
+  `percona/percona-server` image ships no XtraBackup — the suite builds
+  the combined image from official Percona parts, and the same recipe
+  works for a drill:
+
+  ```dockerfile
+  FROM percona/percona-xtrabackup:8.4.0 AS pxb
+  FROM mysql:8.0-debian AS gosu
+  FROM percona/percona-server:8.4.10
+  USER root
+  COPY --from=pxb /usr/bin/xtrabackup /usr/bin/xbstream /usr/bin/
+  COPY --from=pxb /usr/lib64/libev.so.4* /usr/lib64/
+  COPY --from=pxb /usr/lib/private /usr/lib/private
+  COPY --from=gosu /usr/local/bin/gosu /usr/local/bin/gosu
+  RUN echo /usr/lib/private > /etc/ld.so.conf.d/pxb-private.conf && ldconfig
+  ```
+
+- **Logical drills need no extra image.** `mysqldump` sources restore on
+  the plain `percona/percona-server` image directly, exactly as on
+  `mysql` — that is what the variant's matrix job proves on every run.
