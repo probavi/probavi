@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,6 +100,41 @@ func assertTargets(t *testing.T, got, want []target) {
 		if got[i] != want[i] {
 			t.Errorf("target %d = %+v, want %+v", i, got[i], want[i])
 		}
+	}
+}
+
+// TestRunPrintsTheMatrix covers the exact invocations the workflow uses:
+// the full matrix and the -baselines-only everyday gate, both as one JSON
+// array on stdout.
+func TestRunPrintsTheMatrix(t *testing.T) {
+	root := filepath.Join("..", "..", "..")
+
+	var full bytes.Buffer
+	if err := run([]string{"-root", root}, &full, io.Discard); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	var all []target
+	if err := json.Unmarshal(full.Bytes(), &all); err != nil {
+		t.Fatalf("output is not a JSON matrix: %v (%q)", err, full.String())
+	}
+	if len(all) == 0 {
+		t.Fatal("empty matrix — the repository has adapters, so this cannot be right")
+	}
+
+	var everyday bytes.Buffer
+	if err := run([]string{"-root", root, "-baselines-only"}, &everyday, io.Discard); err != nil {
+		t.Fatalf("run -baselines-only: %v", err)
+	}
+	var base []target
+	if err := json.Unmarshal(everyday.Bytes(), &base); err != nil {
+		t.Fatalf("baselines output is not a JSON matrix: %v", err)
+	}
+	if len(base) == 0 || len(base) >= len(all) {
+		t.Errorf("baselines emitted %d of %d targets, want a proper non-empty subset", len(base), len(all))
+	}
+
+	if err := run([]string{"-root", filepath.Join(t.TempDir(), "absent")}, io.Discard, io.Discard); err == nil {
+		t.Error("run with a missing root must fail")
 	}
 }
 

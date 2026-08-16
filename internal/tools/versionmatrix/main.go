@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -33,25 +34,35 @@ type target struct {
 }
 
 func main() {
-	root := flag.String("root", ".", "repository root")
-	baselinesOnly := flag.Bool("baselines-only", false,
+	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		fmt.Fprintf(os.Stderr, "versionmatrix: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("versionmatrix", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	root := fs.String("root", ".", "repository root")
+	baselinesOnly := fs.Bool("baselines-only", false,
 		"emit only each adapter's baseline version — the everyday gate")
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	targets, err := enumerate(*root)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "versionmatrix: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	if *baselinesOnly {
 		targets = baselines(targets)
 	}
 	out, err := json.Marshal(targets)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "versionmatrix: %v\n", err)
-		os.Exit(1)
+		return err
 	}
-	fmt.Println(string(out))
+	fmt.Fprintln(stdout, string(out))
+	return nil
 }
 
 // baselines keeps one target per adapter: the version every push has to
