@@ -344,7 +344,7 @@
       "id": "mysql",
       "name": "MySQL",
       "status": "experimental",
-      "adapter_version": "0.10.0",
+      "adapter_version": "0.11.0",
       "engine": {
         "id": "mysql",
         "name": "MySQL"
@@ -356,6 +356,10 @@
         {
           "engine_version": "8.4",
           "image": "mysql:8.4"
+        },
+        {
+          "engine_version": "8.4.10",
+          "image": "percona/percona-server:8.4.10"
         }
       ],
       "sources": [
