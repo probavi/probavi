@@ -351,3 +351,24 @@ local files). Secrets never appear in protocol messages or logs.
   (evidence schema §8).
 - `teardown` has nothing to release — everything this adapter creates lives
   inside the sandbox, which the provider destroys.
+
+## pgvector
+
+The `verified` list carries a pgvector entry (`pgvector/pgvector`, the
+extension's own image — PostgreSQL 17 with the vector extension
+bundled), and its matrix job exercises what makes the variant a variant:
+the suite seeds a `vector(3)` column under an HNSW index, dumps it,
+restores it through the drill, proves the index was rebuilt, and answers
+a nearest-neighbour query through the declared runner. Two consequences
+an operator should know:
+
+- **The extension comes from the image, not the backup.** `pg_dump`
+  records `CREATE EXTENSION vector` without a version, so the restored
+  database gets whatever the sandbox image ships; restoring a dump that
+  used newer extension features on an image with an older extension
+  fails with the engine's own error. Keep the sandbox image's pgvector
+  at least as new as production's.
+- **Index rebuilds are part of the measured restore.** A logical restore
+  rebuilds HNSW/IVFFlat indexes from scratch, and on real datasets that
+  rebuild can dominate `restore_seconds` — expect the RTO trend of a
+  vector-heavy drill to track index build time, not just data volume.

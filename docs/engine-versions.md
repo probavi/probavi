@@ -38,6 +38,16 @@ Removing a version is a normal change, not an admission: when a vendor
 ends support, the entry goes, and the adapter's README records that the
 code may still work while nothing in CI proves it any more.
 
+A **variant image** — the same engine shipped differently, such as a
+distribution (Percona Server for the mysql adapter) or the engine with a
+bundled extension (pgvector for the postgres adapter) — may be listed
+under the adapter it is a variant of, under one extra obligation: the
+suite must exercise what makes the variant a variant, or the entry says
+nothing a plain-engine entry does not already say. The `engine_version`
+string carries the variant's own version exactly as the image tag states
+it, and the `image` column is what tells a consumer which flavour a row
+is; the three rules above apply to the variant's vendor unchanged.
+
 ## 2. Listed means exercised
 
 `adapters/<id>/adapter.json` is the single source. Two mechanisms keep the
