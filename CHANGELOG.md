@@ -11,6 +11,50 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **A DuckDB adapter** (`adapters/duckdb` 0.1.0), the eleventh engine and
+  the second embedded one, riding the pattern the sqlite adapter proved:
+  no server, no shell in any step — direct argv throughout — and the
+  restored file's path reaches the declared runner through
+  `{{database}}`. Zero core changes. It restores copies of cleanly
+  closed database files (`duckdb_db`, newest-in-directory via
+  `duckdb_db_dir`) and `EXPORT DATABASE` directories (`duckdb_export`),
+  with CSV and Parquet exports both restoring offline (measured — the
+  extensions are bundled) and `IMPORT DATABASE` resolving the paths
+  `load.sql` baked in against wherever the export now sits (measured
+  against a moved export). Conformance 15/15; verified against DuckDB
+  1.4 — the designated LTS, the baseline — and 1.5. The official
+  `duckdb/duckdb` images carry only the engine binary: no shell, not
+  even a way to idle (measured), and the binary does not start on musl
+  (measured), so drills run a two-line wrapper on a glibc base, recipe
+  in the adapter README, and the integration suite builds exactly that
+  wrapper from the manifest's listed image. Deliberately absent, with
+  reasons in the README: encrypted databases (1.4's `ENCRYPTION_KEY`
+  needs a key-handling design, not an assumption), compressed
+  artifacts, and crash-image `db`+`.wal` pair restores.
+- **The storage-format fence, this engine's version pre-check** — the
+  first embedded engine where the impossible pairing is real: a DuckDB
+  header names its storage format version and the library that wrote it
+  (offsets 12 and 52, measured), DuckDB writes the oldest compatible
+  format by default so files travel both ways between the verified
+  lines (measured), but a file written with a newer `STORAGE_VERSION`
+  is refused by an older engine at open (measured: 1.4.5 answers "we
+  can only read versions between 64 and 67" to a v1.5.0-format file).
+  The adapter maps that engine refusal to `invalid_request` naming both
+  sides — the format and writer from the file's own header, the engine
+  from its version probe — because it is a drill config pairing a
+  backup with a sandbox image that cannot read it, the
+  `docs/engine-versions.md` §5 shape. The live-copy fence carries over
+  from the sqlite cycle on this engine's own measurements: a non-empty
+  `.wal` sibling means the database file alone opens cleanly and
+  silently misses every committed transaction still in the write-ahead
+  log (505 rows live, 500 in the copy — measured), so the copy is
+  refused by name with the fix in the message. No zero-byte or
+  corruption gates duplicate the engine here: DuckDB checksums its
+  blocks and refuses invalid files at open (measured), which is exactly
+  the honesty the sqlite adapter had to build host-side.
+
 ## [0.10.0] - 2026-08-16
 
 The standing cadence holds: exactly one new engine in this cycle —

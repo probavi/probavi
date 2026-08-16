@@ -13,6 +13,7 @@
 /redis
 /valkey
 /sqlite
+/duckdb
 # …and `go build ./...` run from inside an adapter drops it beside the
 # source, where the rules above do not reach
 /adapters/*/postgres
@@ -25,6 +26,7 @@
 /adapters/*/redis
 /adapters/*/valkey
 /adapters/*/sqlite
+/adapters/*/duckdb
 
 # Test and coverage artifacts
 *.test
