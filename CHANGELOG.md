@@ -11,6 +11,15 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-16
+
+The standing cadence holds: exactly one new engine in this cycle —
+OpenSearch, the fourteenth — the first built on the sysctl decision's
+measured no-privilege design, with the census and shard-gate fences an
+engine forgiving in both directions demanded. The verified matrix also
+gains its first two variant images, pgvector and Percona Server, each
+earning its listing by exercising exactly what makes it a variant.
+
 ### Added
 
 - **An OpenSearch adapter** (`adapters/opensearch` 0.1.0), the
@@ -2148,7 +2157,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/probavi/probavi/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/probavi/probavi/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/probavi/probavi/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/probavi/probavi/compare/v0.10.0...v0.11.0
