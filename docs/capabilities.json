@@ -32,6 +32,49 @@
   },
   "adapters": [
     {
+      "id": "cassandra",
+      "name": "Apache Cassandra",
+      "status": "experimental",
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "cassandra",
+        "name": "cassandra"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "4.1",
+          "image": "cassandra:4.1.12"
+        },
+        {
+          "engine_version": "5.0",
+          "image": "cassandra:5.0.9"
+        }
+      ],
+      "sources": [
+        {
+          "id": "cassandra_snapshot",
+          "name": "One collected snapshot tree: `<keyspace>/<table>/` holding each table's `snapshots/<tag>/` contents",
+          "pitr": false
+        },
+        {
+          "id": "cassandra_snapshot_dir",
+          "name": "A directory of collected snapshot trees; the one whose own manifests claim the newest instant is restored",
+          "pitr": false
+        },
+        {
+          "id": "cassandra_snapshot_tar",
+          "name": "One tar archive (plain or gzip) of a collected snapshot, keyspaces at the root or under one wrapping directory",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/cassandra/README.md"
+    },
+    {
       "id": "clickhouse",
       "name": "ClickHouse",
       "status": "experimental",

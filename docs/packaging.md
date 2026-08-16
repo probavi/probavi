@@ -56,6 +56,7 @@ process, so the core alone cannot run a drill:
 | `probavi-adapter-sqlite` | you drill SQLite |
 | `probavi-adapter-duckdb` | you drill DuckDB |
 | `probavi-adapter-prometheus` | you drill Prometheus |
+| `probavi-adapter-cassandra` | you drill Apache Cassandra |
 | `probavi-adapter-mssql` | you drill SQL Server |
 
 **Verifying an evidence log needs only `probavi`.** `probavi evidence
@@ -142,7 +143,7 @@ $ makepkg -si
 ### Gentoo
 
 Each release attaches `probavi-<version>.ebuild`. Adapters are USE flags
-(`postgres`, `mysql`, `mariadb`, `mongodb`, `mssql`, `clickhouse`, `etcd`, `redis`, `valkey`, `sqlite`, `duckdb`, `prometheus`) rather than separate packages,
+(`postgres`, `mysql`, `mariadb`, `mongodb`, `mssql`, `clickhouse`, `etcd`, `redis`, `valkey`, `sqlite`, `duckdb`, `prometheus`, `cassandra`) rather than separate packages,
 since the tree builds from source anyway. Drop it into a local overlay:
 
 ```console
