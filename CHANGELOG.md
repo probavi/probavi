@@ -11,6 +11,23 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **pgvector joins the postgres adapter's verified matrix** — the first
+  variant-image entry, under the rule added to
+  `docs/engine-versions.md` §1: a variant may be listed only when the
+  suite exercises what makes it a variant. The `pgvector/pgvector`
+  image's matrix job seeds a vector column under an HNSW index, dumps
+  it, restores it through the drill, proves the index was rebuilt, and
+  answers a nearest-neighbour query through the declared runner — a
+  plain dump restoring on the image would have said nothing about
+  vectors. Zero adapter-code changes. The README records the two
+  operational truths the ROADMAP line predicted: the extension's
+  version comes from the sandbox image, not the backup (`pg_dump`
+  records `CREATE EXTENSION` without one), and HNSW/IVFFlat rebuilds
+  are part of the measured restore, so a vector-heavy drill's RTO trend
+  tracks index build time.
+
 ## [0.13.0] - 2026-08-16
 
 The standing cadence holds: exactly one new engine in this cycle —

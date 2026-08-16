@@ -853,3 +853,120 @@ printf "$(printf "\\\\%03o" $(( (orig + 1) % 256 )))" | dd of=crc.sql.gz bs=1 se
 		}
 	}
 }
+
+// TestVectorExtensionRestoreDrill earns the manifest's pgvector entry:
+// listed means exercised (docs/engine-versions.md §2), and for a variant
+// image the exercise must cover what makes it a variant — a plain dump
+// restoring on the pgvector image would say nothing about vectors. The
+// fixture carries a vector column and an HNSW index; the drill restores
+// it, proves the index was rebuilt, and answers a nearest-neighbour
+// query through the probe-declared runner. On images without the
+// extension the test skips: this run then claims nothing either way.
+func TestVectorExtensionRestoreDrill(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-postgres"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	provider := docker.New(nil)
+	params := map[string]string{"image": verifiedImage(t), "env.POSTGRES_HOST_AUTH_METHOD": "trust",
+		"memory": engineMemoryLimit}
+
+	fixture := filepath.Join(t.TempDir(), "vectors.dump")
+	if !makeVectorFixture(t, ctx, provider, params, fixture) {
+		t.Skip("image does not provide the vector extension; the pgvector matrix job exercises this test")
+	}
+
+	sbx, err := provider.Create(ctx, params)
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("postgres", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "pgdump", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	// The restored HNSW index is the point: index rebuilds are part of the
+	// measured restore, and their absence would be a silently weaker
+	// recovery than the backup promises.
+	assertRunnerRow(t, ctx, sbx, probe, res,
+		"SELECT count(*) FROM pg_indexes WHERE tablename = 'items' AND indexdef LIKE '%hnsw%'", "1")
+	assertRunnerRow(t, ctx, sbx, probe, res,
+		"SELECT count(*) FROM items", "203")
+	assertRunnerRow(t, ctx, sbx, probe, res,
+		"SELECT label FROM items ORDER BY embedding <-> '[1,0,0]' LIMIT 1", "closest")
+}
+
+// makeVectorFixture seeds vectors under an HNSW index and dumps them;
+// false reports an image without the extension.
+func makeVectorFixture(t *testing.T, ctx context.Context, provider *docker.Provider,
+	params map[string]string, dest string) bool {
+	t.Helper()
+	seed, err := provider.Create(ctx, params)
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+	awaitReady(t, ctx, seed)
+
+	avail, err := seed.Exec(ctx, sandbox.ExecRequest{Argv: []string{
+		"psql", "-h", "127.0.0.1", "-U", "postgres", "-tA", "-c",
+		"SELECT count(*) FROM pg_available_extensions WHERE name = 'vector'"}})
+	if err != nil {
+		t.Fatalf("probe extension: %v", err)
+	}
+	if avail.ExitCode != 0 || strings.TrimSpace(string(avail.Stdout)) != "1" {
+		return false
+	}
+
+	seedSQL := `CREATE EXTENSION vector;
+CREATE TABLE items (id bigserial PRIMARY KEY, label text NOT NULL, embedding vector(3));
+INSERT INTO items (label, embedding) VALUES ('closest', '[1,0,0]'), ('mid', '[0.5,0.5,0]'), ('far', '[0,0,1]');
+INSERT INTO items (label, embedding)
+  SELECT 'filler-'||g, ARRAY[1+random(), 1+random(), 1+random()]::vector(3) FROM generate_series(1,200) g;
+CREATE INDEX ON items USING hnsw (embedding vector_l2_ops);`
+	mustExec(t, ctx, seed, "psql", "-h", "127.0.0.1", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-c", seedSQL)
+	mustExec(t, ctx, seed, "pg_dump", "-h", "127.0.0.1", "-U", "postgres", "-Fc", "-f", "/tmp/vectors.dump", "postgres")
+	if out, err := exec.CommandContext(ctx, "docker", "cp", seed.ID()+":/tmp/vectors.dump", dest).CombinedOutput(); err != nil {
+		t.Fatalf("extract fixture: %v: %s", err, out)
+	}
+	return true
+}
+
+// assertRunnerRow runs one check through the probe-declared runner and
+// asserts its single-row answer.
+func assertRunnerRow(t *testing.T, ctx context.Context, sbx *docker.Sandbox,
+	probe *adapter.ProbeResult, res *adapter.ProvisionResult, sql, want string) {
+	t.Helper()
+	argv := make([]string, 0, len(probe.SQLRunner.Argv))
+	for _, a := range probe.SQLRunner.Argv {
+		a = strings.ReplaceAll(a, "{{user}}", res.Connection.User)
+		a = strings.ReplaceAll(a, "{{database}}", res.Connection.Database)
+		argv = append(argv, strings.ReplaceAll(a, "{{sql}}", sql))
+	}
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: argv})
+	if err != nil {
+		t.Fatalf("runner exec: %v", err)
+	}
+	if got := strings.TrimSpace(string(out.Stdout)); out.ExitCode != 0 || got != want {
+		t.Fatalf("check %q = %q (exit %d, stderr %s), want %q", sql, got, out.ExitCode, out.Stderr, want)
+	}
+}

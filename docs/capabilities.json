@@ -412,6 +412,10 @@
         {
           "engine_version": "17",
           "image": "postgres:17"
+        },
+        {
+          "engine_version": "0.8.6-pg17",
+          "image": "pgvector/pgvector:0.8.6-pg17"
         }
       ],
       "sources": [
