@@ -389,6 +389,44 @@
       "docs": "adapters/mysql/README.md"
     },
     {
+      "id": "opensearch",
+      "name": "OpenSearch",
+      "status": "experimental",
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "opensearch",
+        "name": "opensearch"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "2.19.6",
+          "image": "opensearchproject/opensearch:2.19.6"
+        },
+        {
+          "engine_version": "3.8.0",
+          "image": "opensearchproject/opensearch:3.8.0"
+        }
+      ],
+      "sources": [
+        {
+          "id": "opensearch_repo",
+          "name": "One fs snapshot repository directory; the snapshot whose own metadata claims the newest instant is restored",
+          "pitr": false
+        },
+        {
+          "id": "opensearch_repo_tar",
+          "name": "One tar archive (plain or gzip) of an fs snapshot repository, the repository at the root or under one wrapping directory",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/opensearch/README.md"
+    },
+    {
       "id": "postgres",
       "name": "PostgreSQL",
       "status": "experimental",

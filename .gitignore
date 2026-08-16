@@ -16,6 +16,7 @@
 /duckdb
 /prometheus
 /cassandra
+/opensearch
 # …and `go build ./...` run from inside an adapter drops it beside the
 # source, where the rules above do not reach
 /adapters/*/postgres
@@ -31,6 +32,7 @@
 /adapters/*/duckdb
 /adapters/*/prometheus
 /adapters/*/cassandra
+/adapters/*/opensearch
 
 # Test and coverage artifacts
 *.test
