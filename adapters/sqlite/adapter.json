@@ -1,0 +1,38 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. There is no official SQLite image; the community image below is the pragmatic verification target (any image carrying a POSIX shell and the sqlite3 CLI works, the README explains). SQLite's upstream supports only its latest release, so the older lines listed are the ones distributions maintain — the baseline is the line Debian stable ships, per docs/engine-versions.md §6. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "sqlite",
+  "name": "SQLite",
+  "status": "experimental",
+  "engine_name": "sqlite",
+  "conformance_verified": true,
+  "docs": "adapters/sqlite/README.md",
+  "verified": [
+    {
+      "engine_version": "3.46",
+      "image": "keinos/sqlite3:3.46.1",
+      "baseline": true
+    },
+    {
+      "engine_version": "3.49",
+      "image": "keinos/sqlite3:3.49.2"
+    },
+    {
+      "engine_version": "3.50",
+      "image": "keinos/sqlite3:3.50.4"
+    },
+    {
+      "engine_version": "3.51",
+      "image": "keinos/sqlite3:3.51.3"
+    },
+    {
+      "engine_version": "3.53",
+      "image": "keinos/sqlite3:3.53.4"
+    }
+  ],
+  "sources": {
+    "sqlite_db": "One database file from `sqlite3 .backup` or `VACUUM INTO` (or a copy of a cleanly closed database)",
+    "sqlite_db_dir": "A directory of database files; the newest by file time is restored (the header records no wall clock)",
+    "sqlite_dump": "SQL text from `sqlite3 .dump`",
+    "sqlite_dump_dir": "A directory of dumps; the newest by file time is restored"
+  }
+}

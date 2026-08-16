@@ -401,6 +401,66 @@
       "docs": "adapters/redis/README.md"
     },
     {
+      "id": "sqlite",
+      "name": "SQLite",
+      "status": "experimental",
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "sqlite",
+        "name": "sqlite"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "3.46",
+          "image": "keinos/sqlite3:3.46.1"
+        },
+        {
+          "engine_version": "3.49",
+          "image": "keinos/sqlite3:3.49.2"
+        },
+        {
+          "engine_version": "3.50",
+          "image": "keinos/sqlite3:3.50.4"
+        },
+        {
+          "engine_version": "3.51",
+          "image": "keinos/sqlite3:3.51.3"
+        },
+        {
+          "engine_version": "3.53",
+          "image": "keinos/sqlite3:3.53.4"
+        }
+      ],
+      "sources": [
+        {
+          "id": "sqlite_db",
+          "name": "One database file from `sqlite3 .backup` or `VACUUM INTO` (or a copy of a cleanly closed database)",
+          "pitr": false
+        },
+        {
+          "id": "sqlite_db_dir",
+          "name": "A directory of database files; the newest by file time is restored (the header records no wall clock)",
+          "pitr": false
+        },
+        {
+          "id": "sqlite_dump",
+          "name": "SQL text from `sqlite3 .dump`",
+          "pitr": false
+        },
+        {
+          "id": "sqlite_dump_dir",
+          "name": "A directory of dumps; the newest by file time is restored",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/sqlite/README.md"
+    },
+    {
       "id": "valkey",
       "name": "Valkey",
       "status": "experimental",

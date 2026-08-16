@@ -12,6 +12,7 @@
 /etcd
 /redis
 /valkey
+/sqlite
 # …and `go build ./...` run from inside an adapter drops it beside the
 # source, where the rules above do not reach
 /adapters/*/postgres
@@ -23,6 +24,7 @@
 /adapters/*/etcd
 /adapters/*/redis
 /adapters/*/valkey
+/adapters/*/sqlite
 
 # Test and coverage artifacts
 *.test

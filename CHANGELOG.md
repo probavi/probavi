@@ -11,6 +11,50 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **An SQLite adapter** (`adapters/sqlite` 0.1.0), the tenth engine and
+  the first embedded one: there is no server to start, so provision
+  places the artifact — or replays the dump — under the sandbox's
+  scratch directory, and every check opens the restored file through the
+  probe-declared runner, whose `{{database}}` placeholder delivers a
+  path the probe could not know. Zero core changes: the protocol's
+  connection shape expresses "nothing listens here" as written. It
+  restores self-contained database files from `sqlite3 .backup` or
+  `VACUUM INTO` (`sqlite_db`, newest-in-directory via `sqlite_db_dir`)
+  and `.dump` SQL text (`sqlite_dump`, `sqlite_dump_dir`), vetted
+  in-sandbox by `PRAGMA integrity_check` — whose contract of printing
+  problems while exiting 0 (measured) a sandbox-side shell folds into an
+  exit code, the same declarative absorption the runner template
+  performs for dialects. Conformance 15/15; verified against SQLite
+  3.46, 3.49, 3.50, 3.51 and 3.53 — there is no official SQLite image,
+  so the community image `keinos/sqlite3` is the named verification
+  target and any image carrying a POSIX shell and the sqlite3 CLI works.
+  Deliberately absent, with reasons in the adapter README: Litestream
+  PITR, compressed artifacts, crash-image `db`+`-wal` pair restores, and
+  any version pre-check — the file format is compatible in both
+  directions since 3.0.0, so unlike SQL Server and the RDB engines there
+  is no impossible pairing to refuse up front.
+- **The live-copy fence, this engine's own false green** — the ROADMAP
+  line ordered the adapter "must not pretend a copy of a live database
+  is safe", and the measured facts made it three fences, each firing on
+  positive evidence only. A database copied beside a non-empty `-wal` or
+  `-journal` sibling is refused by name: the main file alone passes
+  `integrity_check` with `ok` while silently missing every transaction
+  still in the write-ahead log (measured), which is precisely the green
+  drill an auditor must never see. A zero-byte artifact is refused
+  host-side because sqlite3 accepts it as a valid empty database —
+  `integrity_check` says `ok` and queries answer (measured) — while even
+  a schema-less database backs up as a full header page. And a `.dump`
+  that opens with its exact signature but lost its `COMMIT;` trailer is
+  refused before transfer, because replaying such a file exits 0 and
+  leaves an empty database — the wrapping transaction never commits and
+  the rollback erases every row without a word (measured — the
+  truncation no exit code will ever report). The healthcheck counts
+  `sqlite_schema` instead of `SELECT 1` for the same family of reasons:
+  a bare constant query answers even against a file that is not a
+  database on older CLIs (measured on 3.46).
+
 ## [0.9.0] - 2026-08-15
 
 The standing cadence again: exactly one new engine in this cycle —
