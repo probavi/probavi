@@ -11,6 +11,60 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **An Apache Cassandra adapter** (`adapters/cassandra` 0.1.0), the
+  thirteenth engine — the biggest name left in the catalog's
+  fits-the-current-model group, and the engine whose restore tooling
+  most needed distrust. It restores collected `nodetool snapshot`
+  backups in three forms: one tar archive (`cassandra_snapshot_tar`,
+  plain or gzip, keyspaces at the root or under one wrapping directory),
+  one collected tree (`cassandra_snapshot`, `<keyspace>/<table>/`
+  holding each table's `snapshots/<tag>/` contents — the README shows
+  the exact collection loop, and the integration suite runs that very
+  loop), or the newest of a directory of trees
+  (`cassandra_snapshot_dir`), ranked by the instant each snapshot's own
+  manifests claim — `manifest.json` states it in UTC (measured on 4.1
+  and 5.0), which is also `created_at`, exact. The adapter prepares a
+  single node for the zero-ingress sandbox itself (hostname-to-loopback
+  and address pinning, both measured as required under `--network
+  none`; the official images idle under `command: sleep infinity` with
+  no wrapper), recreates each table from the backup's own `schema.cql`,
+  streams the sstables in, and reads one row of every restored table
+  before reporting. The cqlsh dialect — decorated output and all — is
+  absorbed declaratively in the runner template (an awk filter turns
+  the measured table shapes into the protocol's undecorated
+  tab-separated rows, pipefail carrying cqlsh's own exit code), so the
+  generating built-in checks apply unchanged. Honesty stated where it
+  belongs: a per-node snapshot is not cluster-consistent, the drill
+  proves exactly what was restored, and the keyspace is created
+  drill-locally at replication factor 1 because `schema.cql` carries
+  table DDL only (measured). Version pairing measured in both
+  directions: 4.1 sstables stream into a 5.0 node cleanly, while a 5.0
+  snapshot's own schema fails on 4.1 ("Unknown property
+  'allow_auto_snapshot'") and is mapped to a refusal naming both
+  sides. Zero core changes; conformance 15/15; verified against
+  Cassandra 4.1 (the baseline) and 5.0. Deliberately absent, with
+  reasons in the README: Medusa, incremental `backups/`, commitlog
+  PITR, and multi-node topology restores.
+- **The census and the digest, fences against a loader that never says
+  no.** Measured twice, refused twice — host-side, from the artifact's
+  own claims, before a byte is transferred: `sstableloader` finding no
+  complete sstable streams zero bytes and **exits 0**, so every
+  component a sstable's own `TOC.txt` and the snapshot's `manifest.json`
+  list must exist; and the loader streams a **corrupted Data file
+  without a word** — the damage surfacing only when the restored table
+  is read — so every Data file is verified against the CRC-32 its own
+  `Digest.crc32` sidecar claims. For the archive kind both are judged
+  from the tar stream in one pass, without unpacking. The raw-copy
+  fence refuses table directories carrying `snapshots/` or `backups/`
+  (a copy taken from under a running node, never a snapshot's shape),
+  system keyspaces are refused as never being what a backup drill
+  means, and directory names must be unquoted CQL identifiers before
+  they may reach composed CQL. A read probe after the restore closes
+  whatever none of the claims predicted, carrying the engine's own
+  refusal.
+
 ## [0.12.0] - 2026-08-16
 
 The standing cadence holds: exactly one new engine in this cycle —

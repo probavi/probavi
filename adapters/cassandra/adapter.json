@@ -1,0 +1,25 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. The official cassandra images idle under `command: sleep infinity` with no wrapper (their entrypoint passes non-cassandra commands through, measured); the adapter prepares the node for a zero-ingress sandbox itself. The baseline is the 4.1 line, the older of the two maintained series and the one most estates run. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "cassandra",
+  "name": "Apache Cassandra",
+  "status": "experimental",
+  "engine_name": "cassandra",
+  "conformance_verified": true,
+  "docs": "adapters/cassandra/README.md",
+  "verified": [
+    {
+      "engine_version": "4.1",
+      "image": "cassandra:4.1.12",
+      "baseline": true
+    },
+    {
+      "engine_version": "5.0",
+      "image": "cassandra:5.0.9"
+    }
+  ],
+  "sources": {
+    "cassandra_snapshot_tar": "One tar archive (plain or gzip) of a collected snapshot, keyspaces at the root or under one wrapping directory",
+    "cassandra_snapshot": "One collected snapshot tree: `<keyspace>/<table>/` holding each table's `snapshots/<tag>/` contents",
+    "cassandra_snapshot_dir": "A directory of collected snapshot trees; the one whose own manifests claim the newest instant is restored"
+  }
+}
