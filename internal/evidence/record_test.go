@@ -127,11 +127,13 @@ func TestValidateRejects(t *testing.T) {
 		{"negative backup size", func(r *Record) { r.Backup.SizeBytes = i64Ptr(-1) }},
 		{"empty adapter name", func(r *Record) { r.Adapter.Name = "" }},
 		{"empty adapter protocol", func(r *Record) { r.Adapter.Protocol = "" }},
+		{"bad adapter digest", func(r *Record) { r.Adapter.Digest = strPtr("sha256:short") }},
 		{"empty sandbox provider", func(r *Record) { r.Sandbox.Provider = "" }},
 		{"nil sandbox params", func(r *Record) { r.Sandbox.Params = nil }},
 		{"negative timing", func(r *Record) { r.Timings.Restore = i64Ptr(-5) }},
 		{"empty env version", func(r *Record) { r.Env.ProbaviVersion = "" }},
 		{"bad host id", func(r *Record) { r.Env.HostID = "NOT-HEX" }},
+		{"bad probavi digest", func(r *Record) { r.Env.ProbaviDigest = strPtr("md5:abc") }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
