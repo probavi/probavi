@@ -13,6 +13,57 @@ always called out explicitly.
 
 ### Added
 
+- **An OpenSearch adapter** (`adapters/opensearch` 0.1.0), the
+  fourteenth engine — the first shipped on the sysctl decision's
+  measured design, and the proof the dilemma was dissolved rather than
+  postponed. It restores `fs` snapshot repositories in two forms: one
+  repository directory (`opensearch_repo`, the `location` of a
+  registered `fs` repository) or one tar archive of it
+  (`opensearch_repo_tar`, plain or gzip, the repository at the root or
+  under one wrapping directory). A repository holds every snapshot ever
+  taken into it, so the drill restores the one whose own metadata
+  claims the newest instant (`end_time_in_millis` — also `created_at`,
+  epoch-exact), refuses it by name if its state is not `SUCCESS`, and
+  refuses the version pairing before the transfer when the metadata
+  names a writing engine newer than the sandbox (snapshots do not
+  restore on older engines; the engine's own refusal is mapped to the
+  same answer when the metadata is silent). The node starts *before*
+  the transfer — `path.repo` is a static setting — in exactly the
+  loopback dev mode the decision measured: single-node discovery, the
+  security plugin off, `node.store.allow_mmap: false`; no sysctl, no
+  privilege, and no wrapper image (the official
+  `opensearchproject/opensearch` images idle under `command: sleep
+  infinity`, entrypoint pass-through measured). Checks are OpenSearch
+  SQL through the bundled SQL plugin, its raw format absorbed
+  declaratively in the runner template; the generating built-in checks
+  do not apply (the plugin rejects SQL-standard quoted identifiers,
+  measured — the same trade the mongodb, etcd and prometheus adapters
+  document). System indices are excluded from the restore: they belong
+  to the running node and collide with it by name (measured). Zero
+  core changes; conformance 15/15; verified against OpenSearch 2.19.6
+  (the baseline) and 3.8.0. Deliberately absent, with reasons in the
+  README: remote repositories (S3/Azure/GCS — a zero-ingress sandbox
+  cannot reach them by design), system indices and cluster state, and
+  Elasticsearch snapshots (a different engine's artifact; the pairing
+  refusal names the mismatch).
+- **The census and the shard gate, fences against an engine that is
+  forgiving in both directions** — measured, OpenSearch registers a
+  directory that is no repository at all without a word and simply
+  lists zero snapshots, and a restore from damaged repository data
+  returns HTTP 200 with failed shards and the cluster red. Neither is
+  callable green here: host-side, the repository's own files
+  (`index.latest`, the `index-<gen>` it names) must parse and claim at
+  least one snapshot before a byte is transferred — for the archive
+  kind judged from the tar stream in one pass, without unpacking — and
+  the engine's post-registration listing is compared against that
+  claim; sandbox-side, the restore verdict is read from the shard
+  counts and a green-cluster gate (replicas forced to the single
+  node's honest zero), never from the HTTP status. The API calls run
+  `curl` without `-f` deliberately, because an HTTP error's body is
+  where the engine states its reason in its own words. Raw
+  data-directory copies (and tars of them) are refused by their own
+  markers (`nodes`, `_state` — never in an `fs` repository), teaching
+  the repository workflow in the message.
 - **pgvector joins the postgres adapter's verified matrix** — the first
   variant-image entry, under the rule added to
   `docs/engine-versions.md` §1: a variant may be listed only when the

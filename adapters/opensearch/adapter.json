@@ -1,0 +1,24 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. The official opensearchproject/opensearch images idle under `command: sleep infinity` with no wrapper (their entrypoint passes non-opensearch commands through, measured); the adapter starts a loopback single node itself — dev mode, mmap off — so no sysctl or privilege ever enters the sandbox parameters. The baseline is the 2.x line, the older of the two maintained series. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "opensearch",
+  "name": "OpenSearch",
+  "status": "experimental",
+  "engine_name": "opensearch",
+  "conformance_verified": true,
+  "docs": "adapters/opensearch/README.md",
+  "verified": [
+    {
+      "engine_version": "2.19.6",
+      "image": "opensearchproject/opensearch:2.19.6",
+      "baseline": true
+    },
+    {
+      "engine_version": "3.8.0",
+      "image": "opensearchproject/opensearch:3.8.0"
+    }
+  ],
+  "sources": {
+    "opensearch_repo_tar": "One tar archive (plain or gzip) of an fs snapshot repository, the repository at the root or under one wrapping directory",
+    "opensearch_repo": "One fs snapshot repository directory; the snapshot whose own metadata claims the newest instant is restored"
+  }
+}

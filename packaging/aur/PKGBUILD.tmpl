@@ -16,7 +16,7 @@ pkgname=('probavi' 'probavi-adapter-postgres' 'probavi-adapter-mysql'
          'probavi-adapter-etcd' 'probavi-adapter-redis'
          'probavi-adapter-valkey' 'probavi-adapter-sqlite'
          'probavi-adapter-duckdb' 'probavi-adapter-prometheus'
-         'probavi-adapter-cassandra')
+         'probavi-adapter-cassandra' 'probavi-adapter-opensearch')
 pkgver=${PKGVER}
 pkgrel=1
 # The git tag, which differs from pkgver for a pre-release: makepkg
@@ -89,4 +89,5 @@ package_probavi-adapter-sqlite()   { _package_adapter sqlite; }
 package_probavi-adapter-duckdb()   { _package_adapter duckdb; }
 package_probavi-adapter-prometheus() { _package_adapter prometheus; }
 package_probavi-adapter-cassandra()  { _package_adapter cassandra; }
+package_probavi-adapter-opensearch() { _package_adapter opensearch; }
 package_probavi-adapter-mssql()    { _package_adapter mssql; }
