@@ -75,8 +75,9 @@ CI restores from; which of them ran on the last push is our business.
 
 | Trigger | What runs | Why |
 | --- | --- | --- |
-| Every pull request | the baseline version of every adapter, one job each | The everyday gate has to stay minutes, not hours, or it stops being a gate people wait for. |
-| A pull request touching a manifest, the matrix tool, or the workflow | every listed version | The change that edits a claim is the one that has to prove it, and asking a reviewer to remember that is not a mechanism. |
+| A pull request whose every changed file sits under adapter directories | the baseline version of each touched adapter | An adapter is an external process nobody imports, so its change cannot alter another adapter's restore; the gate proves exactly what changed, and its clock stays short as the catalog grows. |
+| Every other pull request | the baseline version of every adapter, one job each | Shared code can affect any restore, and the everyday gate has to stay minutes, not hours, or it stops being a gate people wait for. |
+| A pull request touching a manifest, the matrix tool, or the workflow | every listed version | The change that edits a claim is the one that has to prove it, and asking a reviewer to remember that is not a mechanism. This row wins over the two above: a manifest change is adapter-local and still runs everything. |
 | Weekly, on schedule | every listed version | Engine images move under us — a new patch release, a changed entrypoint, a dropped tool — and this is what notices. |
 | Every `v*` tag, before artifacts are built | every listed version | A release publishes the manifest. The claims in it are re-earned by that commit rather than inherited from whenever the schedule last ran. |
 | On demand (`workflow_dispatch`) | every listed version | For the change that adds or removes a version, so it is proven before merge rather than discovered by the schedule. |

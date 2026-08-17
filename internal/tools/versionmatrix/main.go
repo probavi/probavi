@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/probavi/probavi/internal/capabilities"
 )
@@ -46,6 +47,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	root := fs.String("root", ".", "repository root")
 	baselinesOnly := fs.Bool("baselines-only", false,
 		"emit only each adapter's baseline version — the everyday gate")
+	adapters := fs.String("adapters", "",
+		"comma-separated adapter ids to keep — the scope of an adapter-local pull request; "+
+			"empty keeps every adapter, and an id no manifest declares is an error")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -56,6 +60,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	if *baselinesOnly {
 		targets = baselines(targets)
+	}
+	if *adapters != "" {
+		if targets, err = filterAdapters(targets, *adapters); err != nil {
+			return err
+		}
 	}
 	out, err := json.Marshal(targets)
 	if err != nil {
@@ -76,6 +85,37 @@ func baselines(targets []target) []target {
 		}
 	}
 	return out
+}
+
+// filterAdapters keeps the targets of the named adapters, preserving
+// enumeration order. Every name must match an enumerated adapter: a
+// typo that silently shrank the matrix would be this tool's one failure
+// mode, so an unknown or empty id is an error, checked in the order the
+// caller named them.
+func filterAdapters(targets []target, list string) ([]target, error) {
+	names := strings.Split(list, ",")
+	present := map[string]bool{}
+	for _, t := range targets {
+		present[t.Adapter] = true
+	}
+	want := map[string]bool{}
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil, fmt.Errorf("-adapters names an empty adapter id in %q", list)
+		}
+		if !present[name] {
+			return nil, fmt.Errorf("-adapters names %q, which no manifest declares", name)
+		}
+		want[name] = true
+	}
+	out := make([]target, 0, len(targets))
+	for _, t := range targets {
+		if want[t.Adapter] {
+			out = append(out, t)
+		}
+	}
+	return out, nil
 }
 
 // enumerate reads every adapter manifest and flattens it into one job per
