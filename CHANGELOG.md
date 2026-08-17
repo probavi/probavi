@@ -11,6 +11,24 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **Redis append-only restores** (`adapters/redis` 0.3.0, new source
+  kind `redis_aof`): a copy of the Redis 7+ append-only directory —
+  manifest, base, incremental segments — is replayed in full. The
+  manifest is the completeness gate this artifact needs most: a copy
+  taken mid-rewrite loses members, and a manifest naming a file the
+  backup does not hold is refused as an incomplete copy before a byte
+  reaches the sandbox. In the sandbox `redis-check-aof` vets the whole
+  set, and the server reads the staged manifest by its own derived
+  `--appendfilename` — an unmatched name would silently start an empty
+  set, exactly the false green a drill must not produce. The base RDB's
+  header feeds the existing version pre-check and Valkey dialect fence;
+  `backup.created_at` stays deliberately null (the base's ctime dates
+  the last rewrite, not the backup). The integration suite proves a
+  rewritten base plus a post-rewrite tail both replay, measured against
+  real servers.
+
 ### Fixed
 
 - **The Prometheus block census no longer refuses compaction-window

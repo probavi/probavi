@@ -533,7 +533,7 @@
       "id": "redis",
       "name": "Redis",
       "status": "experimental",
-      "adapter_version": "0.2.0",
+      "adapter_version": "0.3.0",
       "engine": {
         "id": "redis",
         "name": "redis"
@@ -560,6 +560,11 @@
         }
       ],
       "sources": [
+        {
+          "id": "redis_aof",
+          "name": "A copy of the Redis 7+ append-only directory (manifest, base, incremental segments), replayed in full",
+          "pitr": false
+        },
         {
           "id": "redis_rdb",
           "name": "One RDB file (a copied dump.rdb, or the output of `redis-cli --rdb`)",

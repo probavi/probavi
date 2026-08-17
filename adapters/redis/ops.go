@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,7 +14,7 @@ import (
 
 const (
 	adapterName    = "redis"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 
 	// Where the restored server serves inside the sandbox. No TLS and no
 	// auth: a Probavi sandbox is zero-ingress (--network none, no ports
@@ -29,6 +30,11 @@ const (
 	dataDir      = "/probavi-redis/data"
 	rdbName      = "dump.rdb"
 	rdbInSandbox = dataDir + "/" + rdbName
+	// aofDirName is where the append-only set is placed under dataDir;
+	// the server is started with --appenddirname naming it, so the
+	// artifact's original directory name never matters.
+	aofDirName      = "appendonlydir"
+	aofDirInSandbox = dataDir + "/" + aofDirName
 	// serverLog is where the daemonized server writes; the readiness
 	// timeout path reads it so a start failure names the engine's own
 	// reason instead of "never became ready".
@@ -49,6 +55,7 @@ func probePayload() any {
 		"sources": []map[string]any{
 			{"kind": "redis_rdb", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "redis_rdb_dir", "capabilities": map[string]bool{"pitr": false}},
+			{"kind": "redis_aof", "capabilities": map[string]bool{"pitr": false}},
 		},
 		"sql_runner": map[string]any{
 			// Redis has no SQL: the check text the core passes through
@@ -86,16 +93,18 @@ type provisionRequest struct {
 	} `json:"pitr"`
 }
 
-// opProvision restores the RDB into the idle sandbox and starts the
-// server on it: preflight (redis-server present, versions compatible),
-// place the file, integrity check, daemonized start, readiness.
+// opProvision restores the artifact — one RDB file, or a Redis 7+
+// append-only directory — into the idle sandbox and starts the server
+// on it: preflight (redis-server present, versions compatible), stage
+// the file or set, integrity check by the matching redis-check-* tool,
+// daemonized start, readiness.
 //
-// The whole lifecycle belongs to the adapter because it has to: an RDB is
-// loaded by the server at startup from its configured data directory, so
-// the sequence "place, then serve" cannot be expressed by an image's own
-// entrypoint. The drill config starts the sandbox idle (docker:
-// command: sleep infinity) — the official images otherwise boot an empty
-// server on the port the restored one needs.
+// The whole lifecycle belongs to the adapter because it has to: both
+// artifact shapes are loaded by the server at startup from its
+// configured data directory, so the sequence "place, then serve" cannot
+// be expressed by an image's own entrypoint. The drill config starts the
+// sandbox idle (docker: command: sleep infinity) — the official images
+// otherwise boot an empty server on the port the restored one needs.
 func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *slog.Logger) (any, *protoError) {
 	req := &provisionRequest{}
 	if err := json.Unmarshal(payload, req); err != nil {
@@ -122,18 +131,12 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		return nil, perr
 	}
 
-	if perr := prepareDataDir(ctx, c); perr != nil {
-		return nil, perr
-	}
-	put, perr := c.putFile(ctx, putFileArgs{SourcePath: src.path, DestPath: rdbInSandbox, Mode: "0600"})
+	transferSeconds, perr := stageArtifact(ctx, c, src)
 	if perr != nil {
 		return nil, perr
 	}
-	if perr := checkRDB(ctx, c); perr != nil {
-		return nil, perr
-	}
 
-	restoreSeconds, readySeconds, perr := startEngine(ctx, c)
+	restoreSeconds, readySeconds, perr := startEngine(ctx, c, src.serverArgs())
 	if perr != nil {
 		return nil, perr
 	}
@@ -153,11 +156,66 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		},
 		"timings": map[string]any{
 			"engine_ready_seconds": readySeconds,
-			"transfer_seconds":     put.DurationSeconds,
+			"transfer_seconds":     transferSeconds,
 			"restore_seconds":      restoreSeconds,
 		},
-		"state": map[string]any{"data_dir": dataDir, "rdb_path": rdbInSandbox},
+		"state": src.state(),
 	}, nil
+}
+
+// stageArtifact places the artifact in the sandbox and has the matching
+// redis-check-* tool vet it before the server is pointed at it. For the
+// append-only kind that is the manifest plus every file it names, into
+// the adapter's own append-only directory.
+func stageArtifact(ctx context.Context, c *core, src *resolvedSource) (float64, *protoError) {
+	if src.aof == nil {
+		if perr := prepareDir(ctx, c, dataDir); perr != nil {
+			return 0, perr
+		}
+		put, perr := c.putFile(ctx, putFileArgs{SourcePath: src.path, DestPath: rdbInSandbox, Mode: "0600"})
+		if perr != nil {
+			return 0, perr
+		}
+		return put.DurationSeconds, checkRDB(ctx, c)
+	}
+	if perr := prepareDir(ctx, c, aofDirInSandbox); perr != nil {
+		return 0, perr
+	}
+	total := 0.0
+	for _, name := range src.aof.transferNames() {
+		put, perr := c.putFile(ctx, putFileArgs{
+			SourcePath: filepath.Join(src.aof.dir, name),
+			DestPath:   aofDirInSandbox + "/" + name, Mode: "0600",
+		})
+		if perr != nil {
+			return 0, perr
+		}
+		total += put.DurationSeconds
+	}
+	return total, checkAOF(ctx, c, src.aof.manifestName)
+}
+
+// serverArgs are the redis-server flags that point the engine at the
+// staged artifact. Persistence is pinned in both flows so the server
+// never rewrites what the drill measures: the RDB flow disables AOF
+// outright, and the AOF flow disables RDB saves while --appendfilename
+// derives from the staged manifest's own name — an unmatched name would
+// make the server silently start a fresh, empty append-only set, the
+// exact false green this adapter exists to refuse.
+func (src *resolvedSource) serverArgs() []string {
+	if src.aof == nil {
+		return []string{"--dir", dataDir, "--dbfilename", rdbName, "--appendonly", "no", "--save", ""}
+	}
+	return []string{"--dir", dataDir, "--appendonly", "yes", "--appenddirname", aofDirName,
+		"--appendfilename", src.aof.appendFilename(), "--save", ""}
+}
+
+// state is what healthcheck and teardown are handed back.
+func (src *resolvedSource) state() map[string]any {
+	if src.aof == nil {
+		return map[string]any{"data_dir": dataDir, "rdb_path": rdbInSandbox}
+	}
+	return map[string]any{"data_dir": dataDir, "aof_dir": aofDirInSandbox}
 }
 
 // engineVersionPattern finds the release series in `redis-server
@@ -245,11 +303,11 @@ func checkEngineVersion(redisVer, engineOut string) *protoError {
 		oMajor, oMinor, eMajor, eMinor, oMajor, oMinor)
 }
 
-// prepareDataDir creates the directory the server will load from. No
+// prepareDir creates the directory the server will load from. No
 // shell: every step of this flow is direct argv, so the adapter works on
 // any image that carries the redis binaries and mkdir.
-func prepareDataDir(ctx context.Context, c *core) *protoError {
-	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"mkdir", "-p", dataDir}})
+func prepareDir(ctx context.Context, c *core, dir string) *protoError {
+	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"mkdir", "-p", dir}})
 	if perr != nil {
 		return perr
 	}
@@ -278,21 +336,41 @@ func checkRDB(ctx context.Context, c *core) *protoError {
 	return protoErr("source_corrupt", false, "redis-check-rdb rejected the RDB: %s", line)
 }
 
-// startEngine launches the daemonized server on the restored data and
-// waits until it answers PING. Persistence is pinned off explicitly
-// (--appendonly no, --save "") so the server loads the placed RDB rather
-// than an AOF and never rewrites the artifact under the drill.
+// checkAOF asks redis-check-aof whether the staged set is loadable
+// before the server is pointed at it: handed the manifest, the tool
+// walks the base and every incremental segment (measured). Like its RDB
+// sibling it prints findings to stdout and keeps stderr for usage
+// errors.
+func checkAOF(ctx context.Context, c *core, manifestName string) *protoError {
+	val, stdout, stderr, perr := c.exec(ctx, execArgs{
+		Argv: []string{"redis-check-aof", aofDirInSandbox + "/" + manifestName}})
+	if perr != nil {
+		return perr
+	}
+	if val.ExitCode == 0 {
+		return nil
+	}
+	line := firstLine(stderr)
+	if line == "" {
+		line = lastLine(stdout)
+	}
+	return protoErr("source_corrupt", false, "redis-check-aof rejected the append-only set: %s", line)
+}
+
+// startEngine launches the daemonized server on the staged artifact —
+// args come from serverArgs, which pins persistence for both flows —
+// and waits until it answers PING.
 //
-// Redis answers clients while it loads the RDB (-LOADING), which is what
-// splits the wait into the protocol's phases: engine_ready ends at the
-// server's first answer of any kind, and the load that follows is the
-// restore this drill measures. A dataset small enough to load between two
-// polls measures as zero restore — a real measurement at the poll's
-// resolution, not an estimate.
-func startEngine(ctx context.Context, c *core) (restoreSeconds, readySeconds float64, perr *protoError) {
-	start, stderr, perr := execChecked(ctx, c, "redis-server",
-		"--dir", dataDir, "--dbfilename", rdbName, "--port", strconv.Itoa(defaultPort),
-		"--appendonly", "no", "--save", "", "--daemonize", "yes", "--logfile", serverLog)
+// Redis answers clients while it loads (-LOADING, RDB and AOF alike),
+// which is what splits the wait into the protocol's phases: engine_ready
+// ends at the server's first answer of any kind, and the load that
+// follows is the restore this drill measures. A dataset small enough to
+// load between two polls measures as zero restore — a real measurement
+// at the poll's resolution, not an estimate.
+func startEngine(ctx context.Context, c *core, args []string) (restoreSeconds, readySeconds float64, perr *protoError) {
+	argv := append([]string{"redis-server"}, args...)
+	argv = append(argv, "--port", strconv.Itoa(defaultPort), "--daemonize", "yes", "--logfile", serverLog)
+	start, stderr, perr := execChecked(ctx, c, argv...)
 	if perr != nil {
 		return 0, 0, perr
 	}

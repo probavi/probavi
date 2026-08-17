@@ -27,6 +27,7 @@
   ],
   "sources": {
     "redis_rdb": "One RDB file (a copied dump.rdb, or the output of `redis-cli --rdb`)",
-    "redis_rdb_dir": "A directory of RDB files; the newest by the artifact's own save instant (the ctime header field) is restored"
+    "redis_rdb_dir": "A directory of RDB files; the newest by the artifact's own save instant (the ctime header field) is restored",
+    "redis_aof": "A copy of the Redis 7+ append-only directory (manifest, base, incremental segments), replayed in full"
   }
 }
