@@ -406,6 +406,105 @@ func TestCensusRefusesPartialLoad(t *testing.T) {
 	}
 }
 
+// TestCensusAcceptsACompactionWindowSnapshot is issue #155 end to end at
+// the protocol level: a snapshot taken while compaction sources still
+// sat on disk holds three blocks of which the server loads one — the
+// compacted block — and the drill must call that a full restore, because
+// it is one.
+func TestCensusAcceptsACompactionWindowSnapshot(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "snap")
+	writeBlock(t, dir, "01SOURCEAAAAAAAAAAAAAAAAAA", maxAug2026-60000)
+	writeBlock(t, dir, "01SOURCEBBBBBBBBBBBBBBBBBB", maxAug2026-30000)
+	writeBlock(t, dir, "01COMPACTEDCCCCCCCCCCCCCCC", maxAug2026,
+		"01SOURCEAAAAAAAAAAAAAAAAAA", "01SOURCEBBBBBBBBBBBBBBBBBB")
+	sim := defaultSimulated(1)
+	var sequence []string
+	line, _, exit := driveOp(t, "provision",
+		provisionPayload(t, "prometheus_snapshot", dir, nil),
+		provisionHandler(t, &sequence, sim))
+	f := parseFinal(t, line)
+	if exit != 0 || !f.OK {
+		t.Fatalf("exit=%d final=%+v — a compaction-window snapshot is healthy and must provision", exit, f)
+	}
+	conn, createdAt, _ := decodeProvision(t, f)
+	if conn.Database != "1786876374" || createdAt == nil || *createdAt != "2026-08-16T10:32:54.046Z" {
+		t.Errorf("connection = %+v created_at = %v, want the compacted block's own claim", conn, createdAt)
+	}
+}
+
+// TestCensusStillRefusesPartialLoadAmongSources proves the subtraction
+// does not blunt the fence: with one superseded source and two required
+// blocks, a server that loaded only one is still a partial restore.
+func TestCensusStillRefusesPartialLoadAmongSources(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "snap")
+	writeBlock(t, dir, "01SOURCEAAAAAAAAAAAAAAAAAA", maxAug2026-60000)
+	writeBlock(t, dir, "01COMPACTEDCCCCCCCCCCCCCCC", maxAug2026-30000, "01SOURCEAAAAAAAAAAAAAAAAAA")
+	writeBlock(t, dir, "01INDEPENDENTDDDDDDDDDDDDD", maxAug2026)
+	sim := defaultSimulated(1)
+	var sequence []string
+	line, _, _ := driveOp(t, "provision",
+		provisionPayload(t, "prometheus_snapshot", dir, nil),
+		provisionHandler(t, &sequence, sim))
+	f := parseFinal(t, line)
+	if f.OK || f.Error.Code != "source_corrupt" ||
+		!strings.Contains(f.Error.Message, "1 of the 2 blocks") ||
+		!strings.Contains(f.Error.Message, "compaction sources excluded from the count: 1") {
+		t.Errorf("final = %+v, want source_corrupt naming the partial load net of sources", f)
+	}
+}
+
+// TestRecoverCensusSubtractsCompactionSources drives the in-sandbox
+// fallback with the bare-string parent shape older servers wrote: the
+// recovered census must subtract the superseded source the same way the
+// host-side walk does.
+func TestRecoverCensusSubtractsCompactionSources(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opaque.bin")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", 4096)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sim := defaultSimulated(2)
+	sim.recover = outExec(fmt.Sprintf(
+		`{"ulid":"a","maxTime":%d}`+"\n"+
+			`{"ulid":"b","maxTime":%d}`+"\n"+
+			`{"ulid":"c","maxTime":%d,"compaction":{"level":2,"parents":["a"]}}`+"\n",
+		maxAug2026-120000, maxAug2026-60000, maxAug2026))
+	var sequence []string
+	line, _, _ := driveOp(t, "provision",
+		provisionPayload(t, "prometheus_snapshot_tar", path, nil),
+		provisionHandler(t, &sequence, sim))
+	f := parseFinal(t, line)
+	if !f.OK {
+		t.Fatalf("final = %+v — two required blocks recovered, two loaded; the drill must pass", f)
+	}
+	conn, createdAt, _ := decodeProvision(t, f)
+	if conn.Database != "1786876374" || createdAt == nil {
+		t.Errorf("connection = %+v created_at = %v, want the recovered claim", conn, createdAt)
+	}
+}
+
+// TestRecoverCensusRefusesCyclicMetadata pins the recovered census's
+// integrity gate: metadata claiming every block supersedes another is
+// damage, not a snapshot shape.
+func TestRecoverCensusRefusesCyclicMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opaque.bin")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", 4096)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sim := defaultSimulated(1)
+	sim.recover = outExec(fmt.Sprintf(
+		`{"ulid":"a","maxTime":%d,"compaction":{"parents":["b"]}}`+"\n"+
+			`{"ulid":"b","maxTime":%d,"compaction":{"parents":["a"]}}`+"\n",
+		maxAug2026-60000, maxAug2026))
+	var sequence []string
+	line, _, _ := driveOp(t, "provision",
+		provisionPayload(t, "prometheus_snapshot_tar", path, nil),
+		provisionHandler(t, &sequence, sim))
+	f := parseFinal(t, line)
+	if f.OK || f.Error.Code != "source_corrupt" || !strings.Contains(f.Error.Message, "cyclic") {
+		t.Errorf("final = %+v, want source_corrupt naming the cyclic metadata", f)
+	}
+}
+
 // TestProbeRefusesAnEmptyServe pins the last verdict read: a well-formed
 // zero at the instant the backup claims to cover means the promised data
 // is not there.

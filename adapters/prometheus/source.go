@@ -84,6 +84,11 @@ func resolveTar(path string) (*resolvedSource, *protoError) {
 				"still in the write-ahead log — take backups with the snapshot API "+
 				"(POST /api/v1/admin/tsdb/snapshot) and tar its output instead", live)
 	}
+	if ok {
+		if perr := refuseSupersededOnly(census); perr != nil {
+			return nil, perr
+		}
+	}
 	if ok && census.blocks == 0 {
 		return nil, protoErr("source_corrupt", false,
 			"the archive holds no TSDB blocks — not a snapshot archive (a snapshot is a directory "+

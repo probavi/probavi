@@ -20,20 +20,105 @@ import (
 // must serve — the census ops.go compares against the restored server's
 // own prometheus_tsdb_blocks_loaded, because a server skips an unloadable
 // block and stays up (measured), which no drill may report as green.
+//
+// The count is not the number of block directories: a snapshot taken
+// while compaction sources still sat on disk legitimately holds both a
+// compacted block and the parents it replaced, and the server must not
+// load a block another present block's compaction.parents names — it
+// marks such blocks obsolete and serves without them (measured). The
+// census therefore expects present blocks minus present-and-superseded
+// ones; see censusOf.
 
 // blockMeta is the slice of a block's meta.json this adapter reads.
 type blockMeta struct {
-	ULID    string `json:"ulid"`
-	MaxTime int64  `json:"maxTime"`
+	ULID       string          `json:"ulid"`
+	MaxTime    int64           `json:"maxTime"`
+	Compaction blockCompaction `json:"compaction"`
+}
+
+// blockCompaction is the slice of a block's compaction record this
+// adapter reads: which blocks this one replaced. Entries stay raw here
+// because their shape has varied across server versions; parentULID
+// reads one.
+type blockCompaction struct {
+	Parents []json.RawMessage `json:"parents"`
+}
+
+// parentULID reads one entry of a compaction parent list tolerantly:
+// Prometheus versions have written both objects carrying a ulid field
+// and bare ULID strings. Any other shape reads as empty and subtracts
+// nothing — the census only ever shrinks on positive evidence.
+func parentULID(raw json.RawMessage) string {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	obj := struct {
+		ULID string `json:"ulid"`
+	}{}
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		return obj.ULID
+	}
+	return ""
 }
 
 // snapshotInfo is what an artifact states about itself.
 type snapshotInfo struct {
-	// blocks is how many TSDB blocks the artifact holds.
+	// blocks is how many TSDB blocks the restored server must load:
+	// the blocks the artifact holds, minus compaction sources superseded
+	// by another present block.
 	blocks int
+	// sourcesSkipped is how many present blocks another present block's
+	// compaction.parents names — blocks the server deliberately skips.
+	sourcesSkipped int
 	// maxTimeMs is the newest instant the blocks claim to cover, epoch
 	// milliseconds; 0 when nothing plausible was read.
 	maxTimeMs int64
+}
+
+// censusOf derives what a snapshot's blocks jointly state. A block whose
+// ULID appears in another present block's compaction.parents is a
+// compaction source the server deliberately skips — its data already
+// lives in the compacted block — so it moves the skip counter, not the
+// census. This mirrors the server's own rule exactly: it marks the
+// parents of every openable block obsolete, including parents of blocks
+// it also skips, so a multi-level chain collapses to its newest block
+// the same way here. Parents naming absent blocks subtract nothing, and
+// the newest claimed instant still ranges over every block — a compacted
+// block covers its parents' range, so the maximum is unchanged.
+func censusOf(metas []blockMeta) snapshotInfo {
+	superseded := map[string]bool{}
+	for _, m := range metas {
+		for _, raw := range m.Compaction.Parents {
+			if u := parentULID(raw); u != "" {
+				superseded[u] = true
+			}
+		}
+	}
+	info := snapshotInfo{}
+	for _, m := range metas {
+		if superseded[m.ULID] {
+			info.sourcesSkipped++
+		} else {
+			info.blocks++
+		}
+		if m.MaxTime > info.maxTimeMs {
+			info.maxTimeMs = m.MaxTime
+		}
+	}
+	return info
+}
+
+// refuseSupersededOnly names the one shape censusOf can reduce to
+// nothing: metadata claiming every block is a compaction source of
+// another present block. No real compaction produces that cycle.
+func refuseSupersededOnly(info snapshotInfo) *protoError {
+	if info.blocks == 0 && info.sourcesSkipped > 0 {
+		return protoErr("source_corrupt", false,
+			"every block in the snapshot is named as a compaction source of another present block — "+
+				"cyclic compaction metadata; the snapshot is damaged")
+	}
+	return nil
 }
 
 // liveMarkers are the entries only a live (or crashed) data directory
@@ -54,7 +139,7 @@ func inspectSnapshotDir(dir string) (snapshotInfo, *protoError) {
 	if perr := refuseLiveMarkers(entries, dir); perr != nil {
 		return snapshotInfo{}, perr
 	}
-	info := snapshotInfo{}
+	metas := []blockMeta{}
 	for _, e := range entries {
 		if !e.IsDir() {
 			// Stray files beside the blocks (a checksum sidecar, a README)
@@ -67,15 +152,16 @@ func inspectSnapshotDir(dir string) (snapshotInfo, *protoError) {
 				"block %s carries no readable meta.json — the snapshot is damaged, or this is "+
 					"not a snapshot directory at all", e.Name())
 		}
-		info.blocks++
-		if meta.MaxTime > info.maxTimeMs {
-			info.maxTimeMs = meta.MaxTime
-		}
+		metas = append(metas, meta)
 	}
-	if info.blocks == 0 {
+	if len(metas) == 0 {
 		return snapshotInfo{}, protoErr("source_corrupt", false,
 			"backup directory %s holds no TSDB blocks — not a snapshot directory "+
 				"(a snapshot from the API is a directory of block directories, each with a meta.json)", dir)
+	}
+	info := censusOf(metas)
+	if perr := refuseSupersededOnly(info); perr != nil {
+		return snapshotInfo{}, perr
 	}
 	return info, nil
 }
@@ -183,6 +269,7 @@ func walkTarFile(f *os.File) (info snapshotInfo, live string, ok bool) {
 // depth two or three and the live markers at depth one or two.
 func walkTar(tr *tar.Reader) (info snapshotInfo, live string, ok bool) {
 	sawEntry := false
+	metas := []blockMeta{}
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -201,13 +288,10 @@ func walkTar(tr *tar.Reader) (info snapshotInfo, live string, ok bool) {
 			continue
 		}
 		if meta, metaOK := decodeBlockMeta(io.LimitReader(tr, metaMaxBytes)); metaOK {
-			info.blocks++
-			if meta.MaxTime > info.maxTimeMs {
-				info.maxTimeMs = meta.MaxTime
-			}
+			metas = append(metas, meta)
 		}
 	}
-	return info, live, sawEntry
+	return censusOf(metas), live, sawEntry
 }
 
 // splitTarName normalizes an entry name into path segments.

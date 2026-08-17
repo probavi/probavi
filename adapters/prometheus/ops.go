@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "prometheus"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.2.0"
 
 	// workDirName is created under the provider's scratch directory — the
 	// one directory the provider guarantees writable (the official images
@@ -120,7 +120,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		return nil, perr
 	}
 	logger.Info("source resolved", "path", src.path, "size_bytes", src.sizeBytes,
-		"blocks", src.info.blocks)
+		"blocks", src.info.blocks, "compaction_sources_skipped", src.info.sourcesSkipped)
 
 	if perr := checkEngine(ctx, c); perr != nil {
 		return nil, perr
@@ -153,8 +153,8 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if perr != nil {
 		return nil, perr
 	}
-	logger.Info("snapshot restored and verified",
-		"blocks", census.blocks, "ready_seconds", readySeconds)
+	logger.Info("snapshot restored and verified", "blocks", census.blocks,
+		"compaction_sources_skipped", census.sourcesSkipped, "ready_seconds", readySeconds)
 
 	return map[string]any{
 		"connection": map[string]any{
@@ -326,7 +326,7 @@ func recoverCensus(ctx context.Context, c *core, dataDir string) (snapshotInfo, 
 			"the unpacked archive holds no block metadata — not a snapshot archive: %s",
 			firstLine(stderr))
 	}
-	info := snapshotInfo{}
+	metas := []blockMeta{}
 	dec := json.NewDecoder(strings.NewReader(string(stdout)))
 	for {
 		meta := blockMeta{}
@@ -336,10 +336,11 @@ func recoverCensus(ctx context.Context, c *core, dataDir string) (snapshotInfo, 
 		if !plausibleEpochMs(meta.MaxTime) {
 			continue
 		}
-		info.blocks++
-		if meta.MaxTime > info.maxTimeMs {
-			info.maxTimeMs = meta.MaxTime
-		}
+		metas = append(metas, meta)
+	}
+	info := censusOf(metas)
+	if perr := refuseSupersededOnly(info); perr != nil {
+		return snapshotInfo{}, 0, perr
 	}
 	return info, val.DurationSeconds, nil
 }
@@ -452,10 +453,12 @@ func lastErrorLine(log []byte) string {
 
 // checkCensus compares the number of blocks the restored server actually
 // loaded — its own /metrics states it — with the number the artifact
-// holds. The comparison fires on positive evidence only: output that is
-// not the metric's exposition line is skipped, and the count the
-// artifact could not state (an archive nothing could walk) reduces the
-// check to "not zero".
+// requires: present blocks minus the compaction sources another present
+// block supersedes, which the server deliberately skips (censusOf). The
+// comparison fires on positive evidence only: output that is not the
+// metric's exposition line is skipped, and the count the artifact could
+// not state (an archive nothing could walk) reduces the check to "not
+// zero".
 func checkCensus(ctx context.Context, c *core, census snapshotInfo) (float64, *protoError) {
 	val, stdout, _, perr := c.exec(ctx, execArgs{Argv: []string{"sh", "-c",
 		"wget -q -O- " + serverURL + "/metrics | grep '^prometheus_tsdb_blocks_loaded'"}})
@@ -476,9 +479,10 @@ func checkCensus(ctx context.Context, c *core, census snapshotInfo) (float64, *p
 	switch {
 	case census.blocks > 0 && loaded != census.blocks:
 		return 0, protoErr("source_corrupt", false,
-			"the restored server loaded %d of the %d blocks the snapshot holds: a block failed "+
-				"to load, and the server stays up without it (measured) — the drill refuses to "+
-				"prove a partial restore", loaded, census.blocks)
+			"the restored server loaded %d of the %d blocks the snapshot requires (compaction "+
+				"sources excluded from the count: %d): a block failed to load, and the server "+
+				"stays up without it (measured) — the drill refuses to prove a partial restore",
+			loaded, census.blocks, census.sourcesSkipped)
 	case census.blocks == 0 && loaded == 0:
 		return 0, protoErr("source_corrupt", false,
 			"the restored server loaded no blocks at all — the unpacked archive holds no "+
