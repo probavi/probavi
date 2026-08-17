@@ -1,8 +1,9 @@
 # probavi-adapter-valkey
 
-Restores Valkey RDB snapshots into a disposable sandbox and serves the
-restored keys, implementing `probavi-adapter/0` (docs/adapter-protocol.md).
-Self-contained: standard library only, no imports from the Probavi core.
+Restores Valkey RDB snapshots and append-only directories into a
+disposable sandbox and serves the restored keys, implementing
+`probavi-adapter/0` (docs/adapter-protocol.md). Self-contained: standard
+library only, no imports from the Probavi core.
 
 ## Supported source kinds
 
@@ -10,6 +11,7 @@ Self-contained: standard library only, no imports from the Probavi core.
 |------------------|----------------|
 | `valkey_rdb`     | One RDB file — a copied `dump.rdb`, or the output of `valkey-cli --rdb` |
 | `valkey_rdb_dir` | A directory of RDB files; the newest **by the artifact's own save instant** is restored |
+| `valkey_aof`     | A copy of the append-only directory (`appendonlydir`): manifest, base, incremental segments — replayed in full |
 
 RDB is what the engine itself recommends for backups. What this adapter
 does not restore, on purpose, is in "Deliberately not here" below.
@@ -40,6 +42,32 @@ the placed RDB and never rewrites the artifact under the drill. No shell
 is required for the engine flow — every step is direct argv — though the
 check runner below does use `sh` for word splitting, which every official
 image carries.
+
+## The append-only kind: the manifest is the contract
+
+Valkey kept Redis 7's append-only layout: a directory holding a text
+manifest plus the files it names — one base (an RDB by default) and
+incremental segments. `valkey_aof` restores a copy of that directory,
+and the manifest gives it the gate AOF backups need most: **a copy
+taken mid-rewrite loses members**, and a manifest naming a file the
+backup does not hold is refused by name as an incomplete copy, before a
+byte reaches the sandbox. In the sandbox, `valkey-check-aof` (handed
+the manifest, so it walks the base and every segment — measured) stays
+the authority on loadability, and the server is started with
+`--appendonly yes`, `--save ""`, and `--appendfilename` derived from
+the manifest's own name — an unmatched name would make the server
+silently start a fresh, empty append-only set, exactly the false green
+a drill must not produce. The base RDB's header feeds the same version
+pre-check and Redis-dialect fence as the rdb kinds, both header
+layouts included (`REDIS` through 8.x, `VALKEY` from 9.0).
+
+Two deliberate differences from the rdb kinds. `backup.created_at` is
+**null**: the base's `ctime` dates the last rewrite, not the backup,
+and the incremental tail extends past it — an append-only directory
+does not date itself, and a wrong instant is worse than none. And there
+is no `valkey_aof_dir`: with nothing to rank candidates by except
+copy-fragile file times, "newest" would be a guess; point the drill at
+one specific append-only directory instead.
 
 There is no auth to reset, unlike every SQL-family engine: `requirepass`
 and ACLs live in server configuration, not in the RDB, so the restored
@@ -140,7 +168,7 @@ for restore.
 
 | Param             | Meaning |
 |-------------------|---------|
-| `backup_timezone` | Refused — an RDB dates itself in epoch seconds; the declaration has nothing to add. |
+| `backup_timezone` | Refused — an RDB dates itself in epoch seconds, and an append-only directory is deliberately not dated; the declaration has nothing to add either way. |
 
 ## Environment
 
@@ -149,11 +177,12 @@ unused. The adapter never prints secrets, and there are none to print.
 
 ## Deliberately not here
 
-- **AOF restores.** The append-only state is a directory (manifest, base
-  RDB, incremental AOFs) whose members must be captured atomically — the
-  engine's own docs recommend RDB snapshots for backups and call AOF
-  copying more delicate. An AOF kind would be a separate, measured piece
-  of work; claiming it untested would be a false capability.
+- **A single-file AOF.** The verified engines all write the directory
+  form Valkey kept from Redis 7; a bare `appendonly.aof` file is refused
+  with a message saying so rather than restored unverified.
+- **A `valkey_aof_dir` kind.** See above: an append-only set does not
+  date itself, so "newest" among several would rest on file times a copy
+  resets — a guess, not a measurement.
 - **Compressed artifacts.** A gzip-compressed RDB is refused by name
   (`unsupported_source`) rather than handed to the server to fail
   cryptically — decompress first, or back up uncompressed.
