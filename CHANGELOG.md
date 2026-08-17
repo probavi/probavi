@@ -11,6 +11,19 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-17
+
+The standing cadence holds — InfluxDB, the fifteenth engine — but this
+cycle's character is consolidation: three adapters gained the halves
+their first releases deliberately deferred. Redis and Valkey now restore
+the append-only directory beside the RDB snapshot, each with the
+manifest as its completeness contract, and the postgres adapter frames
+TimescaleDB restores with the procedure the extension mandates, earning
+a variant image of its own. The cycle's one field report is fixed with
+them: a Prometheus snapshot taken during a compaction window is a
+healthy backup, and the block census now applies the server's own
+exclusion rule instead of counting directories.
+
 ### Added
 
 - **An InfluxDB adapter** (`adapters/influxdb` 0.1.0), the fifteenth
@@ -2251,7 +2264,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/probavi/probavi/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/probavi/probavi/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/probavi/probavi/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/probavi/probavi/compare/v0.11.0...v0.12.0
