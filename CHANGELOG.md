@@ -13,6 +13,26 @@ always called out explicitly.
 
 ### Added
 
+- **An InfluxDB adapter** (`adapters/influxdb` 0.1.0), the fifteenth
+  engine. It restores InfluxDB 2.x `influx backup` outputs in three
+  forms: one tar archive (`influx_backup_tar`, plain or gzip), one
+  backup directory (`influx_backup` — a reused target directory
+  restores its newest set by the stems the backups named themselves),
+  or a directory of them (`influx_backup_dir`). The manifest is the
+  contract: a partial copy is refused by the member it lost before a
+  byte reaches the sandbox, and after `influx restore` the bucket
+  census compares the restored organization's own listing against the
+  manifest's — a partial restore is never green. No credential from
+  the backup is ever needed (measured): the sandbox instance is
+  initialized with documented public constants and a plain restore
+  creates the backup's organizations itself; `--full` is deliberately
+  not used, so the drill never locks itself out behind the backup's
+  tokens. The 1.x portable format is refused by name as the migration
+  it is — host-side, from a recovered manifest, and on the engine side
+  alike — the ROADMAP mandate for this engine. Zero core changes,
+  conformance 15/15, verified against InfluxDB 2.7.12, 2.8.0, and
+  2.9.1.
+
 - **TimescaleDB source kinds on the postgres adapter**
   (`adapters/postgres` 0.11.0, new kinds `timescaledb_dump` and
   `timescaledb_dump_dir`, verified against
