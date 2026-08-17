@@ -138,6 +138,73 @@ func TestRunPrintsTheMatrix(t *testing.T) {
 	}
 }
 
+// TestRunScopesToNamedAdapters pins the -adapters filter an adapter-local
+// pull request's workflow run passes: only the named adapters' targets
+// survive, enumeration order is preserved regardless of the order the
+// caller named them, and a name no manifest declares — the typo that
+// would silently shrink the matrix — is an error rather than a smaller
+// green run.
+func TestRunScopesToNamedAdapters(t *testing.T) {
+	root := t.TempDir()
+	writeAdapter(t, root, "alpha", `{"id":"alpha","verified":[
+		{"engine_version":"1","image":"a:1"},
+		{"engine_version":"2","image":"a:2","baseline":true}]}`)
+	writeAdapter(t, root, "mid", `{"id":"mid","verified":[{"engine_version":"5","image":"m:5","baseline":true}]}`)
+	writeAdapter(t, root, "zebra", `{"id":"zebra","verified":[{"engine_version":"3","image":"z:3","baseline":true}]}`)
+
+	tests := []struct {
+		name    string
+		args    []string
+		want    []target
+		wantErr string
+	}{
+		{
+			name: "one adapter's baseline — the adapter-local everyday gate",
+			args: []string{"-root", root, "-baselines-only", "-adapters", "alpha"},
+			want: []target{{Adapter: "alpha", EngineVersion: "2", Image: "a:2", Baseline: true}},
+		},
+		{
+			name: "two adapters keep enumeration order, not naming order",
+			args: []string{"-root", root, "-adapters", "zebra,alpha"},
+			want: []target{
+				{Adapter: "alpha", EngineVersion: "1", Image: "a:1"},
+				{Adapter: "alpha", EngineVersion: "2", Image: "a:2", Baseline: true},
+				{Adapter: "zebra", EngineVersion: "3", Image: "z:3", Baseline: true},
+			},
+		},
+		{
+			name:    "an unknown adapter is an error, not a smaller matrix",
+			args:    []string{"-root", root, "-adapters", "alpha,ghost"},
+			wantErr: `"ghost"`,
+		},
+		{
+			name:    "an empty id is an error",
+			args:    []string{"-root", root, "-adapters", "alpha,"},
+			wantErr: "empty adapter id",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			err := run(tc.args, &out, io.Discard)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("run error = %v, want one containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			var got []target
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("output is not a JSON matrix: %v (%q)", err, out.String())
+			}
+			assertTargets(t, got, tc.want)
+		})
+	}
+}
+
 // TestMatrixCoversEveryClaimedVersion is the gate that matters: the jobs
 // this tool prints for the real repository are exactly the versions
 // docs/capabilities.json claims CI restores from. If they ever diverge,

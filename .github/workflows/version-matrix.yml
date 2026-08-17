@@ -16,12 +16,13 @@
 name: Version matrix
 
 on:
-  # Every pull request restores from each adapter's baseline here — this
+  # Every pull request restores from adapter baselines here — this
   # workflow *is* the adapter half of the everyday gate, which is why
-  # ci.yml's integration job covers only the packages below adapters/.
+  # ci.yml's integration job covers only the packages outside adapters/.
   # A pull request that edits what is claimed, or the machinery that turns
-  # a claim into a job, widens to the full matrix instead (see the scope
-  # step below).
+  # a claim into a job, widens to the full matrix; one whose changes all
+  # sit under adapter directories narrows to those adapters' baselines
+  # (see the scope step below).
   pull_request:
   schedule:
     # Weekly, offset from the other scheduled workflows so a slow matrix
@@ -59,10 +60,19 @@ jobs:
       - name: decide how wide this run has to be
         id: scope
         # A schedule, a manual run, and a release tag always run everything.
-        # A pull request runs the baselines — the everyday gate — unless it
+        # A pull request runs baselines — the everyday gate — unless it
         # touches what is claimed or the machinery that turns a claim into
         # a job, in which case it has to prove the whole matrix before the
-        # claim can merge (docs/engine-versions.md §3).
+        # claim can merge (docs/engine-versions.md §3). Within the baseline
+        # tier there is one narrowing: a pull request whose every changed
+        # file sits under adapter directories runs those adapters'
+        # baselines only — an adapter is an external process nobody
+        # imports, so its change cannot alter another adapter's restore,
+        # and the gate proves exactly what changed as the catalog grows.
+        # Anything touching shared code keeps every baseline, and the
+        # narrowing only names directories that carry a manifest, so a
+        # work-in-progress directory falls back to the full baseline set
+        # instead of failing the enumeration.
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
@@ -71,15 +81,28 @@ jobs:
           fi
           changed=$(git diff --name-only "$BASE_SHA"...HEAD)
           if printf '%s\n' "$changed" | grep -qE '^(adapters/[^/]+/adapter\.json|internal/tools/versionmatrix/|internal/capabilities/adapters\.go|\.github/workflows/version-matrix\.yml)'; then
-            echo "full=1" >> "$GITHUB_OUTPUT"
-          else
-            echo "full=0" >> "$GITHUB_OUTPUT"
+            echo "full=1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "full=0" >> "$GITHUB_OUTPUT"
+          if [ -n "$changed" ] && ! printf '%s\n' "$changed" | grep -qvE '^adapters/[^/]+/'; then
+            adapters=$(printf '%s\n' "$changed" | sed -E 's#^adapters/([^/]+)/.*#\1#' | sort -u | paste -sd,)
+            for a in $(printf '%s' "$adapters" | tr ',' ' '); do
+              if [ ! -f "adapters/$a/adapter.json" ]; then
+                adapters=""
+                break
+              fi
+            done
+            echo "adapters=$adapters" >> "$GITHUB_OUTPUT"
           fi
       - name: read the versions the manifests claim
         id: list
+        env:
+          SCOPED_ADAPTERS: ${{ steps.scope.outputs.adapters }}
         run: |
           if [ "${{ steps.scope.outputs.full }}" = "1" ]; then
             echo "targets=$(go run ./internal/tools/versionmatrix)" >> "$GITHUB_OUTPUT"
+          elif [ -n "$SCOPED_ADAPTERS" ]; then
+            echo "targets=$(go run ./internal/tools/versionmatrix -baselines-only -adapters "$SCOPED_ADAPTERS")" >> "$GITHUB_OUTPUT"
           else
             echo "targets=$(go run ./internal/tools/versionmatrix -baselines-only)" >> "$GITHUB_OUTPUT"
           fi
