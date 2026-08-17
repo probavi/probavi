@@ -377,12 +377,62 @@ func TestProvisionRestoresAOF(t *testing.T) {
 	if exit != 0 || !f.OK {
 		t.Fatalf("exit=%d final=%+v", exit, f)
 	}
-	want := "version|mkdir|put_file|put_file|put_file|checkaof|start|ping"
+	// The set is vetted member by member: the RDB base by
+	// valkey-check-rdb (its manifest mode misreads a 9.x VALKEY-magic
+	// base, measured), the incremental segment by valkey-check-aof.
+	want := "version|mkdir|put_file|put_file|put_file|check|checkaof|start|ping"
 	if got := strings.Join(sequence, "|"); got != want {
 		t.Errorf("sequence = %s, want %s", got, want)
 	}
 	assertAOFStartArgv(t, startArgv)
 	assertAOFProvisionPayload(t, f)
+}
+
+// TestProvisionAOFPlainTextBase pins the other base shape: a plain-text
+// base (aof-use-rdb-preamble off) is RESP and goes to valkey-check-aof
+// like the segments.
+func TestProvisionAOFPlainTextBase(t *testing.T) {
+	manifest := "file appendonly.aof.1.base.aof seq 1 type b\n" +
+		"file appendonly.aof.1.incr.aof seq 1 type i\n"
+	files := map[string]string{
+		"appendonly.aof.1.base.aof": "*1\r\n$6\r\nSELECT\r\n",
+		"appendonly.aof.1.incr.aof": "*1\r\n$4\r\nPING\r\n",
+	}
+	dir := writeAOFDir(t, filepath.Join(t.TempDir(), "aof"), manifest, files)
+	var sequence []string
+	line, _, exit := driveOp(t, "provision",
+		provisionPayload(t, "valkey_aof", dir, nil), provisionHandler(t, &sequence))
+	f := parseFinal(t, line)
+	if exit != 0 || !f.OK {
+		t.Fatalf("exit=%d final=%+v", exit, f)
+	}
+	want := "version|mkdir|put_file|put_file|put_file|checkaof|checkaof|start|ping"
+	if got := strings.Join(sequence, "|"); got != want {
+		t.Errorf("sequence = %s, want %s", got, want)
+	}
+}
+
+// TestAOFBaseVerdict proves the base's own tool delivers the verdict on
+// a damaged base, named as the member it is.
+func TestAOFBaseVerdict(t *testing.T) {
+	dir := writeAOFDir(t, filepath.Join(t.TempDir(), "aof"), healthyManifest, healthyAOFFiles())
+	var sequence []string
+	inner := provisionHandler(t, &sequence)
+	line, _, _ := driveOp(t, "provision",
+		provisionPayload(t, "valkey_aof", dir, nil), func(call verbCall) (any, *protoError) {
+			if call.Verb == "exec" {
+				if argv := argvOf(t, call); argv[0] == "valkey-check-rdb" {
+					sequence = append(sequence, "check")
+					return errExec(1, "RDB CRC error"), nil
+				}
+			}
+			return inner(call)
+		})
+	f := parseFinal(t, line)
+	if f.OK || f.Error.Code != "source_corrupt" ||
+		!strings.Contains(f.Error.Message, "valkey-check-rdb rejected the append-only set member appendonly.aof.1.base.rdb") {
+		t.Errorf("final = %+v, want source_corrupt naming the base and its tool", f)
+	}
 }
 
 // assertAOFStartArgv pins the flags that make the restored server read
@@ -472,8 +522,8 @@ func TestAOFCheckVerdict(t *testing.T) {
 		})
 	f := parseFinal(t, line)
 	if f.OK || f.Error.Code != "source_corrupt" ||
-		!strings.Contains(f.Error.Message, "append-only set") {
-		t.Errorf("final = %+v, want source_corrupt carrying the tool's verdict", f)
+		!strings.Contains(f.Error.Message, "append-only set member appendonly.aof.1.incr.aof") {
+		t.Errorf("final = %+v, want source_corrupt naming the failing segment", f)
 	}
 }
 

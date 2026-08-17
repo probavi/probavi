@@ -194,7 +194,7 @@ func stageArtifact(ctx context.Context, c *core, src *resolvedSource) (float64, 
 		}
 		total += put.DurationSeconds
 	}
-	return total, checkAOF(ctx, c, src.aof.manifestName)
+	return total, checkAOFSet(ctx, c, src.aof)
 }
 
 // serverArgs are the valkey-server flags that point the engine at the
@@ -342,15 +342,41 @@ func checkRDB(ctx context.Context, c *core) *protoError {
 	return protoErr("source_corrupt", false, "valkey-check-rdb rejected the RDB: %s", line)
 }
 
-// checkAOF asks valkey-check-aof whether the staged set is loadable
-// before the server is pointed at it: handed the manifest, the tool
-// walks the base and every incremental segment (measured). Like its RDB
-// sibling it prints findings to stdout and keeps stderr for usage
-// errors — and like it, it vets integrity, not dialect: the fence in
-// source.go runs first.
-func checkAOF(ctx context.Context, c *core, manifestName string) *protoError {
+// checkAOFSet vets the staged set member by member, mirroring exactly
+// what the server loads. valkey-check-aof's manifest mode misreads the
+// VALKEY-magic base a 9.x rewrite writes as a RESP-format base and
+// rejects the healthy set the server itself produced (measured), so
+// the manifest mode is not usable as an authority here: the base goes
+// to valkey-check-rdb — which reads both magics, like the server — an
+// .aof base and every incremental segment go to valkey-check-aof's
+// single-file mode, and history members the server never loads are
+// transferred with the set but not vetted, so a gate stricter than the
+// engine cannot fail a restorable backup.
+func checkAOFSet(ctx context.Context, c *core, art *aofArtifact) *protoError {
+	if art.baseName != "" {
+		tool := "valkey-check-aof"
+		if strings.HasSuffix(art.baseName, ".rdb") {
+			tool = "valkey-check-rdb"
+		}
+		if perr := checkAOFMember(ctx, c, tool, art.baseName); perr != nil {
+			return perr
+		}
+	}
+	for _, name := range art.incrNames {
+		if perr := checkAOFMember(ctx, c, "valkey-check-aof", name); perr != nil {
+			return perr
+		}
+	}
+	return nil
+}
+
+// checkAOFMember runs one member through its matching valkey-check-*
+// tool. Like the RDB path's check, the tools print findings to stdout
+// and keep stderr for usage errors, and they vet integrity, not
+// dialect: the fence in source.go runs first.
+func checkAOFMember(ctx context.Context, c *core, tool, name string) *protoError {
 	val, stdout, stderr, perr := c.exec(ctx, execArgs{
-		Argv: []string{"valkey-check-aof", aofDirInSandbox + "/" + manifestName}})
+		Argv: []string{tool, aofDirInSandbox + "/" + name}})
 	if perr != nil {
 		return perr
 	}
@@ -361,7 +387,8 @@ func checkAOF(ctx context.Context, c *core, manifestName string) *protoError {
 	if line == "" {
 		line = lastLine(stdout)
 	}
-	return protoErr("source_corrupt", false, "valkey-check-aof rejected the append-only set: %s", line)
+	return protoErr("source_corrupt", false,
+		"%s rejected the append-only set member %s: %s", tool, name, line)
 }
 
 // startEngine launches the daemonized server on the staged artifact —

@@ -17,13 +17,18 @@ always called out explicitly.
   kind `valkey_aof`), the mirror of the redis half below: a copy of the
   append-only directory Valkey kept from Redis 7 — manifest, base,
   incremental segments — replayed in full, with the same
-  manifest-completeness gate, `valkey-check-aof` as the in-sandbox
-  authority, and the derived `--appendfilename` that stops an unmatched
-  name from silently starting an empty set. The base RDB's header feeds
-  the valkey version pre-check and the Redis-dialect fence — a
-  Redis-saved base, or one carrying the post-fork format floor, is
-  refused toward the redis adapter, both header layouts read (`REDIS`
-  through 8.x, `VALKEY` from 9.0). `backup.created_at` stays
+  manifest-completeness gate and the derived `--appendfilename` that
+  stops an unmatched name from silently starting an empty set. The
+  in-sandbox integrity gate is member-by-member — the base through
+  `valkey-check-rdb`, each incremental segment through
+  `valkey-check-aof` — because the tool's manifest mode misreads the
+  `VALKEY`-magic base a 9.x rewrite writes as a RESP base and rejects
+  the healthy set the server itself produced (measured); a gate
+  stricter than the engine would fail restorable backups. The base
+  RDB's header feeds the valkey version pre-check and the Redis-dialect
+  fence — a Redis-saved base, or one carrying the post-fork format
+  floor, is refused toward the redis adapter, both header layouts read
+  (`REDIS` through 8.x, `VALKEY` from 9.0). `backup.created_at` stays
   deliberately null. Integration-proven on real servers: a rewritten
   base plus a post-rewrite tail both replay.
 

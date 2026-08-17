@@ -53,6 +53,9 @@ func TestResolveAOFDirHealthySet(t *testing.T) {
 	if got := strings.Join(art.files, "|"); got != "appendonly.aof.1.base.rdb|appendonly.aof.1.incr.aof" {
 		t.Errorf("files = %s, want manifest order", got)
 	}
+	if got := strings.Join(art.incrNames, "|"); got != "appendonly.aof.1.incr.aof" {
+		t.Errorf("incrNames = %s, want the type-i member only", got)
+	}
 	if art.appendFilename() != "appendonly.aof" {
 		t.Errorf("appendFilename = %q", art.appendFilename())
 	}
@@ -83,6 +86,11 @@ func TestResolveAOFDirCustomAppendFilename(t *testing.T) {
 	}
 	if art.appendFilename() != "custom" || len(art.files) != 3 {
 		t.Errorf("artifact = %+v", art)
+	}
+	// The history member is part of the set but never loaded, so it is
+	// not among the segments the integrity gate vets.
+	if got := strings.Join(art.incrNames, "|"); got != "custom.2.incr.aof" {
+		t.Errorf("incrNames = %s, want the type-i member only", got)
 	}
 }
 

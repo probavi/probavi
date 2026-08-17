@@ -51,14 +51,20 @@ incremental segments. `valkey_aof` restores a copy of that directory,
 and the manifest gives it the gate AOF backups need most: **a copy
 taken mid-rewrite loses members**, and a manifest naming a file the
 backup does not hold is refused by name as an incomplete copy, before a
-byte reaches the sandbox. In the sandbox, `valkey-check-aof` (handed
-the manifest, so it walks the base and every segment — measured) stays
-the authority on loadability, and the server is started with
-`--appendonly yes`, `--save ""`, and `--appendfilename` derived from
-the manifest's own name — an unmatched name would make the server
-silently start a fresh, empty append-only set, exactly the false green
-a drill must not produce. The base RDB's header feeds the same version
-pre-check and Redis-dialect fence as the rdb kinds, both header
+byte reaches the sandbox. In the sandbox the set is vetted **member by
+member**, mirroring exactly what the server loads: the base goes to
+`valkey-check-rdb`, an `.aof` base and every incremental segment to
+`valkey-check-aof`'s single-file mode, and history members the server
+never loads are transferred but not vetted. Member-by-member is not a
+style choice: `valkey-check-aof`'s manifest mode misreads the
+`VALKEY`-magic base a 9.x rewrite writes as a RESP base and rejects the
+healthy set the server itself produced (measured), and a gate stricter
+than the engine would fail restorable backups. The server is then
+started with `--appendonly yes`, `--save ""`, and `--appendfilename`
+derived from the manifest's own name — an unmatched name would make the
+server silently start a fresh, empty append-only set, exactly the false
+green a drill must not produce. The base RDB's header feeds the same
+version pre-check and Redis-dialect fence as the rdb kinds, both header
 layouts included (`REDIS` through 8.x, `VALKEY` from 9.0).
 
 Two deliberate differences from the rdb kinds. `backup.created_at` is

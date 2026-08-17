@@ -51,6 +51,11 @@ type aofArtifact struct {
 	// baseName is the basename of the type-b entry, "" when the
 	// manifest names none (an incr-only set replays from empty).
 	baseName string
+	// incrNames are the type-i entries, manifest order: the segments the
+	// server replays. History entries (type h) are members of the set —
+	// transferred and checksummed — but the server never loads them, so
+	// the integrity gate does not vet them either.
+	incrNames []string
 }
 
 // appendFilename is the --appendfilename the restored server needs so
@@ -183,13 +188,16 @@ func parseAOFManifest(dir, manifestName string) (*aofArtifact, *protoError) {
 					"an append-only manifest", i+1)
 		}
 		art.files = append(art.files, name)
-		if typ == "b" {
+		switch typ {
+		case "b":
 			if art.baseName != "" {
 				return nil, protoErr("source_corrupt", false,
 					"the manifest names two base files (%s, %s) — a real append-only set has at most one",
 					art.baseName, name)
 			}
 			art.baseName = name
+		case "i":
+			art.incrNames = append(art.incrNames, name)
 		}
 	}
 	if len(art.files) == 0 {
