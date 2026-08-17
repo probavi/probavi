@@ -250,6 +250,167 @@ func TestDirectoryDrillPicksTheDatedArtifact(t *testing.T) {
 	assertCheck(t, ctx, sbx, probe, "get probavi:config", "restored-ok")
 }
 
+// TestAOFDrillReplaysBaseAndTail proves the append-only kind end to
+// end against a real server: the fixture holds a rewritten base (501
+// keys) plus an incremental tail written after the rewrite, so the
+// restored server can only answer everything by loading the base AND
+// replaying the tail. created_at must stay null — an append-only
+// directory does not date itself.
+func TestAOFDrillReplaysBaseAndTail(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := verifiedImage(t)
+	provider := docker.New(nil)
+
+	fixture := filepath.Join(t.TempDir(), "appendonlydir")
+	makeAOFFixture(t, ctx, provider, image, fixture)
+
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("redis", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "redis_aof", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if res.SourceIdentity.CreatedAt != nil {
+		t.Errorf("created_at = %q, want null — the base ctime dates the rewrite, not the backup",
+			*res.SourceIdentity.CreatedAt)
+	}
+	if !strings.HasPrefix(res.SourceIdentity.Checksum, "sha256:") || res.SourceIdentity.SizeBytes == 0 {
+		t.Errorf("source identity = %+v", res.SourceIdentity)
+	}
+
+	health, err := runner.Healthcheck(ctx, &res.Connection, res.State, sbx)
+	if err != nil || !health.Healthy {
+		t.Fatalf("healthcheck = %+v (%v), want healthy", health, err)
+	}
+
+	// The base carries probavi:config and the 500 keys; probavi:tail was
+	// written after the rewrite, so it lives only in the incremental
+	// segment — 502 in total proves both halves were replayed.
+	assertCheck(t, ctx, sbx, probe, "get probavi:config", "restored-ok")
+	assertCheck(t, ctx, sbx, probe, "get probavi:tail", "tail-ok")
+	assertCheck(t, ctx, sbx, probe, "dbsize", "502")
+
+	teardown, err := runner.Teardown(ctx, res.State, "completed", sbx)
+	if err != nil || !teardown.Released {
+		t.Errorf("teardown = %+v (%v)", teardown, err)
+	}
+}
+
+// TestCorruptAOFVerdict proves redis-check-aof inside the sandbox is
+// the authority on a damaged set, and its refusal surfaces as a claim
+// about the backup.
+func TestCorruptAOFVerdict(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := verifiedImage(t)
+	provider := docker.New(nil)
+
+	fixture := filepath.Join(t.TempDir(), "appendonlydir")
+	makeAOFFixture(t, ctx, provider, image, fixture)
+	incrs, err := filepath.Glob(filepath.Join(fixture, "*.incr.aof"))
+	if err != nil || len(incrs) == 0 {
+		t.Fatalf("no incremental segment in the fixture: %v (%d)", err, len(incrs))
+	}
+	f, err := os.OpenFile(incrs[0], os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("garbage that is not RESP\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("redis", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	_, err = runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "redis_aof", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	var aerr *adapter.Error
+	if err == nil || !errors.As(err, &aerr) || aerr.Code != "source_corrupt" ||
+		!strings.Contains(aerr.Message, "append-only set") {
+		t.Fatalf("provision error = %v, want source_corrupt from redis-check-aof", err)
+	}
+}
+
+// makeAOFFixture seeds a real server with append-only persistence on,
+// forces a rewrite so the set holds a genuine base, writes one more key
+// so the incremental tail carries data of its own, and copies the
+// append-only directory out after a clean shutdown.
+func makeAOFFixture(t *testing.T, ctx context.Context, provider *docker.Provider, image, destDir string) {
+	t.Helper()
+	seed, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+
+	seedScript := `set -e
+mkdir -p /tmp/seedaof
+redis-server --daemonize yes --dir /tmp/seedaof --appendonly yes --save "" --logfile /tmp/seedaof.log
+i=0
+until redis-cli -e ping >/dev/null 2>&1; do
+  i=$((i+1)); [ "$i" -gt 60 ] && { tail -n 5 /tmp/seedaof.log >&2; exit 1; }
+  sleep 1
+done
+redis-cli -e set probavi:config restored-ok >/dev/null
+redis-cli -e eval "for i=1,500 do redis.call('SET','probavi:key'..i,'v'..i) end return 1" 0 >/dev/null
+redis-cli -e bgrewriteaof >/dev/null
+i=0
+until [ "$(redis-cli info persistence | tr -d '\r' | awk -F: '/aof_rewrite_in_progress|aof_rewrite_scheduled/{s+=$2} END{print s}')" = "0" ]; do
+  i=$((i+1)); [ "$i" -gt 60 ] && { echo "rewrite never finished" >&2; exit 1; }
+  sleep 1
+done
+redis-cli -e set probavi:tail tail-ok >/dev/null
+redis-cli shutdown nosave 2>/dev/null || true
+i=0
+while redis-cli ping >/dev/null 2>&1; do
+  i=$((i+1)); [ "$i" -gt 60 ] && { echo "server never exited" >&2; exit 1; }
+  sleep 1
+done`
+	res, err := seed.Exec(ctx, sandbox.ExecRequest{Argv: []string{"sh", "-c", seedScript}})
+	if err != nil {
+		t.Fatalf("seed exec: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("seed fixture: exit %d: %s", res.ExitCode, res.Stderr)
+	}
+	if out, err := exec.CommandContext(ctx, "docker", "cp",
+		seed.ID()+":/tmp/seedaof/appendonlydir", destDir).CombinedOutput(); err != nil {
+		t.Fatalf("extract fixture: %v: %s", err, out)
+	}
+}
+
 // assertCheck runs one check line through the probe-declared runner —
 // exactly how internal/checks runs checks without engine knowledge — and
 // asserts the last line of its output.

@@ -191,14 +191,15 @@ func provisionHandler(t *testing.T, sequence *[]string) func(verbCall) (any, *pr
 	}
 }
 
-// handlePut asserts the transfer destination and answers it.
+// handlePut asserts the transfer destination — the RDB's fixed path, or
+// a member of the adapter's append-only directory — and answers it.
 func handlePut(t *testing.T, call verbCall) any {
 	t.Helper()
 	args := putFileArgs{}
 	if err := json.Unmarshal(call.Args, &args); err != nil {
 		t.Fatalf("put_file args: %v", err)
 	}
-	if args.DestPath != rdbInSandbox {
+	if args.DestPath != rdbInSandbox && !strings.HasPrefix(args.DestPath, aofDirInSandbox+"/") {
 		t.Errorf("put_file dest = %q", args.DestPath)
 	}
 	return putFileValue{BytesCopied: 20, DurationSeconds: 0.4}
@@ -214,6 +215,8 @@ func classifyExec(argv []string, started *bool) (string, any) {
 		return "mkdir", okExec()
 	case argv[0] == "redis-check-rdb":
 		return "check", okExec()
+	case argv[0] == "redis-check-aof":
+		return "checkaof", okExec()
 	case argv[0] == "redis-server":
 		*started = true
 		return "start", execValue{ExitCode: 0, DurationSeconds: 0.2}
@@ -350,6 +353,130 @@ func TestProvisionWithoutMetadata(t *testing.T) {
 	}
 }
 
+// TestProvisionRestoresAOF is the append-only half end to end at the
+// protocol level: the manifest plus every member staged into the
+// adapter's own append-only directory, vetted by redis-check-aof, and
+// the server started reading exactly that set — with created_at null,
+// because an append-only directory does not date itself.
+func TestProvisionRestoresAOF(t *testing.T) {
+	dir := writeAOFDir(t, filepath.Join(t.TempDir(), "appendonlydir"), healthyManifest, healthyAOFFiles())
+	var sequence []string
+	var startArgv []string
+	inner := provisionHandler(t, &sequence)
+	line, _, exit := driveOp(t, "provision",
+		provisionPayload(t, "redis_aof", dir, nil), func(call verbCall) (any, *protoError) {
+			if call.Verb == "exec" {
+				if argv := argvOf(t, call); argv[0] == "redis-server" && argv[1] != "--version" {
+					startArgv = argv
+				}
+			}
+			return inner(call)
+		})
+	f := parseFinal(t, line)
+	if exit != 0 || !f.OK {
+		t.Fatalf("exit=%d final=%+v", exit, f)
+	}
+	want := "version|mkdir|put_file|put_file|put_file|checkaof|start|ping"
+	if got := strings.Join(sequence, "|"); got != want {
+		t.Errorf("sequence = %s, want %s", got, want)
+	}
+
+	assertAOFStartArgv(t, startArgv)
+	assertAOFProvisionPayload(t, f)
+}
+
+// assertAOFStartArgv pins the flags that make the restored server read
+// the staged set instead of silently starting an empty one.
+func assertAOFStartArgv(t *testing.T, startArgv []string) {
+	t.Helper()
+	joined := strings.Join(startArgv, " ")
+	for _, flag := range []string{
+		"--appendonly yes", "--appenddirname " + aofDirName, "--appendfilename appendonly.aof",
+	} {
+		if !strings.Contains(joined, flag) {
+			t.Errorf("start argv %q missing %q", joined, flag)
+		}
+	}
+	if strings.Contains(joined, "--appendonly no") || !strings.Contains(joined, "--save") {
+		t.Errorf("start argv %q must keep AOF on and RDB saves off", joined)
+	}
+}
+
+// assertAOFProvisionPayload pins what the final payload states about an
+// append-only restore.
+func assertAOFProvisionPayload(t *testing.T, f finalResponse) {
+	t.Helper()
+	got := struct {
+		SourceIdentity struct {
+			Checksum  string  `json:"checksum"`
+			CreatedAt *string `json:"created_at"`
+		} `json:"source_identity"`
+		Timings map[string]float64 `json:"timings"`
+		State   map[string]any     `json:"state"`
+	}{}
+	if err := json.Unmarshal(f.Payload, &got); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if !strings.HasPrefix(got.SourceIdentity.Checksum, "sha256:") {
+		t.Errorf("checksum = %q", got.SourceIdentity.Checksum)
+	}
+	if got.SourceIdentity.CreatedAt != nil {
+		t.Errorf("created_at = %v, want null — the base ctime dates the rewrite, not the backup",
+			*got.SourceIdentity.CreatedAt)
+	}
+	if diff := got.Timings["transfer_seconds"] - 1.2; diff < -1e-9 || diff > 1e-9 {
+		t.Errorf("timings = %+v, want the three members' measured transfers summed", got.Timings)
+	}
+	if got.State["aof_dir"] != aofDirInSandbox {
+		t.Errorf("state = %+v, want the staged append-only directory", got.State)
+	}
+}
+
+// TestAOFVersionPrecheckThroughProvision proves the base RDB feeds the
+// same asymmetric pre-check the rdb kinds have: a base written by a
+// newer server than the sandbox runs is refused after the version
+// probe, before anything is transferred.
+func TestAOFVersionPrecheckThroughProvision(t *testing.T) {
+	files := map[string]string{
+		"appendonly.aof.1.base.rdb": string(rdbFixture([2]string{"redis-ver", "8.0.3"})),
+		"appendonly.aof.1.incr.aof": "*1\r\n$4\r\nPING\r\n",
+	}
+	dir := writeAOFDir(t, filepath.Join(t.TempDir(), "aof"), healthyManifest, files)
+	var sequence []string
+	line, _, _ := driveOp(t, "provision",
+		provisionPayload(t, "redis_aof", dir, nil), provisionHandler(t, &sequence))
+	f := parseFinal(t, line)
+	if f.OK || f.Error.Code != "invalid_request" || !strings.Contains(f.Error.Message, "Redis 8.0") {
+		t.Fatalf("final = %+v, want invalid_request naming the origin version", f)
+	}
+	if got := strings.Join(sequence, "|"); got != "version" {
+		t.Errorf("sequence = %s, want the version probe only — nothing may be transferred", got)
+	}
+}
+
+// TestAOFCheckVerdict proves redis-check-aof inside the sandbox stays
+// the authority on loadability, exactly like its RDB sibling.
+func TestAOFCheckVerdict(t *testing.T) {
+	dir := writeAOFDir(t, filepath.Join(t.TempDir(), "aof"), healthyManifest, healthyAOFFiles())
+	var sequence []string
+	inner := provisionHandler(t, &sequence)
+	line, _, _ := driveOp(t, "provision",
+		provisionPayload(t, "redis_aof", dir, nil), func(call verbCall) (any, *protoError) {
+			if call.Verb == "exec" {
+				if argv := argvOf(t, call); argv[0] == "redis-check-aof" {
+					sequence = append(sequence, "checkaof")
+					return errExec(1, "Bad file format reading the append only file appendonly.aof.1.incr.aof"), nil
+				}
+			}
+			return inner(call)
+		})
+	f := parseFinal(t, line)
+	if f.OK || f.Error.Code != "source_corrupt" ||
+		!strings.Contains(f.Error.Message, "append-only set") {
+		t.Errorf("final = %+v, want source_corrupt carrying the tool's verdict", f)
+	}
+}
+
 func TestProvisionRefusals(t *testing.T) {
 	dir := t.TempDir()
 	rdb := writeRDB(t, dir, "dump.rdb", "7.2.5", "")
@@ -362,6 +489,16 @@ func TestProvisionRefusals(t *testing.T) {
 		[2]string{"valkey-ver", "8.0.10"}), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	legacyAOF := filepath.Join(dir, "appendonly.aof")
+	if err := os.WriteFile(legacyAOF, []byte("*1\r\n$4\r\nPING\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	incomplete := writeAOFDir(t, filepath.Join(dir, "incomplete"), healthyManifest,
+		map[string]string{"appendonly.aof.1.base.rdb": "x"})
+	valkeyAOF := writeAOFDir(t, filepath.Join(dir, "valkey-aof"), healthyManifest, map[string]string{
+		"appendonly.aof.1.base.rdb": string(rdbFixture([2]string{"valkey-ver", "8.0.10"})),
+		"appendonly.aof.1.incr.aof": "*1\r\n$4\r\nPING\r\n",
+	})
 
 	tests := []struct {
 		name    string
@@ -377,6 +514,12 @@ func TestProvisionRefusals(t *testing.T) {
 			provisionPayload(t, "redis_rdb", foreign, nil), "unsupported_source"},
 		{"backup_timezone has nothing to add to epoch seconds",
 			provisionPayload(t, "redis_rdb", rdb, map[string]string{"backup_timezone": "UTC"}), "invalid_request"},
+		{"a single legacy AOF file for the directory kind",
+			provisionPayload(t, "redis_aof", legacyAOF, nil), "invalid_request"},
+		{"an incomplete append-only copy is refused by the manifest",
+			provisionPayload(t, "redis_aof", incomplete, nil), "source_corrupt"},
+		{"a Valkey append-only set is the other dialect's",
+			provisionPayload(t, "redis_aof", valkeyAOF, nil), "unsupported_source"},
 		{"malformed payload", `"not an object"`, "invalid_request"},
 		{"pitr is not supported",
 			`{"source":{"kind":"redis_rdb","path":"` + rdb + `"},"pitr":{"target_time":"2026-08-01T00:00:00Z"}}`,

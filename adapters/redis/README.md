@@ -1,8 +1,9 @@
 # probavi-adapter-redis
 
-Restores Redis RDB snapshots into a disposable sandbox and serves the
-restored keys, implementing `probavi-adapter/0` (docs/adapter-protocol.md).
-Self-contained: standard library only, no imports from the Probavi core.
+Restores Redis RDB snapshots and Redis 7+ append-only directories into a
+disposable sandbox and serves the restored keys, implementing
+`probavi-adapter/0` (docs/adapter-protocol.md). Self-contained: standard
+library only, no imports from the Probavi core.
 
 ## Supported source kinds
 
@@ -10,6 +11,7 @@ Self-contained: standard library only, no imports from the Probavi core.
 |-----------------|----------------|
 | `redis_rdb`     | One RDB file — a copied `dump.rdb`, or the output of `redis-cli --rdb` |
 | `redis_rdb_dir` | A directory of RDB files; the newest **by the artifact's own save instant** is restored |
+| `redis_aof`     | A copy of the Redis 7+ append-only directory (`appendonlydir`): manifest, base, incremental segments — replayed in full |
 
 RDB is what Redis itself recommends for backups. What this adapter does
 not restore, on purpose, is in "Deliberately not here" below.
@@ -39,6 +41,31 @@ vet it, then starts the server daemonized with persistence pinned off
 rewrites the artifact under the drill. No shell is required for the engine
 flow — every step is direct argv — though the check runner below does use
 `sh` for word splitting, which every official image carries.
+
+## The append-only kind: the manifest is the contract
+
+Since Redis 7.0 the append-only state is a directory holding a text
+manifest plus the files it names — one base (an RDB by default) and
+incremental segments. `redis_aof` restores a copy of that directory, and
+the manifest gives it the gate AOF backups need most: **a copy taken
+mid-rewrite loses members**, and a manifest naming a file the backup
+does not hold is refused by name as an incomplete copy, before a byte
+reaches the sandbox. In the sandbox, `redis-check-aof` (handed the
+manifest, so it walks the base and every segment — measured) stays the
+authority on loadability, and the server is started with `--appendonly
+yes`, `--save ""`, and `--appendfilename` derived from the manifest's
+own name — an unmatched name would make the server silently start a
+fresh, empty append-only set, exactly the false green a drill must not
+produce. The base RDB's header feeds the same version pre-check and
+Valkey fence as the rdb kinds.
+
+Two deliberate differences from the rdb kinds. `backup.created_at` is
+**null**: the base's `ctime` dates the last rewrite, not the backup, and
+the incremental tail extends past it — an append-only directory does not
+date itself, and a wrong instant is worse than none. And there is no
+`redis_aof_dir`: with nothing to rank candidates by except copy-fragile
+file times, "newest" would be a guess; point the drill at one specific
+append-only directory instead.
 
 There is no auth to reset, unlike every sibling engine: `requirepass` and
 ACLs live in server configuration, not in the RDB, so the restored data
@@ -122,7 +149,7 @@ for restore.
 
 | Param             | Meaning |
 |-------------------|---------|
-| `backup_timezone` | Refused — an RDB dates itself in epoch seconds; the declaration has nothing to add. |
+| `backup_timezone` | Refused — an RDB dates itself in epoch seconds, and an append-only directory is deliberately not dated; the declaration has nothing to add either way. |
 
 ## Environment
 
@@ -131,11 +158,13 @@ unused. The adapter never prints secrets, and there are none to print.
 
 ## Deliberately not here
 
-- **AOF restores.** Redis 7's append-only state is a directory (manifest,
-  base RDB, incremental AOFs) whose members must be captured atomically —
-  Redis's own docs recommend RDB snapshots for backups and call AOF
-  copying more delicate. An AOF kind would be a separate, measured piece
-  of work; claiming it untested would be a false capability.
+- **Pre-7.0 single-file AOF.** The verified engines all write the 7.x
+  directory form; a bare `appendonly.aof` file is refused with a message
+  saying so rather than restored unverified. If a real need appears, it
+  is a separate, measured piece of work.
+- **A `redis_aof_dir` kind.** See above: an append-only set does not
+  date itself, so "newest" among several would rest on file times a copy
+  resets — a guess, not a measurement.
 - **Compressed artifacts.** A gzip-compressed RDB is refused by name
   (`unsupported_source`) rather than handed to the server to fail
   cryptically — decompress first, or back up uncompressed.

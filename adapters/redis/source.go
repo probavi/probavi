@@ -8,16 +8,20 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 // resolvedSource is a concrete backup artifact chosen for restore.
 type resolvedSource struct {
 	path      string
-	checksum  string // "sha256:<hex>" over the artifact bytes
+	checksum  string // "sha256:<hex>" over the artifact bytes (or set)
 	sizeBytes int64
 	createdAt *string // the RDB's own ctime aux field, nil when it has none
 	redisVer  string  // the origin server's version, "" when unstated
+	// aof is set when the artifact is an append-only directory rather
+	// than one RDB file; the flow in ops.go branches on it.
+	aof *aofArtifact
 }
 
 // resolveSource maps a source kind to one restorable artifact.
@@ -26,6 +30,8 @@ type resolvedSource struct {
 //	                of `redis-cli --rdb`)
 //	redis_rdb_dir — path is a directory of them; the newest by the
 //	                artifact's own save instant is restored
+//	redis_aof     — path is a copy of the Redis 7+ append-only directory
+//	                (manifest, base, incremental segments — see aof.go)
 //
 // An RDB records when it was saved (the ctime aux field, epoch seconds —
 // see rdbmeta.go), so both the reported created_at and the directory
@@ -46,10 +52,39 @@ func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *pr
 			return nil, perr
 		}
 		return resolveFile(latest)
+	case "redis_aof":
+		return resolveAOF(path)
 	default:
 		return nil, protoErr("unsupported_source", false,
-			"unsupported source kind: %s (supported: redis_rdb, redis_rdb_dir)", kind)
+			"unsupported source kind: %s (supported: redis_rdb, redis_rdb_dir, redis_aof)", kind)
 	}
+}
+
+// resolveAOF vets an append-only directory and reads what its base
+// states. The base RDB's header carries the same facts the rdb kinds
+// read — the origin version for the pre-check, the Valkey markers for
+// the dialect fence — while its ctime stays unreported: it dates the
+// last rewrite, not the backup, so created_at is deliberately null
+// (see aof.go).
+func resolveAOF(path string) (*resolvedSource, *protoError) {
+	art, perr := resolveAOFDir(path)
+	if perr != nil {
+		return nil, perr
+	}
+	src := &resolvedSource{path: path, aof: art}
+	if strings.HasSuffix(art.baseName, ".rdb") {
+		meta := readRDBMeta(filepath.Join(art.dir, art.baseName))
+		if perr := refuseValkeyDialect(meta); perr != nil {
+			return nil, perr
+		}
+		src.redisVer = meta.redisVer
+	}
+	checksum, size, perr := aofChecksum(art)
+	if perr != nil {
+		return nil, perr
+	}
+	src.checksum, src.sizeBytes = checksum, size
+	return src, nil
 }
 
 func refuseDirectory(path string) *protoError {
@@ -249,18 +284,19 @@ func formatCreatedAt(t time.Time) *string {
 
 // backupTimezoneParam names the IANA zone the backup host was in. The
 // wall-clock formats the sibling adapters read need it; an RDB records
-// its save instant as epoch seconds, which carry no zone question at all.
-// A declaration is refused rather than ignored: silence would leave the
+// its save instant as epoch seconds, which carry no zone question at
+// all, and an append-only directory is deliberately not dated. A
+// declaration is refused rather than ignored: silence would leave the
 // operator believing it did something.
 const backupTimezoneParam = "backup_timezone"
 
-// rejectBackupTimezone refuses a declaration this format makes redundant.
+// rejectBackupTimezone refuses a declaration these formats make redundant.
 func rejectBackupTimezone(params map[string]string) *protoError {
 	if params[backupTimezoneParam] == "" {
 		return nil
 	}
 	return protoErr("invalid_request", false,
-		"source.params.%s has no effect for this adapter: an RDB records its save instant as epoch "+
-			"seconds, so backup.created_at is exact without a declared zone — remove the parameter",
+		"source.params.%s has no effect for this adapter: an RDB dates itself in epoch seconds and "+
+			"an append-only directory is deliberately not dated — remove the parameter",
 		backupTimezoneParam)
 }
