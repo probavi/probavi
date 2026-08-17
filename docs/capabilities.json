@@ -194,6 +194,53 @@
       "docs": "adapters/etcd/README.md"
     },
     {
+      "id": "influxdb",
+      "name": "InfluxDB",
+      "status": "experimental",
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "influxdb",
+        "name": "influxdb"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "2.7",
+          "image": "influxdb:2.7.12"
+        },
+        {
+          "engine_version": "2.8",
+          "image": "influxdb:2.8.0"
+        },
+        {
+          "engine_version": "2.9",
+          "image": "influxdb:2.9.1"
+        }
+      ],
+      "sources": [
+        {
+          "id": "influx_backup",
+          "name": "One `influx backup` output directory (manifest, KV store, SQL store, shard files); a reused target directory restores its newest backup",
+          "pitr": false
+        },
+        {
+          "id": "influx_backup_dir",
+          "name": "A directory of them; the newest by the backups' own timestamp stems is restored",
+          "pitr": false
+        },
+        {
+          "id": "influx_backup_tar",
+          "name": "One tar archive (plain or gzip) of an `influx backup` directory, members at the root or under one wrapping directory",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/influxdb/README.md"
+    },
+    {
       "id": "mariadb",
       "name": "MariaDB",
       "status": "experimental",

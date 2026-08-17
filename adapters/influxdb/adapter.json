@@ -1,0 +1,29 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. The official influxdb images idle under command: sleep infinity (their entrypoint execs a non-influxd command directly, measured), so no wrapper image is needed. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "influxdb",
+  "name": "InfluxDB",
+  "status": "experimental",
+  "engine_name": "influxdb",
+  "conformance_verified": true,
+  "docs": "adapters/influxdb/README.md",
+  "verified": [
+    {
+      "engine_version": "2.7",
+      "image": "influxdb:2.7.12",
+      "baseline": true
+    },
+    {
+      "engine_version": "2.8",
+      "image": "influxdb:2.8.0"
+    },
+    {
+      "engine_version": "2.9",
+      "image": "influxdb:2.9.1"
+    }
+  ],
+  "sources": {
+    "influx_backup_tar": "One tar archive (plain or gzip) of an `influx backup` directory, members at the root or under one wrapping directory",
+    "influx_backup": "One `influx backup` output directory (manifest, KV store, SQL store, shard files); a reused target directory restores its newest backup",
+    "influx_backup_dir": "A directory of them; the newest by the backups' own timestamp stems is restored"
+  }
+}
