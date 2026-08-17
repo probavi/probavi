@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,15 +15,25 @@ import (
 // maxAug2026 is a plausible block maxTime used across the fixtures.
 const maxAug2026 = int64(1786876374046)
 
-// writeBlock lays down one TSDB-block-shaped directory.
-func writeBlock(t *testing.T, snapshotDir, ulid string, maxTime int64) {
+// writeBlock lays down one TSDB-block-shaped directory. Parents, when
+// given, are recorded the way current servers write them: objects under
+// compaction.parents.
+func writeBlock(t *testing.T, snapshotDir, ulid string, maxTime int64, parents ...string) {
 	t.Helper()
 	dir := filepath.Join(snapshotDir, ulid)
 	if err := os.MkdirAll(filepath.Join(dir, "chunks"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	meta := fmt.Sprintf(`{"ulid":%q,"minTime":%d,"maxTime":%d,"version":1}`,
-		ulid, maxTime-3000, maxTime)
+	compaction := ""
+	if len(parents) > 0 {
+		refs := make([]string, 0, len(parents))
+		for _, p := range parents {
+			refs = append(refs, fmt.Sprintf(`{"ulid":%q,"minTime":%d,"maxTime":%d}`, p, maxTime-3000, maxTime))
+		}
+		compaction = fmt.Sprintf(`,"compaction":{"level":2,"parents":[%s]}`, strings.Join(refs, ","))
+	}
+	meta := fmt.Sprintf(`{"ulid":%q,"minTime":%d,"maxTime":%d,"version":1%s}`,
+		ulid, maxTime-3000, maxTime, compaction)
 	for name, content := range map[string]string{
 		"meta.json":     meta,
 		"index":         "index bytes",
@@ -92,6 +103,165 @@ func TestInspectSnapshotDirRefusesLiveMarkers(t *testing.T) {
 		})
 	}
 
+}
+
+// blockWithParents builds one decoded meta for censusOf tests, parents
+// in the bare-string shape (the object shape is covered by
+// TestParentULIDShapes and the fixture-driven tests).
+func blockWithParents(ulid string, maxTime int64, parents ...string) blockMeta {
+	refs := make([]json.RawMessage, 0, len(parents))
+	for _, p := range parents {
+		refs = append(refs, json.RawMessage(fmt.Sprintf("%q", p)))
+	}
+	return blockMeta{ULID: ulid, MaxTime: maxTime, Compaction: blockCompaction{Parents: refs}}
+}
+
+// TestCensusOf pins the census rule the server's own block loading
+// follows (issue #155): a present block named in another present block's
+// compaction parent list is skipped, everything else must load.
+func TestCensusOf(t *testing.T) {
+	tests := []struct {
+		name        string
+		metas       []blockMeta
+		wantBlocks  int
+		wantSkipped int
+		wantMax     int64
+	}{
+		{
+			name: "independent blocks all count",
+			metas: []blockMeta{
+				blockWithParents("A", maxAug2026-60000), blockWithParents("B", maxAug2026),
+			},
+			wantBlocks: 2, wantSkipped: 0, wantMax: maxAug2026,
+		},
+		{
+			name: "a present parent is a skipped compaction source",
+			metas: []blockMeta{
+				blockWithParents("A", maxAug2026-60000),
+				blockWithParents("B", maxAug2026, "A"),
+			},
+			wantBlocks: 1, wantSkipped: 1, wantMax: maxAug2026,
+		},
+		{
+			name: "a parent naming an absent block subtracts nothing",
+			metas: []blockMeta{
+				blockWithParents("B", maxAug2026, "GONE"),
+			},
+			wantBlocks: 1, wantSkipped: 0, wantMax: maxAug2026,
+		},
+		{
+			name: "a multi-level chain collapses to its newest block",
+			metas: []blockMeta{
+				blockWithParents("A", maxAug2026-120000),
+				blockWithParents("B", maxAug2026-60000, "A"),
+				blockWithParents("C", maxAug2026, "B"),
+			},
+			wantBlocks: 1, wantSkipped: 2, wantMax: maxAug2026,
+		},
+		{
+			name: "a parent named twice is skipped once",
+			metas: []blockMeta{
+				blockWithParents("A", maxAug2026-120000),
+				blockWithParents("B", maxAug2026-60000, "A"),
+				blockWithParents("C", maxAug2026, "A"),
+			},
+			wantBlocks: 2, wantSkipped: 1, wantMax: maxAug2026,
+		},
+		{
+			name: "empty parent entries subtract nothing",
+			metas: []blockMeta{
+				blockWithParents("A", maxAug2026, ""),
+				blockWithParents("", maxAug2026-60000),
+			},
+			wantBlocks: 2, wantSkipped: 0, wantMax: maxAug2026,
+		},
+		{
+			name: "the newest instant still ranges over skipped sources",
+			metas: []blockMeta{
+				blockWithParents("A", maxAug2026),
+				blockWithParents("B", maxAug2026-60000, "A"),
+			},
+			wantBlocks: 1, wantSkipped: 1, wantMax: maxAug2026,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := censusOf(tt.metas)
+			if info.blocks != tt.wantBlocks || info.sourcesSkipped != tt.wantSkipped ||
+				info.maxTimeMs != tt.wantMax {
+				t.Errorf("censusOf = %+v, want blocks %d skipped %d max %d",
+					info, tt.wantBlocks, tt.wantSkipped, tt.wantMax)
+			}
+		})
+	}
+}
+
+// TestParentULIDShapes pins the tolerant read: the parent list's shape
+// has varied across server versions (objects with a ulid field, bare
+// ULID strings), and anything else must read as empty rather than fail
+// the block or subtract from the census.
+func TestParentULIDShapes(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+		want []string
+	}{
+		{"objects with a ulid field", `{"parents":[{"ulid":"A","minTime":1,"maxTime":2},{"ulid":"B"}]}`,
+			[]string{"A", "B"}},
+		{"bare ULID strings", `{"parents":["A","B"]}`, []string{"A", "B"}},
+		{"mixed and junk entries read without failing", `{"parents":[{"ulid":"A"},"B",7,{"level":2},null]}`,
+			[]string{"A", "B", "", "", ""}},
+		{"no parent list at all", `{"level":1,"sources":["A"]}`, nil},
+		{"a null parent list", `{"parents":null}`, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := blockCompaction{}
+			if err := json.Unmarshal([]byte(tt.json), &got); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if len(got.Parents) != len(tt.want) {
+				t.Fatalf("parents = %v, want %v", got.Parents, tt.want)
+			}
+			for i := range got.Parents {
+				if u := parentULID(got.Parents[i]); u != tt.want[i] {
+					t.Errorf("parents[%d] = %q, want %q", i, u, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestInspectSnapshotDirSubtractsCompactionSources is issue #155's
+// shape: a snapshot taken during a compaction window holds both the
+// compacted block and the sources it replaced, and the census must
+// expect only what the server will load.
+func TestInspectSnapshotDirSubtractsCompactionSources(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "snap")
+	writeBlock(t, dir, "01SOURCEAAAAAAAAAAAAAAAAAA", maxAug2026-60000)
+	writeBlock(t, dir, "01SOURCEBBBBBBBBBBBBBBBBBB", maxAug2026-30000)
+	writeBlock(t, dir, "01COMPACTEDCCCCCCCCCCCCCCC", maxAug2026,
+		"01SOURCEAAAAAAAAAAAAAAAAAA", "01SOURCEBBBBBBBBBBBBBBBBBB")
+	info, perr := inspectSnapshotDir(dir)
+	if perr != nil {
+		t.Fatalf("inspectSnapshotDir: %+v", perr)
+	}
+	if info.blocks != 1 || info.sourcesSkipped != 2 || info.maxTimeMs != maxAug2026 {
+		t.Errorf("info = %+v, want 1 required block, 2 skipped sources, max %d", info, maxAug2026)
+	}
+}
+
+// TestInspectSnapshotDirRefusesCyclicCompaction pins the one shape the
+// subtraction can reduce to nothing: metadata claiming every block is a
+// source of another. No real compaction produces that.
+func TestInspectSnapshotDirRefusesCyclicCompaction(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "snap")
+	writeBlock(t, dir, "01CYCLEAAAAAAAAAAAAAAAAAAA", maxAug2026-60000, "01CYCLEBBBBBBBBBBBBBBBBBBB")
+	writeBlock(t, dir, "01CYCLEBBBBBBBBBBBBBBBBBBB", maxAug2026, "01CYCLEAAAAAAAAAAAAAAAAAAA")
+	_, perr := inspectSnapshotDir(dir)
+	if perr == nil || perr.Code != "source_corrupt" || !strings.Contains(perr.Message, "cyclic") {
+		t.Fatalf("perr = %+v, want source_corrupt naming the cyclic metadata", perr)
+	}
 }
 
 func TestInspectSnapshotDirRefusesABrokenBlock(t *testing.T) {
@@ -235,6 +405,25 @@ func TestListTarSnapshot(t *testing.T) {
 		}
 	})
 
+}
+
+// TestListTarSnapshotSubtractsCompactionSources proves the host-side
+// archive walk applies the same census rule the directory kinds do: a
+// compaction-window archive expects only the blocks the server will
+// load.
+func TestListTarSnapshotSubtractsCompactionSources(t *testing.T) {
+	entries := append(snapshotTarEntries("", maxAug2026-60000),
+		tarEntry{name: "01COMPACTED/", dir: true},
+		tarEntry{name: "01COMPACTED/meta.json",
+			content: fmt.Sprintf(`{"ulid":"c","maxTime":%d,"compaction":{"level":2,"parents":[{"ulid":"b0"}]}}`,
+				maxAug2026)},
+		tarEntry{name: "01COMPACTED/index", content: "index bytes"})
+	path := buildTar(t, filepath.Join(t.TempDir(), "window.tar"), false, entries)
+	info, live, ok := listTarSnapshot(path)
+	if !ok || live != "" || info.blocks != 1 || info.sourcesSkipped != 1 || info.maxTimeMs != maxAug2026 {
+		t.Errorf("listTarSnapshot = %+v live=%q ok=%v, want 1 required block and 1 skipped source",
+			info, live, ok)
+	}
 }
 
 func TestListTarSnapshotEdgeCases(t *testing.T) {

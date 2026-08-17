@@ -11,6 +11,21 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Prometheus block census no longer refuses compaction-window
+  snapshots** (`adapters/prometheus` 0.2.0, #155). A snapshot taken
+  while compaction sources still sat on disk legitimately holds both a
+  compacted block and the parents it replaced; the server skips a block
+  named in another present block's `compaction.parents` — deduplication,
+  not a failed load (measured). The census now expects present blocks
+  minus present-and-superseded ones, mirroring the server's own rule, so
+  a healthy compaction-window snapshot passes while a block that truly
+  failed to load still refuses the drill. Parent lists are read
+  tolerantly (objects or bare ULID strings), metadata claiming every
+  block supersedes another is refused as damage, and the count of
+  skipped sources is logged with each drill.
+
 ## [0.14.0] - 2026-08-16
 
 The standing cadence holds: exactly one new engine in this cycle —

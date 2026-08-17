@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -231,6 +232,155 @@ func TestArchiveDrillUnpacksAndServes(t *testing.T) {
 		t.Error("created_at = nil, want the archive's own claim")
 	}
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database, "count(up)", "=> 1 @")
+}
+
+// TestCompactionWindowSnapshotPassesTheCensus reproduces issue #155
+// against a measured server: the snapshot holds both a compacted block
+// and the source it replaced — the shape POST /api/v1/admin/tsdb/snapshot
+// produces when it hardlinks a data directory mid-compaction — and the
+// server loads every block except the superseded source. The drill must
+// call that a full restore, and the census must have subtracted exactly
+// the block the server skipped.
+func TestCompactionWindowSnapshotPassesTheCensus(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := wrapperImage(t, ctx, verifiedImage(t))
+	provider := docker.New(nil)
+
+	fixture := filepath.Join(t.TempDir(), "snap")
+	makeFixtures(t, ctx, provider, image, fixture, "", "")
+	required := countBlockDirs(t, fixture)
+	supersedeOneBlock(t, fixture)
+	if got := countBlockDirs(t, fixture); got != required+1 {
+		t.Fatalf("fixture holds %d block directories after superseding, want %d", got, required+1)
+	}
+
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("prometheus", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "prometheus_snapshot", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v — a compaction-window snapshot is healthy and must restore", err)
+	}
+
+	// The measured heart of the test: the server's own metric proves it
+	// skipped exactly the superseded source, so the census can only have
+	// passed by subtracting it — not by counting directories.
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"sh", "-c",
+		"wget -q -O- http://127.0.0.1:9090/metrics | grep '^prometheus_tsdb_blocks_loaded'"}})
+	if err != nil || out.ExitCode != 0 {
+		t.Fatalf("read blocks_loaded: %v (exit %d, stderr %s)", err, out.ExitCode, out.Stderr)
+	}
+	fields := strings.Fields(strings.TrimSpace(string(out.Stdout)))
+	if len(fields) != 2 {
+		t.Fatalf("blocks_loaded line = %q", out.Stdout)
+	}
+	loaded, err := strconv.Atoi(fields[1])
+	if err != nil {
+		t.Fatalf("blocks_loaded value = %q: %v", fields[1], err)
+	}
+	if loaded != required {
+		t.Errorf("server loaded %d blocks with %d directories present, want %d — "+
+			"the superseded source must be the one block it skips", loaded, required+1, required)
+	}
+
+	health, err := runner.Healthcheck(ctx, &res.Connection, res.State, sbx)
+	if err != nil || !health.Healthy {
+		t.Fatalf("healthcheck = %+v (%v), want healthy", health, err)
+	}
+}
+
+// countBlockDirs counts the block directories a snapshot holds.
+func countBlockDirs(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			n++
+		}
+	}
+	return n
+}
+
+// supersedeOneBlock copies one real block under a fresh ULID and marks
+// the copy as the original's compaction child — the compacted block a
+// mid-window snapshot holds beside its still-present source. The copy is
+// a byte-identical, fully valid block, so the server serves it exactly
+// as it would the real product of a compaction.
+func supersedeOneBlock(t *testing.T, snapshotDir string) {
+	t.Helper()
+	entries, err := os.ReadDir(snapshotDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := ""
+	for _, e := range entries {
+		if e.IsDir() {
+			source = e.Name()
+			break
+		}
+	}
+	if source == "" {
+		t.Fatal("no block directory to supersede")
+	}
+	twin := twinULIDOf(source)
+	if err := os.CopyFS(filepath.Join(snapshotDir, twin), os.DirFS(filepath.Join(snapshotDir, source))); err != nil {
+		t.Fatalf("copy block: %v", err)
+	}
+
+	metaPath := filepath.Join(snapshotDir, twin, "meta.json")
+	raw, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := map[string]any{}
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.UseNumber()
+	if err := dec.Decode(&meta); err != nil {
+		t.Fatalf("decode meta.json: %v", err)
+	}
+	meta["ulid"] = twin
+	compaction, _ := meta["compaction"].(map[string]any)
+	if compaction == nil {
+		compaction = map[string]any{}
+	}
+	compaction["level"] = 2
+	compaction["parents"] = []map[string]any{
+		{"ulid": source, "minTime": meta["minTime"], "maxTime": meta["maxTime"]},
+	}
+	meta["compaction"] = compaction
+	rewritten, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metaPath, rewritten, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// twinULIDOf derives a distinct, still-valid ULID from a real one by
+// swapping the last character within the ULID alphabet.
+func twinULIDOf(u string) string {
+	if strings.HasSuffix(u, "Z") {
+		return u[:len(u)-1] + "Y"
+	}
+	return u[:len(u)-1] + "Z"
 }
 
 // TestCorruptIndexSurfacesTheServerLog proves a damaged block yields the

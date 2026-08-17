@@ -50,8 +50,15 @@ Measured behaviors this adapter refuses to paper over:
 So after the restored server is ready, the drill runs two verdict
 reads. The **block census** compares `prometheus_tsdb_blocks_loaded`
 from the server's own `/metrics` against the number of blocks the
-artifact holds — counted host-side from the snapshot itself (or from
-the archive's table of contents) — and refuses a partial load. The
+artifact *requires loading* — counted host-side from the snapshot
+itself (or from the archive's table of contents) — and refuses a
+partial load. Required is not the same as present: a snapshot taken
+while compaction sources still sat on disk legitimately holds both a
+compacted block and the parents it replaced, and the server skips a
+block that another present block's `compaction.parents` names — that is
+deduplication, not a failed load (measured). The census applies the
+server's own rule, so a compaction-window snapshot passes while a block
+that truly failed to load still refuses the drill. The
 **series probe** counts every series at the newest instant the backup's
 own blocks claim to cover, and refuses a well-formed zero: a server
 that is up but serves none of the promised data is exactly the false
@@ -165,6 +172,7 @@ change changes the hash.
 | tar cannot unpack the archive | `source_corrupt` |
 | the sandbox image cannot run the server | `invalid_request`, naming the wrapper recipe |
 | the server refuses to start on a corrupted block | `source_corrupt`, carrying its log line |
-| the server loaded fewer blocks than the snapshot holds | `source_corrupt` — the census |
+| the server loaded fewer blocks than the snapshot requires (compaction sources already excluded) | `source_corrupt` — the census |
+| every block named as another present block's compaction source | `source_corrupt` — cyclic metadata |
 | no series at the instant the backup claims | `source_corrupt` — the probe |
 | the restored server never became ready | `engine_not_ready`, or `restore_failed` with the server's own log line |
