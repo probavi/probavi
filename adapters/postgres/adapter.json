@@ -27,12 +27,18 @@
     {
       "engine_version": "0.8.6-pg17",
       "image": "pgvector/pgvector:0.8.6-pg17"
+    },
+    {
+      "engine_version": "2.29.1-pg17",
+      "image": "timescale/timescaledb:2.29.1-pg17"
     }
   ],
   "sources": {
     "pgdump": "One pg_dump file, custom-format (-Fc) or plain SQL (-Fp), stored plain or gzip-compressed",
     "pgdump_dir": "A directory of pg_dump files; the one whose own head records the newest time is restored",
     "pgdump_with_globals": "One pg_dump file plus the cluster globals (roles and grants) loaded before it; either member may be gzip-compressed",
-    "pgbackrest": "A pgBackRest filesystem repository (physical restore)"
+    "pgbackrest": "A pgBackRest filesystem repository (physical restore)",
+    "timescaledb_dump": "One pg_dump file of a TimescaleDB database; the restore is framed with timescaledb_pre_restore()/timescaledb_post_restore()",
+    "timescaledb_dump_dir": "A directory of them; the one whose own head records the newest time is restored, framed the same way"
   }
 }

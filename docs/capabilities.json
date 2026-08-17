@@ -430,7 +430,7 @@
       "id": "postgres",
       "name": "PostgreSQL",
       "status": "experimental",
-      "adapter_version": "0.10.0",
+      "adapter_version": "0.11.0",
       "engine": {
         "id": "postgresql",
         "name": "PostgreSQL"
@@ -458,6 +458,10 @@
         {
           "engine_version": "0.8.6-pg17",
           "image": "pgvector/pgvector:0.8.6-pg17"
+        },
+        {
+          "engine_version": "2.29.1-pg17",
+          "image": "timescale/timescaledb:2.29.1-pg17"
         }
       ],
       "sources": [
@@ -479,6 +483,16 @@
         {
           "id": "pgdump_with_globals",
           "name": "One pg_dump file plus the cluster globals (roles and grants) loaded before it; either member may be gzip-compressed",
+          "pitr": false
+        },
+        {
+          "id": "timescaledb_dump",
+          "name": "One pg_dump file of a TimescaleDB database; the restore is framed with timescaledb_pre_restore()/timescaledb_post_restore()",
+          "pitr": false
+        },
+        {
+          "id": "timescaledb_dump_dir",
+          "name": "A directory of them; the one whose own head records the newest time is restored, framed the same way",
           "pitr": false
         }
       ],

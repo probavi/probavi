@@ -211,7 +211,31 @@ func execRole(argv []string) string {
 	if _, ok := parseReplay(argv); ok {
 		return "psql"
 	}
+	if _, ok := parseArchiveRestore(argv); ok {
+		return "pg_restore"
+	}
 	return "sh"
+}
+
+// archiveRestoreCall is one custom-format archive restore, with the shell
+// wrapper unpacked into the parts a test asserts on.
+type archiveRestoreCall struct {
+	script   string
+	path     string
+	user     string
+	database string
+	fence    string
+}
+
+func parseArchiveRestore(argv []string) (archiveRestoreCall, bool) {
+	const wantArgs = 8
+	if len(argv) != wantArgs || argv[0] != "sh" || argv[1] != "-c" || argv[3] != "sh" ||
+		argv[2] != archiveRestoreScript {
+		return archiveRestoreCall{}, false
+	}
+	return archiveRestoreCall{
+		script: argv[2], path: argv[4], user: argv[5], database: argv[6], fence: argv[7],
+	}, true
 }
 
 // replayCall is one plain-SQL replay the adapter asked the sandbox to run,
@@ -224,23 +248,24 @@ type replayCall struct {
 	marker    string
 	tailBytes string
 	errorStop string
+	fence     string
 }
 
 func parseReplay(argv []string) (replayCall, bool) {
-	const wantArgs = 10
+	const wantArgs = 12
 	if len(argv) != wantArgs || argv[0] != "sh" || argv[1] != "-c" || argv[3] != "sh" {
 		return replayCall{}, false
 	}
 	return replayCall{
 		script: argv[2], path: argv[4], user: argv[5], database: argv[6],
-		marker: argv[7], tailBytes: argv[8], errorStop: argv[9],
+		marker: argv[7], tailBytes: argv[8], errorStop: argv[9], fence: argv[10],
 	}, true
 }
 
-func writeFixture(t *testing.T, content string) string {
+func writeFixture(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "fixture.dump")
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(archiveFixtureBody), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
 	return path
@@ -276,7 +301,7 @@ func happyProvisionHandler(t *testing.T, fixture string, isreadyCalls *int) func
 }
 
 func happyExecResponse(t *testing.T, args execArgs, isreadyCalls *int) any {
-	switch args.Argv[0] {
+	switch execRole(args.Argv) {
 	case "pg_isready":
 		*isreadyCalls++
 		if *isreadyCalls == 1 {
@@ -284,10 +309,16 @@ func happyExecResponse(t *testing.T, args execArgs, isreadyCalls *int) any {
 		}
 		return okExec(0)
 	case "pg_restore":
-		want := []string{"pg_restore", "-h", "127.0.0.1", "-U", "orders_admin", "-d", "orders",
-			"--no-owner", "--exit-on-error", "/scratch/probavi-restore.dump"}
-		if strings.Join(args.Argv, " ") != strings.Join(want, " ") {
-			t.Errorf("pg_restore argv = %v", args.Argv)
+		restore, ok := parseArchiveRestore(args.Argv)
+		if !ok {
+			t.Errorf("archive restore argv = %v", args.Argv)
+		}
+		if restore.path != "/scratch/probavi-restore.dump" || restore.user != "orders_admin" ||
+			restore.database != "orders" {
+			t.Errorf("archive restore = %+v", restore)
+		}
+		if restore.fence != timescaleTOCMark {
+			t.Errorf("fence = %q, want the armed timescale fence on the plain pgdump kind", restore.fence)
 		}
 		return execValue{ExitCode: 0, DurationSeconds: 1.5}
 	default:
@@ -343,7 +374,7 @@ func assertProvisionResult(t *testing.T, payload json.RawMessage) {
 }
 
 func TestProvisionHappyPath(t *testing.T) {
-	fixture := writeFixture(t, archiveFixtureBody)
+	fixture := writeFixture(t)
 	isreadyCalls := 0
 	line, calls, exit := driveOp(t, "provision",
 		provisionPayload(fixture, `{"user":"orders_admin","database":"orders"}`),
@@ -666,7 +697,7 @@ func TestProvisionWithGlobalsRefusesPITR(t *testing.T) {
 }
 
 func TestProvisionFailures(t *testing.T) {
-	fixture := writeFixture(t, archiveFixtureBody)
+	fixture := writeFixture(t)
 	readyThen := func(rest func(call verbCall) (any, *protoError)) func(verbCall) (any, *protoError) {
 		return func(call verbCall) (any, *protoError) {
 			if call.Verb == "exec" {
