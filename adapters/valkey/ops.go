@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,7 +14,7 @@ import (
 
 const (
 	adapterName    = "valkey"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.2.0"
 
 	// Where the restored server serves inside the sandbox. No TLS and no
 	// auth: a Probavi sandbox is zero-ingress (--network none, no ports
@@ -29,6 +30,11 @@ const (
 	dataDir      = "/probavi-valkey/data"
 	rdbName      = "dump.rdb"
 	rdbInSandbox = dataDir + "/" + rdbName
+	// aofDirName is where the append-only set is placed under dataDir;
+	// the server is started with --appenddirname naming it, so the
+	// artifact's original directory name never matters.
+	aofDirName      = "appendonlydir"
+	aofDirInSandbox = dataDir + "/" + aofDirName
 	// serverLog is where the daemonized server writes; the readiness
 	// timeout path reads it so a start failure names the engine's own
 	// reason instead of "never became ready".
@@ -49,6 +55,7 @@ func probePayload() any {
 		"sources": []map[string]any{
 			{"kind": "valkey_rdb", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "valkey_rdb_dir", "capabilities": map[string]bool{"pitr": false}},
+			{"kind": "valkey_aof", "capabilities": map[string]bool{"pitr": false}},
 		},
 		"sql_runner": map[string]any{
 			// Valkey has no SQL: the check text the core passes through
@@ -86,16 +93,18 @@ type provisionRequest struct {
 	} `json:"pitr"`
 }
 
-// opProvision restores the RDB into the idle sandbox and starts the
-// server on it: preflight (valkey-server present, versions compatible),
-// place the file, integrity check, daemonized start, readiness.
+// opProvision restores the artifact — one RDB file, or an append-only
+// directory — into the idle sandbox and starts the server on it:
+// preflight (valkey-server present, versions compatible), stage the
+// file or set, integrity check by the matching valkey-check-* tool,
+// daemonized start, readiness.
 //
-// The whole lifecycle belongs to the adapter because it has to: an RDB is
-// loaded by the server at startup from its configured data directory, so
-// the sequence "place, then serve" cannot be expressed by an image's own
-// entrypoint. The drill config starts the sandbox idle (docker:
-// command: sleep infinity) — the official images otherwise boot an empty
-// server on the port the restored one needs.
+// The whole lifecycle belongs to the adapter because it has to: both
+// artifact shapes are loaded by the server at startup from its
+// configured data directory, so the sequence "place, then serve" cannot
+// be expressed by an image's own entrypoint. The drill config starts the
+// sandbox idle (docker: command: sleep infinity) — the official images
+// otherwise boot an empty server on the port the restored one needs.
 func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *slog.Logger) (any, *protoError) {
 	req := &provisionRequest{}
 	if err := json.Unmarshal(payload, req); err != nil {
@@ -122,18 +131,12 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		return nil, perr
 	}
 
-	if perr := prepareDataDir(ctx, c); perr != nil {
-		return nil, perr
-	}
-	put, perr := c.putFile(ctx, putFileArgs{SourcePath: src.path, DestPath: rdbInSandbox, Mode: "0600"})
+	transferSeconds, perr := stageArtifact(ctx, c, src)
 	if perr != nil {
 		return nil, perr
 	}
-	if perr := checkRDB(ctx, c); perr != nil {
-		return nil, perr
-	}
 
-	restoreSeconds, readySeconds, perr := startEngine(ctx, c)
+	restoreSeconds, readySeconds, perr := startEngine(ctx, c, src.serverArgs())
 	if perr != nil {
 		return nil, perr
 	}
@@ -155,11 +158,66 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		},
 		"timings": map[string]any{
 			"engine_ready_seconds": readySeconds,
-			"transfer_seconds":     put.DurationSeconds,
+			"transfer_seconds":     transferSeconds,
 			"restore_seconds":      restoreSeconds,
 		},
-		"state": map[string]any{"data_dir": dataDir, "rdb_path": rdbInSandbox},
+		"state": src.state(),
 	}, nil
+}
+
+// stageArtifact places the artifact in the sandbox and has the matching
+// valkey-check-* tool vet it before the server is pointed at it. For
+// the append-only kind that is the manifest plus every file it names,
+// into the adapter's own append-only directory.
+func stageArtifact(ctx context.Context, c *core, src *resolvedSource) (float64, *protoError) {
+	if src.aof == nil {
+		if perr := prepareDir(ctx, c, dataDir); perr != nil {
+			return 0, perr
+		}
+		put, perr := c.putFile(ctx, putFileArgs{SourcePath: src.path, DestPath: rdbInSandbox, Mode: "0600"})
+		if perr != nil {
+			return 0, perr
+		}
+		return put.DurationSeconds, checkRDB(ctx, c)
+	}
+	if perr := prepareDir(ctx, c, aofDirInSandbox); perr != nil {
+		return 0, perr
+	}
+	total := 0.0
+	for _, name := range src.aof.transferNames() {
+		put, perr := c.putFile(ctx, putFileArgs{
+			SourcePath: filepath.Join(src.aof.dir, name),
+			DestPath:   aofDirInSandbox + "/" + name, Mode: "0600",
+		})
+		if perr != nil {
+			return 0, perr
+		}
+		total += put.DurationSeconds
+	}
+	return total, checkAOFSet(ctx, c, src.aof)
+}
+
+// serverArgs are the valkey-server flags that point the engine at the
+// staged artifact. Persistence is pinned in both flows so the server
+// never rewrites what the drill measures: the RDB flow disables AOF
+// outright, and the AOF flow disables RDB saves while --appendfilename
+// derives from the staged manifest's own name — an unmatched name would
+// make the server silently start a fresh, empty append-only set, the
+// exact false green this adapter exists to refuse.
+func (src *resolvedSource) serverArgs() []string {
+	if src.aof == nil {
+		return []string{"--dir", dataDir, "--dbfilename", rdbName, "--appendonly", "no", "--save", ""}
+	}
+	return []string{"--dir", dataDir, "--appendonly", "yes", "--appenddirname", aofDirName,
+		"--appendfilename", src.aof.appendFilename(), "--save", ""}
+}
+
+// state is what healthcheck and teardown are handed back.
+func (src *resolvedSource) state() map[string]any {
+	if src.aof == nil {
+		return map[string]any{"data_dir": dataDir, "rdb_path": rdbInSandbox}
+	}
+	return map[string]any{"data_dir": dataDir, "aof_dir": aofDirInSandbox}
 }
 
 // engineVersionPattern finds the release series in `valkey-server
@@ -249,11 +307,11 @@ func checkEngineVersion(valkeyVer, engineOut string) *protoError {
 		oMajor, oMinor, eMajor, eMinor, oMajor, oMinor)
 }
 
-// prepareDataDir creates the directory the server will load from. No
+// prepareDir creates the directory the server will load from. No
 // shell: every step of this flow is direct argv, so the adapter works on
 // any image that carries the valkey binaries and mkdir.
-func prepareDataDir(ctx context.Context, c *core) *protoError {
-	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"mkdir", "-p", dataDir}})
+func prepareDir(ctx context.Context, c *core, dir string) *protoError {
+	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"mkdir", "-p", dir}})
 	if perr != nil {
 		return perr
 	}
@@ -284,21 +342,69 @@ func checkRDB(ctx context.Context, c *core) *protoError {
 	return protoErr("source_corrupt", false, "valkey-check-rdb rejected the RDB: %s", line)
 }
 
-// startEngine launches the daemonized server on the restored data and
-// waits until it answers PING. Persistence is pinned off explicitly
-// (--appendonly no, --save "") so the server loads the placed RDB rather
-// than an AOF and never rewrites the artifact under the drill.
+// checkAOFSet vets the staged set member by member, mirroring exactly
+// what the server loads. valkey-check-aof's manifest mode misreads the
+// VALKEY-magic base a 9.x rewrite writes as a RESP-format base and
+// rejects the healthy set the server itself produced (measured), so
+// the manifest mode is not usable as an authority here: the base goes
+// to valkey-check-rdb — which reads both magics, like the server — an
+// .aof base and every incremental segment go to valkey-check-aof's
+// single-file mode, and history members the server never loads are
+// transferred with the set but not vetted, so a gate stricter than the
+// engine cannot fail a restorable backup.
+func checkAOFSet(ctx context.Context, c *core, art *aofArtifact) *protoError {
+	if art.baseName != "" {
+		tool := "valkey-check-aof"
+		if strings.HasSuffix(art.baseName, ".rdb") {
+			tool = "valkey-check-rdb"
+		}
+		if perr := checkAOFMember(ctx, c, tool, art.baseName); perr != nil {
+			return perr
+		}
+	}
+	for _, name := range art.incrNames {
+		if perr := checkAOFMember(ctx, c, "valkey-check-aof", name); perr != nil {
+			return perr
+		}
+	}
+	return nil
+}
+
+// checkAOFMember runs one member through its matching valkey-check-*
+// tool. Like the RDB path's check, the tools print findings to stdout
+// and keep stderr for usage errors, and they vet integrity, not
+// dialect: the fence in source.go runs first.
+func checkAOFMember(ctx context.Context, c *core, tool, name string) *protoError {
+	val, stdout, stderr, perr := c.exec(ctx, execArgs{
+		Argv: []string{tool, aofDirInSandbox + "/" + name}})
+	if perr != nil {
+		return perr
+	}
+	if val.ExitCode == 0 {
+		return nil
+	}
+	line := firstLine(stderr)
+	if line == "" {
+		line = lastLine(stdout)
+	}
+	return protoErr("source_corrupt", false,
+		"%s rejected the append-only set member %s: %s", tool, name, line)
+}
+
+// startEngine launches the daemonized server on the staged artifact —
+// args come from serverArgs, which pins persistence for both flows —
+// and waits until it answers PING.
 //
-// Valkey answers clients while it loads the RDB (-LOADING), which is what
-// splits the wait into the protocol's phases: engine_ready ends at the
-// server's first answer of any kind, and the load that follows is the
-// restore this drill measures. A dataset small enough to load between two
-// polls measures as zero restore — a real measurement at the poll's
-// resolution, not an estimate.
-func startEngine(ctx context.Context, c *core) (restoreSeconds, readySeconds float64, perr *protoError) {
-	start, stderr, perr := execChecked(ctx, c, "valkey-server",
-		"--dir", dataDir, "--dbfilename", rdbName, "--port", strconv.Itoa(defaultPort),
-		"--appendonly", "no", "--save", "", "--daemonize", "yes", "--logfile", serverLog)
+// Valkey answers clients while it loads (-LOADING, RDB and AOF alike),
+// which is what splits the wait into the protocol's phases: engine_ready
+// ends at the server's first answer of any kind, and the load that
+// follows is the restore this drill measures. A dataset small enough to
+// load between two polls measures as zero restore — a real measurement
+// at the poll's resolution, not an estimate.
+func startEngine(ctx context.Context, c *core, args []string) (restoreSeconds, readySeconds float64, perr *protoError) {
+	argv := append([]string{"valkey-server"}, args...)
+	argv = append(argv, "--port", strconv.Itoa(defaultPort), "--daemonize", "yes", "--logfile", serverLog)
+	start, stderr, perr := execChecked(ctx, c, argv...)
 	if perr != nil {
 		return 0, 0, perr
 	}

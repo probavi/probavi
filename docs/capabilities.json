@@ -644,7 +644,7 @@
       "id": "valkey",
       "name": "Valkey",
       "status": "experimental",
-      "adapter_version": "0.1.0",
+      "adapter_version": "0.2.0",
       "engine": {
         "id": "valkey",
         "name": "valkey"
@@ -675,6 +675,11 @@
         }
       ],
       "sources": [
+        {
+          "id": "valkey_aof",
+          "name": "A copy of the append-only directory (manifest, base, incremental segments), replayed in full",
+          "pitr": false
+        },
         {
           "id": "valkey_rdb",
           "name": "One RDB file (a copied dump.rdb, or the output of `valkey-cli --rdb`)",

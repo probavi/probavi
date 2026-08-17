@@ -31,6 +31,7 @@
   ],
   "sources": {
     "valkey_rdb": "One RDB file (a copied dump.rdb, or the output of `valkey-cli --rdb`)",
-    "valkey_rdb_dir": "A directory of RDB files; the newest by the artifact's own save instant (the ctime header field) is restored"
+    "valkey_rdb_dir": "A directory of RDB files; the newest by the artifact's own save instant (the ctime header field) is restored",
+    "valkey_aof": "A copy of the append-only directory (manifest, base, incremental segments), replayed in full"
   }
 }
