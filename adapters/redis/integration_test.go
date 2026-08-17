@@ -386,8 +386,18 @@ done
 redis-cli -e set probavi:config restored-ok >/dev/null
 redis-cli -e eval "for i=1,500 do redis.call('SET','probavi:key'..i,'v'..i) end return 1" 0 >/dev/null
 redis-cli -e bgrewriteaof >/dev/null
+# The rewrite has installed only once the manifest names the seq-2 base;
+# polling the in-progress flag alone races the fork and can sample 0
+# before the child even starts (measured on the valkey mirror), which
+# would quietly hand the drill the pre-rewrite set this test exists not
+# to settle for.
 i=0
-until [ "$(redis-cli info persistence | tr -d '\r' | awk -F: '/aof_rewrite_in_progress|aof_rewrite_scheduled/{s+=$2} END{print s}')" = "0" ]; do
+until grep -q '\.2\.base\.' /tmp/seedaof/appendonlydir/appendonly.aof.manifest 2>/dev/null; do
+  i=$((i+1)); [ "$i" -gt 60 ] && { echo "rewrite never installed" >&2; exit 1; }
+  sleep 1
+done
+i=0
+until [ "$(redis-cli info persistence | tr -d '\r' | awk -F: '/aof_rewrite_in_progress/{print $2}')" = "0" ]; do
   i=$((i+1)); [ "$i" -gt 60 ] && { echo "rewrite never finished" >&2; exit 1; }
   sleep 1
 done
