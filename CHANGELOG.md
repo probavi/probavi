@@ -13,6 +13,28 @@ always called out explicitly.
 
 ### Added
 
+- **TimescaleDB source kinds on the postgres adapter**
+  (`adapters/postgres` 0.11.0, new kinds `timescaledb_dump` and
+  `timescaledb_dump_dir`, verified against
+  `timescale/timescaledb:2.29.1-pg17`): the restore is framed with the
+  extension's mandated `timescaledb_pre_restore()`/
+  `timescaledb_post_restore()` procedure, and every framing second is
+  part of the measured restore. The frame is not ceremony — measured: a
+  production-shaped dump (compressed chunks, continuous aggregate,
+  retention policy) restored unframed aborts partway with "could not
+  find hypertable", while a trivial one happens to work, so the
+  outcome depends on the backup's shape. Both directions are fenced:
+  the plain logical kinds now refuse a TimescaleDB dump by name on
+  positive evidence (the archive's own table of contents, or the
+  extension statement in a script's bounded head), pointing at the
+  framed kind — the gzip-compressed archive form stays unfenced,
+  deliberately, since it offers no exact probe and fails loudly either
+  way — and the framed kind on an image without the extension names
+  the image as the fix. The variant matrix job runs the whole logical
+  suite on the timescale image plus a hypertable drill that proves
+  compressed chunks, the continuous aggregate, and the retention
+  policy all survive.
+
 - **Valkey append-only restores** (`adapters/valkey` 0.2.0, new source
   kind `valkey_aof`), the mirror of the redis half below: a copy of the
   append-only directory Valkey kept from Redis 7 — manifest, base,

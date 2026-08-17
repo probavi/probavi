@@ -294,6 +294,7 @@ func makeGrantedFixture(t *testing.T, ctx context.Context, provider *docker.Prov
 	defer destroy(t, seed)
 
 	awaitReady(t, ctx, seed)
+	dropPreinstalledExtensions(t, ctx, seed)
 	seedSQL := `CREATE ROLE app_ro NOLOGIN;
 CREATE ROLE app_rw LOGIN PASSWORD 'seed-only-never-leaves-the-sandbox';
 CREATE TABLE orders (id bigserial PRIMARY KEY, total numeric(10,2) NOT NULL);
@@ -449,8 +450,29 @@ func TestPgBackRestPITREndToEnd(t *testing.T) {
 // buildPgBackRestImage builds (once, cached afterwards) a postgres image
 // with pgbackrest installed — the documented requirement for the
 // pgbackrest source kind.
+// dropPreinstalledExtensions strips what a variant image pre-creates in
+// the default database: the timescale image installs its extension into
+// `postgres` at first boot, so without this a "plain" fixture dumped
+// there would create the extension too — and the timescale fence would
+// rightly refuse it. A plain fixture must state only what its test
+// claims; a plain image makes this a no-op.
+func dropPreinstalledExtensions(t *testing.T, ctx context.Context, seed *docker.Sandbox) {
+	t.Helper()
+	mustExec(t, ctx, seed, "psql", "-h", "127.0.0.1", "-U", "postgres",
+		"-v", "ON_ERROR_STOP=1", "-c", "DROP EXTENSION IF EXISTS timescaledb")
+}
+
 func buildPgBackRestImage(t *testing.T, ctx context.Context) string {
 	t.Helper()
+	// The tool image installs pgbackrest with apt; an image without it
+	// (the timescale variant is Alpine) cannot host this build, and the
+	// variant's claim is the framed logical restore — the physical flow
+	// keeps its coverage from the plain postgres matrix jobs.
+	if _, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none",
+		verifiedImage(t), "sh", "-c", "command -v apt-get").CombinedOutput(); err != nil {
+		t.Skipf("image %s cannot host the pgbackrest tool build (no apt-get); "+
+			"the physical flow is exercised by the plain postgres matrix jobs", verifiedImage(t))
+	}
 	const tag = "probavi-it-pgbackrest:16"
 	dir := t.TempDir()
 	dockerfile := "FROM " + verifiedImage(t) + "\n" +
@@ -524,6 +546,7 @@ func makeFixture(t *testing.T, ctx context.Context, provider *docker.Provider, p
 	defer destroy(t, seed)
 
 	awaitReady(t, ctx, seed)
+	dropPreinstalledExtensions(t, ctx, seed)
 	seedSQL := `CREATE TABLE orders (id bigserial PRIMARY KEY, total numeric(10,2) NOT NULL);
 INSERT INTO orders (total) SELECT (random()*100)::numeric(10,2) FROM generate_series(1,1000);`
 	mustExec(t, ctx, seed, "psql", "-h", "127.0.0.1", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-c", seedSQL)
@@ -671,6 +694,7 @@ func makeTwoGenerations(t *testing.T, ctx context.Context, provider *docker.Prov
 	defer destroy(t, seed)
 
 	awaitReady(t, ctx, seed)
+	dropPreinstalledExtensions(t, ctx, seed)
 	mustExec(t, ctx, seed, "psql", "-h", "127.0.0.1", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-c",
 		"CREATE TABLE orders (id bigserial PRIMARY KEY, total numeric(10,2) NOT NULL);"+
 			"INSERT INTO orders (total) SELECT 1 FROM generate_series(1,"+strconv.Itoa(staleRowCount)+");")
@@ -830,6 +854,7 @@ func makeStoredForms(t *testing.T, ctx context.Context, provider *docker.Provide
 	defer destroy(t, seed)
 
 	awaitReady(t, ctx, seed)
+	dropPreinstalledExtensions(t, ctx, seed)
 	seedSQL := `CREATE TABLE orders (id bigserial PRIMARY KEY, total numeric(10,2) NOT NULL);
 INSERT INTO orders (total) SELECT (random()*100)::numeric(10,2) FROM generate_series(1,1000);`
 	mustExec(t, ctx, seed, "psql", "-h", "127.0.0.1", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-c", seedSQL)
@@ -926,6 +951,7 @@ func makeVectorFixture(t *testing.T, ctx context.Context, provider *docker.Provi
 	}
 	defer destroy(t, seed)
 	awaitReady(t, ctx, seed)
+	dropPreinstalledExtensions(t, ctx, seed)
 
 	avail, err := seed.Exec(ctx, sandbox.ExecRequest{Argv: []string{
 		"psql", "-h", "127.0.0.1", "-U", "postgres", "-tA", "-c",
@@ -969,4 +995,156 @@ func assertRunnerRow(t *testing.T, ctx context.Context, sbx *docker.Sandbox,
 	if got := strings.TrimSpace(string(out.Stdout)); out.ExitCode != 0 || got != want {
 		t.Fatalf("check %q = %q (exit %d, stderr %s), want %q", sql, got, out.ExitCode, out.Stderr, want)
 	}
+}
+
+// TestTimescaleRestoreDrill earns the manifest's timescaledb entry the
+// way the pgvector one is earned: listed means exercised, and for a
+// variant image the exercise must cover what makes it a variant. The
+// fixture is production-shaped on purpose — compressed chunks, a
+// continuous aggregate, a retention policy — because that is the shape
+// whose unframed restore breaks (measured: partial rows, 'could not
+// find hypertable'), so only the framed timescaledb_dump kind can
+// restore it whole. On images without the extension the test skips.
+func TestTimescaleRestoreDrill(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-postgres"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	provider := docker.New(nil)
+	params := map[string]string{"image": verifiedImage(t), "env.POSTGRES_HOST_AUTH_METHOD": "trust",
+		"memory": engineMemoryLimit}
+
+	fixture := filepath.Join(t.TempDir(), "timescale.dump")
+	if !makeTimescaleFixture(t, ctx, provider, params, fixture) {
+		t.Skip("image does not provide the timescaledb extension; the timescaledb matrix job exercises this test")
+	}
+
+	sbx, err := provider.Create(ctx, params)
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("postgres", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "timescaledb_dump", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	// Every hypertable property the fixture carries must survive: the
+	// rows across chunks, the compressed chunks still readable, the
+	// continuous aggregate's data, and the restored retention policy.
+	assertRunnerRow(t, ctx, sbx, probe, res, "SELECT count(*) FROM metrics", "2000")
+	assertRunnerRow(t, ctx, sbx, probe, res,
+		"SELECT count(*) > 0 FROM timescaledb_information.chunks WHERE hypertable_name = 'metrics' AND is_compressed",
+		"t")
+	assertRunnerRow(t, ctx, sbx, probe, res, "SELECT count(*) FROM metrics_hourly", "2000")
+	assertRunnerRow(t, ctx, sbx, probe, res,
+		"SELECT count(*) FROM timescaledb_information.jobs WHERE proc_name = 'policy_retention'", "1")
+}
+
+// TestTimescaleDumpIsFencedFromThePlainKind proves the fence end to end:
+// the same dump under the plain pgdump kind is refused by name, with the
+// framed kind in the message, before the restore that would break it.
+func TestTimescaleDumpIsFencedFromThePlainKind(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-postgres"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	provider := docker.New(nil)
+	params := map[string]string{"image": verifiedImage(t), "env.POSTGRES_HOST_AUTH_METHOD": "trust",
+		"memory": engineMemoryLimit}
+
+	fixture := filepath.Join(t.TempDir(), "timescale.dump")
+	if !makeTimescaleFixture(t, ctx, provider, params, fixture) {
+		t.Skip("image does not provide the timescaledb extension; the timescaledb matrix job exercises this test")
+	}
+
+	sbx, err := provider.Create(ctx, params)
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("postgres", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	_, err = runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "pgdump", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	var aerr *adapter.Error
+	if err == nil || !errors.As(err, &aerr) || aerr.Code != "unsupported_source" ||
+		!strings.Contains(aerr.Message, "timescaledb_dump") {
+		t.Fatalf("provision error = %v, want unsupported_source teaching the framed kind", err)
+	}
+}
+
+// makeTimescaleFixture seeds a production-shaped hypertable and dumps
+// it; false reports an image without the extension.
+func makeTimescaleFixture(t *testing.T, ctx context.Context, provider *docker.Provider,
+	params map[string]string, dest string) bool {
+	t.Helper()
+	seed, err := provider.Create(ctx, params)
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+	awaitReady(t, ctx, seed)
+
+	avail, err := seed.Exec(ctx, sandbox.ExecRequest{Argv: []string{
+		"psql", "-h", "127.0.0.1", "-U", "postgres", "-tA", "-c",
+		"SELECT count(*) FROM pg_available_extensions WHERE name = 'timescaledb'"}})
+	if err != nil {
+		t.Fatalf("probe extension: %v", err)
+	}
+	if avail.ExitCode != 0 || strings.TrimSpace(string(avail.Stdout)) != "1" {
+		return false
+	}
+
+	for _, sql := range []string{
+		"CREATE EXTENSION IF NOT EXISTS timescaledb",
+		"CREATE TABLE metrics (ts timestamptz NOT NULL, device int NOT NULL, value double precision)",
+		"SELECT create_hypertable('metrics', 'ts', chunk_time_interval => interval '1 day')",
+		"INSERT INTO metrics SELECT now() - (i || ' hours')::interval, i % 10, random() FROM generate_series(1, 2000) i",
+		"ALTER TABLE metrics SET (timescaledb.compress, timescaledb.compress_segmentby = 'device')",
+		"SELECT count(compress_chunk(c)) FROM show_chunks('metrics', older_than => interval '2 days') c",
+		"CREATE MATERIALIZED VIEW metrics_hourly WITH (timescaledb.continuous) AS " +
+			"SELECT time_bucket('1 hour', ts) AS bucket, device, avg(value) FROM metrics GROUP BY 1, 2 WITH NO DATA",
+		"CALL refresh_continuous_aggregate('metrics_hourly', NULL, NULL)",
+		"SELECT add_retention_policy('metrics', interval '90 days')",
+	} {
+		mustExec(t, ctx, seed, "psql", "-h", "127.0.0.1", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-c", sql)
+	}
+	mustExec(t, ctx, seed, "pg_dump", "-h", "127.0.0.1", "-U", "postgres", "-Fc",
+		"-f", "/tmp/timescale.dump", "postgres")
+
+	if out, err := exec.CommandContext(ctx, "docker", "cp",
+		seed.ID()+":/tmp/timescale.dump", dest).CombinedOutput(); err != nil {
+		t.Fatalf("extract fixture: %v: %s", err, out)
+	}
+	return true
 }

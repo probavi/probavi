@@ -29,6 +29,10 @@ type resolvedSource struct {
 	// members independently.
 	storage        dumpStorage
 	globalsStorage dumpStorage
+	// timescale reports the timescaledb_dump kinds: the restore is framed
+	// with timescaledb_pre_restore()/timescaledb_post_restore(), and the
+	// timescale fence in the restore scripts is disarmed (ops.go).
+	timescale bool
 }
 
 // resolveSource maps a source kind to one restorable artifact.
@@ -38,6 +42,10 @@ type resolvedSource struct {
 //	                      records the newest time is chosen
 //	pgdump_with_globals — path is a directory holding a pg_dumpall
 //	                      --globals-only script (params.globals) and one dump
+//	timescaledb_dump    — path is a pg_dump file of a TimescaleDB database;
+//	                      the restore is framed with the extension's own
+//	                      pre/post-restore procedure (ops.go)
+//	timescaledb_dump_dir — a directory of them, chosen like pgdump_dir
 //	pgbackrest          — path is a pgBackRest repository directory (filesystem repo)
 func resolveSource(ctx context.Context, kind, path string, params map[string]string) (*resolvedSource, *protoError) {
 	loc, perr := backupLocation(params)
@@ -55,12 +63,30 @@ func resolveSource(ctx context.Context, kind, path string, params map[string]str
 		return resolveFile(latest, loc)
 	case "pgdump_with_globals":
 		return resolveWithGlobals(ctx, path, params, loc)
+	case "timescaledb_dump":
+		return timescaleSource(resolveFile(path, loc))
+	case "timescaledb_dump_dir":
+		latest, perr := latestDumpIn(ctx, path)
+		if perr != nil {
+			return nil, perr
+		}
+		return timescaleSource(resolveFile(latest, loc))
 	case "pgbackrest":
 		return resolveRepo(path, params["stanza"])
 	default:
 		return nil, protoErr("unsupported_source", false,
-			"unsupported source kind: %s (supported: pgdump, pgdump_dir, pgdump_with_globals, pgbackrest)", kind)
+			"unsupported source kind: %s (supported: pgdump, pgdump_dir, pgdump_with_globals, "+
+				"timescaledb_dump, timescaledb_dump_dir, pgbackrest)", kind)
 	}
+}
+
+// timescaleSource marks a resolved dump as the framed timescale kinds'.
+func timescaleSource(src *resolvedSource, perr *protoError) (*resolvedSource, *protoError) {
+	if perr != nil {
+		return nil, perr
+	}
+	src.timescale = true
+	return src, nil
 }
 
 // resolveWithGlobals resolves the two-member source of the

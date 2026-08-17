@@ -12,6 +12,8 @@ enough to build an adapter.
 | `pgdump`              | One `pg_dump` file — custom-format (`-Fc`) or plain SQL (`-Fp`), stored plain or gzip-compressed. |
 | `pgdump_dir`          | A directory of dump files; the dump whose own head records the newest time is restored. |
 | `pgdump_with_globals` | A directory holding a `pg_dumpall --globals-only` script and one dump; the globals are loaded before the dump. Either member may be gzip-compressed. |
+| `timescaledb_dump`    | One `pg_dump` file of a TimescaleDB database; the restore is framed with the extension's own `timescaledb_pre_restore()`/`timescaledb_post_restore()` procedure. |
+| `timescaledb_dump_dir` | A directory of them, chosen like `pgdump_dir` and framed the same way. |
 | `pgbackrest`          | A pgBackRest repository directory (filesystem repo) — a physical restore. Declares the `pitr` capability. |
 
 ## How a dump is stored (format and compression)
@@ -69,6 +71,37 @@ the script. A plain dump taken from a cluster with its own roles therefore
 needs those roles present — which is what the `pgdump_with_globals` kind is
 for, and what the adapter's diagnostic points at when a restore dies on a
 missing role.
+
+## The timescaledb kinds (the restore must be framed)
+
+TimescaleDB mandates its own logical-restore procedure: create the
+extension, call `timescaledb_pre_restore()`, restore, call
+`timescaledb_post_restore()`. This is not ceremony. Measured on 2.29.1:
+a production-shaped dump — compressed chunks, a continuous aggregate, a
+retention policy — restored without the frame aborts partway with
+"could not find hypertable with id 1" after a fraction of the rows,
+while a trivial hypertable happens to restore whole; whether the plain
+flow breaks depends on the backup's shape, which is exactly what an
+operator must not have to know. The `timescaledb_dump` kinds run the
+mandated frame around the ordinary restore, and every framing second is
+part of the measured restore, because the real recovery path cannot
+skip it. The dump's own `CREATE EXTENSION IF NOT EXISTS` skips with a
+NOTICE inside the frame (measured), so `--exit-on-error` holds.
+
+Both sides are fenced. On an image without the extension the framed
+kind refuses up front (`invalid_request`), naming the
+`timescale/timescaledb` image as the fix. And the plain logical kinds
+refuse a TimescaleDB dump by name (`unsupported_source`, pointing at
+`timescaledb_dump`) on positive evidence read in the sandbox: the
+archive's own table of contents (`pg_restore -l` naming the extension),
+or the `CREATE EXTENSION` statement in a plain script's bounded head —
+pg_dump writes extensions before any data. One form goes unfenced,
+deliberately: a gzip-compressed custom-format archive offers no exact
+probe without inflating it, and its unframed restore still fails
+loudly, never silently. Version discipline is the extension's own rule
+— the restoring image's timescaledb version should match the backup's —
+and the dump does not state its origin extension version, so mismatches
+surface as the engine's own errors rather than a pre-check.
 
 ## The pgdump_with_globals kind (cluster globals first)
 
@@ -306,7 +339,7 @@ Set under `source.params` in the drill config.
 |-------------------|-----------------------|-----------------------------------------------------|
 | `globals`         | `pgdump_with_globals` | **Required.** Bare filename of the cluster-globals script inside the source directory. |
 | `dump`            | `pgdump_with_globals` | Optional. Bare filename of the dump; without it the newest-by-header non-globals file is used. |
-| `backup_timezone` | `pgdump*`             | Optional. IANA zone name of the host that took the backup (e.g. `Europe/Budapest`). Without it `backup.created_at` is null — see above. Not needed for `pgbackrest`, whose repository records absolute timestamps. |
+| `backup_timezone` | `pgdump*`, `timescaledb_dump*` | Optional. IANA zone name of the host that took the backup (e.g. `Europe/Budapest`). Without it `backup.created_at` is null — see above. Not needed for `pgbackrest`, whose repository records absolute timestamps. |
 
 ## Drill config options
 

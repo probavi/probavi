@@ -60,7 +60,9 @@ func loadGlobals(ctx context.Context, c *core, user, hostPath string, globals sa
 	// absent — it would echo the failing statement, and a globals script's
 	// statements carry role password hashes.
 	val, _, stderr, perr := c.exec(ctx, execArgs{
-		Argv: psqlReplayArgv(globals, user, defaultDatabase, errorStopOff),
+		// The empty fence: a pg_dumpall --globals-only script carries roles
+		// and tablespaces, never extensions, so there is nothing to fence.
+		Argv: psqlReplayArgv(globals, user, defaultDatabase, errorStopOff, ""),
 	})
 	if perr != nil {
 		return 0, 0, perr

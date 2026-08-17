@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "postgres"
-	adapterVersion = "0.10.0"
+	adapterVersion = "0.11.0"
 
 	defaultUser     = "postgres"
 	defaultDatabase = "postgres"
@@ -35,6 +35,8 @@ func probePayload() any {
 			{"kind": "pgdump", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "pgdump_dir", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "pgdump_with_globals", "capabilities": map[string]bool{"pitr": false}},
+			{"kind": "timescaledb_dump", "capabilities": map[string]bool{"pitr": false}},
+			{"kind": "timescaledb_dump_dir", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "pgbackrest", "capabilities": map[string]bool{"pitr": true}},
 		},
 		"sql_runner": map[string]any{
@@ -120,14 +122,11 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		return nil, perr
 	}
 
-	restore, stderr, perr := execRestore(ctx, c, user, database, dump)
+	restoreSeconds, perr := restoreDump(ctx, c, user, database, dump, src.timescale)
 	if perr != nil {
 		return nil, perr
 	}
-	if restore.ExitCode != 0 {
-		return nil, mapRestoreFailure(restore.ExitCode, stderr, dump.storage)
-	}
-	logger.Info("restore complete", "seconds", restore.DurationSeconds)
+	logger.Info("restore complete", "seconds", restoreSeconds)
 
 	return map[string]any{
 		"connection": map[string]any{
@@ -140,10 +139,101 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		"timings": map[string]any{
 			"engine_ready_seconds": readySeconds,
 			"transfer_seconds":     globalsTransfer + put.DurationSeconds,
-			"restore_seconds":      globalsRestore + restore.DurationSeconds,
+			"restore_seconds":      globalsRestore + restoreSeconds,
 		},
 		"state": state,
 	}, nil
+}
+
+// restoreDump runs the restore — framed with the timescale procedure
+// when the source demands it — and returns the measured seconds of
+// everything the real recovery path cannot skip.
+func restoreDump(ctx context.Context, c *core, user, database string, dump sandboxFile, framed bool) (float64, *protoError) {
+	var framingSeconds float64
+	if framed {
+		var perr *protoError
+		framingSeconds, perr = beginTimescaleFrame(ctx, c, user, database)
+		if perr != nil {
+			return 0, perr
+		}
+	}
+	restore, stderr, perr := execRestore(ctx, c, user, database, dump, framed)
+	if perr != nil {
+		return 0, perr
+	}
+	if restore.ExitCode != 0 {
+		return 0, mapRestoreFailure(restore.ExitCode, stderr, dump.storage)
+	}
+	if framed {
+		post, perr := endTimescaleFrame(ctx, c, user, database)
+		if perr != nil {
+			return 0, perr
+		}
+		framingSeconds += post
+	}
+	return restore.DurationSeconds + framingSeconds, nil
+}
+
+// beginTimescaleFrame prepares the target database the way the
+// extension's own restore procedure demands: the extension first — the
+// dump repeats CREATE EXTENSION IF NOT EXISTS and skips with a NOTICE
+// (measured), so --exit-on-error survives — then timescaledb_pre_restore(),
+// which stops background workers from racing the catalog copy. Without
+// the frame a production-shaped dump restores partially (measured, see
+// the fence above).
+func beginTimescaleFrame(ctx context.Context, c *core, user, database string) (float64, *protoError) {
+	create, stderr, perr := psqlStatement(ctx, c, user, database, "CREATE EXTENSION IF NOT EXISTS timescaledb")
+	if perr != nil {
+		return 0, perr
+	}
+	if create.ExitCode != 0 {
+		line := firstLine(stderr)
+		if strings.Contains(line, "is not available") || strings.Contains(line, "extension control file") {
+			return 0, protoErr("invalid_request", false,
+				"the sandbox image provides no timescaledb extension, which the timescaledb_dump "+
+					"kind restores with: use a timescale/timescaledb image (or one carrying the "+
+					"extension at the backup's version): %s", line)
+		}
+		return 0, protoErr("restore_failed", false, "creating the timescaledb extension failed: %s", line)
+	}
+	pre, stderr, perr := psqlStatement(ctx, c, user, database, "SELECT timescaledb_pre_restore()")
+	if perr != nil {
+		return 0, perr
+	}
+	if pre.ExitCode != 0 {
+		return 0, protoErr("restore_failed", false, "timescaledb_pre_restore() failed: %s", firstLine(stderr))
+	}
+	return create.DurationSeconds + pre.DurationSeconds, nil
+}
+
+// endTimescaleFrame completes the procedure. A restore left in the
+// restoring state is not a recovered database — background jobs stay
+// down and the catalog write protection stays on — so a failure here is
+// a failed restore, not a warning.
+func endTimescaleFrame(ctx context.Context, c *core, user, database string) (float64, *protoError) {
+	post, stderr, perr := psqlStatement(ctx, c, user, database, "SELECT timescaledb_post_restore()")
+	if perr != nil {
+		return 0, perr
+	}
+	if post.ExitCode != 0 {
+		return 0, protoErr("restore_failed", false,
+			"the restore completed but timescaledb_post_restore() failed, which leaves the "+
+				"database in the restoring state: %s", firstLine(stderr))
+	}
+	return post.DurationSeconds, nil
+}
+
+// psqlStatement runs one SQL statement the frame needs, with the same
+// client shape the healthcheck uses.
+func psqlStatement(ctx context.Context, c *core, user, database, sql string) (*execValue, []byte, *protoError) {
+	val, _, stderr, perr := c.exec(ctx, execArgs{
+		Argv: []string{"psql", "-h", "127.0.0.1", "-U", user, "-d", database,
+			"-tA", "-v", "ON_ERROR_STOP=1", "-c", sql},
+	})
+	if perr != nil {
+		return nil, nil, perr
+	}
+	return val, stderr, nil
 }
 
 // healthcheckRequest is the §6.3 request payload.
@@ -241,15 +331,15 @@ func sandboxDump(scratch string, storage dumpStorage) sandboxFile {
 	return sandboxMember(name, storage)
 }
 
-func execRestore(ctx context.Context, c *core, user, database string, dump sandboxFile) (*execValue, []byte, *protoError) {
-	argv := []string{"pg_restore", "-h", "127.0.0.1", "-U", user, "-d", database,
-		"--no-owner", "--exit-on-error", dump.path}
+func execRestore(ctx context.Context, c *core, user, database string, dump sandboxFile, framed bool) (*execValue, []byte, *protoError) {
+	argv := []string{"sh", "-c", archiveRestoreScript, "sh",
+		dump.path, user, database, archiveFence(framed)}
 	switch {
 	case dump.storage.plain:
 		// A dump's own statements are the drill: the first one that fails
 		// ends the restore rather than leaving a half-restored database
 		// looking healthy (§5).
-		argv = psqlReplayArgv(dump, user, database, errorStopOn)
+		argv = psqlReplayArgv(dump, user, database, errorStopOn, scriptFence(framed))
 	case dump.storage.compressed:
 		argv = []string{"sh", "-c", compressedArchiveRestoreScript, "sh",
 			dump.path, user, database}
@@ -260,6 +350,55 @@ func execRestore(ctx context.Context, c *core, user, database string, dump sandb
 	}
 	return val, stderr, nil
 }
+
+// The timescale fence: a dump that creates the timescaledb extension must
+// not be restored unframed. Measured on 2.29.1: a dump with compressed
+// chunks restores partially under the plain flow — pg_restore aborts with
+// "could not find hypertable with id 1" after a fraction of the rows —
+// while a trivial hypertable happens to restore, so whether the plain
+// flow breaks depends on the backup's shape, which is exactly what an
+// operator must not have to know. The fence reads positive evidence only:
+// the archive's own table of contents, or the extension statement in a
+// script's head (pg_dump writes extensions before any data). A compressed
+// custom-format archive offers no exact probe without inflating it, so
+// that one form goes unfenced — its unframed restore still fails loudly,
+// never silently.
+const (
+	// timescaleTOCMark is the pg_restore -l line naming the extension —
+	// exact, and distinct from the COMMENT entry ("COMMENT - EXTENSION").
+	timescaleTOCMark = " EXTENSION - timescaledb"
+	// timescaleScriptPattern matches the statement pg_dump writes; the
+	// bounded head is enough because extensions precede all data.
+	timescaleScriptPattern = `^CREATE EXTENSION (IF NOT EXISTS )?"?timescaledb"?`
+	// timescaleFenceHeadBytes bounds the script scan.
+	timescaleFenceHeadBytes = "65536"
+)
+
+// archiveFence arms the custom-format fence; the framed kinds pass the
+// empty string, which the scripts read as "do not fence".
+func archiveFence(framed bool) string {
+	if framed {
+		return ""
+	}
+	return timescaleTOCMark
+}
+
+// scriptFence is archiveFence for the plain-SQL replay scripts.
+func scriptFence(framed bool) string {
+	if framed {
+		return ""
+	}
+	return timescaleScriptPattern
+}
+
+// archiveRestoreScript restores a custom-format archive, fencing a
+// TimescaleDB dump first when $4 is armed: the archive's own table of
+// contents is the exact witness, and an archive pg_restore -l cannot read
+// is left for the restore itself to refuse with its own words.
+const archiveRestoreScript = `
+[ -n "$4" ] && pg_restore -l -- "$1" 2>/dev/null | grep -qF -- "$4" && exit 93
+exec pg_restore -h 127.0.0.1 -U "$2" -d "$3" --no-owner --exit-on-error "$1"
+`
 
 // dumpCompleteMarker matches the sentence a dump signs itself off with —
 // pg_dump writes the database form, pg_dumpall the cluster one. Measured on
@@ -310,13 +449,14 @@ const compressedArchiveRestoreScript = `
 // varies between them is the database and whether the first error ends the
 // replay; the completeness rule does not, which is why one pair of scripts
 // serves both.
-func psqlReplayArgv(member sandboxFile, user, database, errorStop string) []string {
+func psqlReplayArgv(member sandboxFile, user, database, errorStop, fence string) []string {
 	script := scriptReplayScript
 	if member.storage.compressed {
 		script = compressedScriptReplayScript
 	}
 	return []string{"sh", "-c", script, "sh", member.path, user, database,
-		dumpCompleteMarker, strconv.Itoa(markerTailBytes), errorStop}
+		dumpCompleteMarker, strconv.Itoa(markerTailBytes), errorStop,
+		fence, timescaleFenceHeadBytes}
 }
 
 // psql's own ON_ERROR_STOP values, named where they are chosen rather than
@@ -335,6 +475,7 @@ const (
 // contents, and no psql exit code collides with the codes these scripts add
 // (psql uses 0 through 3).
 const scriptReplayScript = `
+[ -n "$7" ] && head -c "$8" -- "$1" | grep -qE -- "$7" && exit 93
 psql -h 127.0.0.1 -U "$2" -d "$3" -v ON_ERROR_STOP="$6" -q -f "$1" >/dev/null
 rc=$?
 [ "$rc" = 0 ] || exit "$rc"
@@ -357,6 +498,7 @@ tail -c "$5" -- "$1" | grep -qE "$4" || exit 91
 // script gives — once psql aborts, the decompressor dies of a broken pipe,
 // and blaming the compression would name the wrong culprit.
 const compressedScriptReplayScript = `
+[ -n "$7" ] && { gzip -dc -- "$1" 2>/dev/null | head -c "$8" | grep -qE -- "$7"; } && exit 93
 rm -f "$1.fifo"
 mkfifo "$1.fifo" || exit 92
 tail -c "$5" <"$1.fifo" >"$1.tail" &
@@ -375,6 +517,7 @@ const (
 	decompressFailedExit = 90
 	incompleteDumpExit   = 91
 	witnessSetupExit     = 92
+	timescaleFencedExit  = 93
 )
 
 // mapScriptExit classifies the verdicts a replay script reaches on its own,
@@ -394,6 +537,12 @@ func mapScriptExit(exitCode int, stderr []byte, what string) *protoError {
 		return protoErr("restore_failed", false,
 			"the sandbox image provides no mkfifo, which replaying a compressed plain-SQL dump "+
 				"needs in order to prove the dump was whole: %s", firstLine(stderr))
+	case timescaleFencedExit:
+		return protoErr("unsupported_source", false,
+			"%s creates the timescaledb extension, and restoring it without the "+
+				"timescaledb_pre_restore()/timescaledb_post_restore() frame breaks hypertable state — "+
+				"measured: a dump with compressed chunks restores partially ('could not find "+
+				"hypertable') — use the timescaledb_dump source kind, which frames the restore", what)
 	}
 	return nil
 }

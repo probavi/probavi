@@ -241,7 +241,7 @@ func TestProvisionRestoresWhatItWasGiven(t *testing.T) {
 		wantClient string
 		wantScript string
 	}{
-		{"a custom-format archive", archiveBytes(), false, "pg_restore", ""},
+		{"a custom-format archive", archiveBytes(), false, "sh", archiveRestoreScript},
 		{"a custom-format archive stored compressed", archiveBytes(), true, "sh", compressedArchiveRestoreScript},
 		{"a plain-SQL dump", plainDumpBody, false, "sh", scriptReplayScript},
 		{"a plain-SQL dump stored compressed", plainDumpBody, true, "sh", compressedScriptReplayScript},
