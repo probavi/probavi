@@ -13,6 +13,26 @@ always called out explicitly.
 
 ### Fixed
 
+- **A MongoDB drill no longer lets the sandbox expire the artifact**
+  (`adapters/mongodb` 0.5.0, #166). MongoDB deletes documents past a TTL
+  index's expiry from a background thread whose first pass lands about a
+  minute after mongod starts, so a backup restored later than its own TTL
+  window — an hour-long session expiry in yesterday's archive, a
+  ninety-day audit collection in one older than that — arrived intact and
+  emptied itself mid-drill while `mongorestore` reported every document
+  restored successfully. Measured on the verified image: 500 of 500
+  expired documents gone in a single pass, a collection without a TTL
+  index untouched, and this adapter runs no document census, so nothing
+  would have reported the loss. Worse than the loss was what it depended
+  on: the pass fires on the server's clock, not the drill's, so a small
+  backup that finished inside the first minute saw its data and a
+  production-sized one did not. The adapter now disables the monitor
+  before the restore, and refuses the drill with `invalid_request` if the
+  engine will not let it — a record whose content depends on how long a
+  restore took is not evidence. First verdict of the survey in #166.
+
+### Fixed
+
 - **A Prometheus drill no longer inherits the server's default
   retention** (`adapters/prometheus` 0.3.0, #165). Started without
   retention flags, the sandbox server applies its 15-day default when the

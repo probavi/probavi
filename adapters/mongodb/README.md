@@ -39,6 +39,34 @@ readiness probes cannot be fooled by a server that is about to restart.
 Because no authentication exists in the sandbox, `connection.user` is
 reported empty and the declared `sql_runner` references no `{{user}}`.
 
+## The TTL monitor is disabled before the restore
+
+A drill proves what the backup holds, not what a running server would
+keep — so the first thing the adapter does once the engine answers is
+`setParameter ttlMonitorEnabled=false`, before a byte of the archive
+moves.
+
+Without it, MongoDB deletes every document past a TTL index's expiry from
+a background thread whose first pass lands about a minute after mongod
+starts (measured: 500 of 500 expired documents gone in one pass, a
+collection without a TTL index untouched, `mongorestore` reporting every
+document restored successfully). A backup restored later than its own TTL
+window — an hour-long session expiry in yesterday's archive, a ninety-day
+audit collection in an archive older than that — therefore arrives intact
+and empties itself while the drill is still running.
+
+The deeper problem is not the loss but what it depends on. The pass fires
+on the server's clock, not the drill's, so a small backup that finishes
+inside the first minute sees its data and a production-sized one does
+not: the same backup, the same drill, two different answers. A record
+that depends on how long a restore took is not evidence.
+
+If the engine refuses the parameter, the drill **fails** with
+`invalid_request` naming it, rather than proving whatever survived the
+clock. The pin is a runtime parameter and not a `mongod` flag because the
+drill config supplies the sandbox command — the adapter never sees the
+server's argv — and it lasts exactly as long as the sandbox does.
+
 ## Restore behavior
 
 - The archive is replayed with `mongorestore --stopOnError`: partial
