@@ -211,6 +211,13 @@ func TestRunScopesToNamedAdapters(t *testing.T) {
 // guards.
 const scopeInvocation = "go run ./internal/tools/versionmatrix -scope"
 
+// scopedInvocation is how the workflow asks for a narrowed run's jobs.
+// What it must NOT carry is -baselines-only: a narrowed run takes the
+// touched adapter's whole column, because the baseline cannot exercise a
+// variant image at all, and a version nobody ran on the pull request that
+// wrote the code is a version that pull request did not prove.
+const scopedInvocation = `go run ./internal/tools/versionmatrix -adapters "$SCOPED_ADAPTERS"`
+
 // TestScopeFromDecidesHowWideARunHasToBe walks the decision case by case.
 // Both mistakes it can make are expensive in opposite ways: narrowing too
 // eagerly merges an engine nothing restored from, and widening for every
@@ -354,15 +361,39 @@ func TestRunScopeWritesTheWorkflowOutputs(t *testing.T) {
 // this repository no test can reach, so the rule is that it holds no
 // decision at all.
 func TestWorkflowDelegatesTheScopeDecision(t *testing.T) {
+	path, raw := readVersionMatrixWorkflow(t)
+	if !strings.Contains(raw, scopeInvocation) {
+		t.Errorf("%s does not call %q — the scope decision this file tests would not be the one CI makes",
+			path, scopeInvocation)
+	}
+}
+
+// TestWorkflowRunsEveryVersionOfATouchedAdapter guards the narrowing's
+// one dimension. Narrowing which adapters run is safe — an adapter is an
+// external process nobody imports — while narrowing which of their
+// versions run is not: it hides exactly the failures the matrix exists to
+// find. The valkey append-only work is the measured precedent, a bug that
+// appeared on 9.0 and 9.1 alone.
+func TestWorkflowRunsEveryVersionOfATouchedAdapter(t *testing.T) {
+	path, raw := readVersionMatrixWorkflow(t)
+	if !strings.Contains(raw, scopedInvocation) {
+		t.Errorf("%s does not call %q", path, scopedInvocation)
+	}
+	if strings.Contains(raw, "-baselines-only -adapters") {
+		t.Errorf("%s narrows a scoped run to baselines, which cannot exercise a variant image", path)
+	}
+}
+
+// readVersionMatrixWorkflow returns the workflow these tests hold to the
+// decisions they encode.
+func readVersionMatrixWorkflow(t *testing.T) (string, string) {
+	t.Helper()
 	path := filepath.Join("..", "..", "..", ".github", "workflows", "version-matrix.yml")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read workflow: %v", err)
 	}
-	if !strings.Contains(string(raw), scopeInvocation) {
-		t.Errorf("%s does not call %q — the scope decision this file tests would not be the one CI makes",
-			path, scopeInvocation)
-	}
+	return path, string(raw)
 }
 
 // TestMatrixCoversEveryClaimedVersion is the gate that matters: the jobs
