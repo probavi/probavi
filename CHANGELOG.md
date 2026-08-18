@@ -13,6 +13,24 @@ always called out explicitly.
 
 ### Fixed
 
+- **A TimescaleDB drill no longer lets the restored database trim itself**
+  (`adapters/postgres` 0.12.0, #166). `timescaledb_post_restore()` does
+  not merely release the background workers: a restored retention policy
+  runs in the same second it returns, because `bgw_job_stat` is absent
+  from the dump and a job with no `next_start` is due immediately.
+  Measured on a hypertable holding 200 days under a 90-day policy: 15 of
+  29 chunks and 52% of the rows gone before the frame closed, with the
+  restore reported successful — deterministic, not a race. The framed
+  kinds now park every job in the restored catalog
+  (`next_start => 'infinity'`) inside the window the frame already owns,
+  and fail the restore if they cannot. The lever is `next_start` rather
+  than the job's `scheduled` flag on purpose: the dump carries
+  `scheduled` but not the statistics row, so the pin fills a field the
+  restore left empty and overwrites nothing the backup held — checks
+  reading `timescaledb_information.jobs` still see the policies the
+  backup carried, they simply never run. Second verdict of the survey in
+  #166.
+
 - **A MongoDB drill no longer lets the sandbox expire the artifact**
   (`adapters/mongodb` 0.5.0, #166). MongoDB deletes documents past a TTL
   index's expiry from a background thread whose first pass lands about a

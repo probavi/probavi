@@ -36,6 +36,9 @@ func framedExec(t *testing.T, args execArgs, sequence *[]string) any {
 		case strings.Contains(sql, "timescaledb_pre_restore"):
 			*sequence = append(*sequence, "pre-restore")
 			return execValue{ExitCode: 0, DurationSeconds: 0.2}
+		case strings.Contains(sql, "alter_job"):
+			*sequence = append(*sequence, "pin-jobs")
+			return execValue{ExitCode: 0, DurationSeconds: 0.4}
 		case strings.Contains(sql, "timescaledb_post_restore"):
 			*sequence = append(*sequence, "post-restore")
 			return execValue{ExitCode: 0, DurationSeconds: 0.3}
@@ -71,9 +74,11 @@ func timescaleHandler(t *testing.T, sequence *[]string, exec func(*testing.T, ex
 }
 
 // TestProvisionTimescaleFramesTheRestore pins the framed flow: extension,
-// pre_restore, the restore with the fence disarmed, post_restore — in
-// that order — and every framing second inside the measured restore,
-// because the real recovery path cannot skip them.
+// pre_restore, the restore with the fence disarmed, the policy-job pin,
+// post_restore — in that order — and every framing second inside the
+// measured restore, because the real recovery path cannot skip them. The
+// pin's place in that line is the whole of it: post_restore releases the
+// background workers, and the retention policy runs in the same second.
 func TestProvisionTimescaleFramesTheRestore(t *testing.T) {
 	fixture := writeFixture(t)
 	var sequence []string
@@ -87,7 +92,7 @@ func TestProvisionTimescaleFramesTheRestore(t *testing.T) {
 	if !f.OK {
 		t.Fatalf("final = %+v", f)
 	}
-	want := "isready|put_file|create-extension|pre-restore|restore|post-restore"
+	want := "isready|put_file|create-extension|pre-restore|restore|pin-jobs|post-restore"
 	if got := strings.Join(sequence, "|"); got != want {
 		t.Errorf("sequence = %s, want %s", got, want)
 	}
@@ -95,8 +100,8 @@ func TestProvisionTimescaleFramesTheRestore(t *testing.T) {
 	if err := json.Unmarshal(f.Payload, &res); err != nil {
 		t.Fatalf("payload: %v", err)
 	}
-	if diff := res.Timings.Restore - 2.1; diff < -1e-9 || diff > 1e-9 {
-		t.Errorf("restore_seconds = %v, want the framing statements' 0.6 inside the restore's 1.5", res.Timings.Restore)
+	if diff := res.Timings.Restore - 2.5; diff < -1e-9 || diff > 1e-9 {
+		t.Errorf("restore_seconds = %v, want the framing statements' 1.0 inside the restore's 1.5", res.Timings.Restore)
 	}
 }
 
@@ -119,6 +124,9 @@ func TestProvisionTimescaleFailures(t *testing.T) {
 			"ERROR:  something broke", "restore_failed", "timescaledb_pre_restore"},
 		{"a failing post_restore is a failed restore", "timescaledb_post_restore",
 			"ERROR:  cannot complete", "restore_failed", "restoring state"},
+		{"policy jobs that cannot be held back fail the restore", "alter_job",
+			"ERROR:  function alter_job(integer, next_start => timestamptz) does not exist",
+			"restore_failed", "policy jobs could not be held back"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -139,6 +147,36 @@ func TestProvisionTimescaleFailures(t *testing.T) {
 				t.Errorf("final = %+v, want %s containing %q", f, tt.wantCode, tt.wantMsg)
 			}
 		})
+	}
+}
+
+// TestUnpinnablePolicyJobsStopTheFrame holds the deliberate choice behind
+// the pin: the frame closes only when the restored automation is out of
+// reach. Releasing the background workers regardless would hand back a
+// record of a database that deleted part of itself between the restore
+// and the first check, with the restore reported successful.
+func TestUnpinnablePolicyJobsStopTheFrame(t *testing.T) {
+	fixture := writeFixture(t)
+	var sequence []string
+	exec := func(t *testing.T, args execArgs, seq *[]string) any {
+		if execRole(args.Argv) == "psql" &&
+			strings.Contains(args.Argv[len(args.Argv)-1], "alter_job") {
+			*seq = append(*seq, "pin-jobs")
+			return errExec(1, "ERROR:  permission denied for function alter_job")
+		}
+		return framedExec(t, args, seq)
+	}
+	line, _, _ := driveOp(t, "provision",
+		timescalePayload("timescaledb_dump", fixture),
+		timescaleHandler(t, &sequence, exec))
+	f := parseFinal(t, line)
+	if f.OK || f.Error.Code != "restore_failed" {
+		t.Fatalf("final = %+v, want restore_failed", f)
+	}
+	for _, step := range sequence {
+		if step == "post-restore" {
+			t.Errorf("the frame closed anyway: %s", strings.Join(sequence, "|"))
+		}
 	}
 }
 
