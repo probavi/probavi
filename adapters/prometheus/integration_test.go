@@ -278,20 +278,7 @@ func TestCompactionWindowSnapshotPassesTheCensus(t *testing.T) {
 	// The measured heart of the test: the server's own metric proves it
 	// skipped exactly the superseded source, so the census can only have
 	// passed by subtracting it — not by counting directories.
-	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"sh", "-c",
-		"wget -q -O- http://127.0.0.1:9090/metrics | grep '^prometheus_tsdb_blocks_loaded'"}})
-	if err != nil || out.ExitCode != 0 {
-		t.Fatalf("read blocks_loaded: %v (exit %d, stderr %s)", err, out.ExitCode, out.Stderr)
-	}
-	fields := strings.Fields(strings.TrimSpace(string(out.Stdout)))
-	if len(fields) != 2 {
-		t.Fatalf("blocks_loaded line = %q", out.Stdout)
-	}
-	loaded, err := strconv.Atoi(fields[1])
-	if err != nil {
-		t.Fatalf("blocks_loaded value = %q: %v", fields[1], err)
-	}
-	if loaded != required {
+	if loaded := blocksLoaded(t, ctx, sbx); loaded != required {
 		t.Errorf("server loaded %d blocks with %d directories present, want %d — "+
 			"the superseded source must be the one block it skips", loaded, required+1, required)
 	}
@@ -387,6 +374,221 @@ func twinULIDOf(u string) string {
 // right verdict through the whole stack: the server refuses to start
 // (measured), and its own log line reaches the drill as a claim about
 // the backup — within seconds, not after the readiness budget.
+// The backdated fixture: four groups of six samples, the oldest 32 days
+// before the newest 2 — a span of 30 days, twice the 15-day window the
+// server applies when nothing pins retention off.
+const (
+	historyMetric   = "probavi_history"
+	historyOffsets  = "32 22 12 2"
+	historySpanDays = 30
+	historySamples  = 24
+)
+
+// TestLongHistorySnapshotSurvivesRetention proves the sandbox server
+// applies no retention policy of its own to the artifact. Its fixture is
+// a snapshot spanning more than the server's default 15-day window — the
+// ordinary shape of a monitoring history kept for compliance — and it
+// must restore whole. Measured, a server started without the retention
+// flags pinned deletes every block outside that window from the restored
+// copy as the TSDB opens, which fails a census that should pass and, more
+// quietly, shrinks what every check afterwards can read.
+func TestLongHistorySnapshotSurvivesRetention(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := wrapperImage(t, ctx, verifiedImage(t))
+	provider := docker.New(nil)
+
+	fixture := filepath.Join(t.TempDir(), "snap")
+	makeBackdatedFixture(t, ctx, provider, image, fixture)
+	required := countBlockDirs(t, fixture)
+	if span := blockSpan(t, fixture); span <= 15*24*time.Hour {
+		t.Fatalf("fixture spans %s over %d blocks, want more than the default retention window",
+			span, required)
+	}
+
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("prometheus", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "prometheus_snapshot", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v — a snapshot longer than the default retention window is healthy", err)
+	}
+
+	if loaded := blocksLoaded(t, ctx, sbx); loaded != required {
+		t.Errorf("server loaded %d of the %d blocks the snapshot holds — "+
+			"the sandbox must not apply retention to the artifact", loaded, required)
+	}
+	if deleted := blocksDeleted(t, ctx, sbx, res.State); deleted != 0 {
+		t.Errorf("server deleted %d blocks from the restored copy, want none", deleted)
+	}
+
+	// The operator-visible half: a range check reads every sample the
+	// backup holds, including those outside the default window. A server
+	// enforcing retention answers this one with a number too small and
+	// nothing anywhere reports a failure.
+	assertCheck(t, ctx, sbx, probe, res.Connection.Database,
+		fmt.Sprintf("sum(count_over_time(%s[%dd]))", historyMetric, historySpanDays+5),
+		fmt.Sprintf("=> %d @", historySamples))
+
+	health, err := runner.Healthcheck(ctx, &res.Connection, res.State, sbx)
+	if err != nil || !health.Healthy {
+		t.Fatalf("healthcheck = %+v (%v), want healthy", health, err)
+	}
+}
+
+// makeBackdatedFixture builds a snapshot no live server could hand out
+// in one piece: real blocks, real chunks and index, carrying sample
+// groups spread over a month. promtool writes them from an OpenMetrics
+// stream — the one supported way to produce blocks for instants long
+// past — and its output is block directories only, so what lands here is
+// a snapshot in shape as well as in content (no wal, no chunks_head, no
+// lock, which the raw-copy fence would refuse).
+func makeBackdatedFixture(t *testing.T, ctx context.Context, provider *docker.Provider,
+	image, dest string) {
+	t.Helper()
+	seed, err := provider.Create(ctx, importParams(image))
+	if err != nil {
+		t.Fatalf("create fixture sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+
+	script := fmt.Sprintf(`set -e
+now=$(date +%%s)
+{
+  echo '# HELP %[1]s A backdated gauge'
+  echo '# TYPE %[1]s gauge'
+  i=0
+  for off in %[2]s; do
+    base=$((now - off * 86400))
+    n=0
+    while [ $n -lt 6 ]; do
+      echo "%[1]s{job=\"history\"} $i $((base + n * 300))"
+      i=$((i + 1))
+      n=$((n + 1))
+    done
+  done
+  echo '# EOF'
+} > /tmp/history.om
+mkdir -p /tmp/blocks
+promtool tsdb create-blocks-from openmetrics /tmp/history.om /tmp/blocks`,
+		historyMetric, historyOffsets)
+	res, err := seed.Exec(ctx, sandbox.ExecRequest{Argv: []string{"sh", "-c", script}})
+	if err != nil {
+		t.Fatalf("fixture exec: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("build backdated blocks: exit %d: %s", res.ExitCode, res.Stderr)
+	}
+	if out, err := exec.CommandContext(ctx, "docker", "cp",
+		seed.ID()+":/tmp/blocks", dest).CombinedOutput(); err != nil {
+		t.Fatalf("extract fixture: %v: %s", err, out)
+	}
+}
+
+// importParams gives the fixture sandbox the memory promtool's block
+// writer needs: measured, the import is OOM-killed at the 512m the drill
+// sandboxes run with, and completes at 768m.
+func importParams(image string) map[string]string {
+	params := sandboxParams(image)
+	params["memory"] = "1g"
+	return params
+}
+
+// blockSpan reports what the snapshot's own blocks claim to cover, so a
+// fixture that quietly stopped being longer than the retention window
+// fails loudly instead of turning its test into a duplicate happy path.
+func blockSpan(t *testing.T, dir string) time.Duration {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var minMs, maxMs int64
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name(), "meta.json"))
+		if err != nil {
+			t.Fatalf("read block metadata: %v", err)
+		}
+		var meta struct {
+			MinTime int64 `json:"minTime"`
+			MaxTime int64 `json:"maxTime"`
+		}
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			t.Fatalf("parse block metadata: %v", err)
+		}
+		if minMs == 0 || meta.MinTime < minMs {
+			minMs = meta.MinTime
+		}
+		if meta.MaxTime > maxMs {
+			maxMs = meta.MaxTime
+		}
+	}
+	return time.Duration(maxMs-minMs) * time.Millisecond
+}
+
+// blocksLoaded reads the restored server's own count of loaded blocks.
+func blocksLoaded(t *testing.T, ctx context.Context, sbx *docker.Sandbox) int {
+	t.Helper()
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"sh", "-c",
+		"wget -q -O- http://127.0.0.1:9090/metrics | grep '^prometheus_tsdb_blocks_loaded'"}})
+	if err != nil || out.ExitCode != 0 {
+		t.Fatalf("read blocks_loaded: %v (exit %d, stderr %s)", err, out.ExitCode, out.Stderr)
+	}
+	fields := strings.Fields(strings.TrimSpace(string(out.Stdout)))
+	if len(fields) != 2 {
+		t.Fatalf("blocks_loaded line = %q", out.Stdout)
+	}
+	loaded, err := strconv.Atoi(fields[1])
+	if err != nil {
+		t.Fatalf("blocks_loaded value = %q: %v", fields[1], err)
+	}
+	return loaded
+}
+
+// blocksDeleted counts what the server removed from the restored copy,
+// read from the log the adapter starts it with. This is the destructive
+// half of inherited retention: the blocks are gone from disk, not merely
+// unloaded.
+func blocksDeleted(t *testing.T, ctx context.Context, sbx *docker.Sandbox,
+	state json.RawMessage) int {
+	t.Helper()
+	var s struct {
+		WorkDir string `json:"work_dir"`
+	}
+	if err := json.Unmarshal(state, &s); err != nil || s.WorkDir == "" {
+		t.Fatalf("provision state = %s: %v", state, err)
+	}
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"sh", "-c",
+		"grep -c 'Deleting obsolete block' " + s.WorkDir + "/prometheus.log || true"}})
+	if err != nil {
+		t.Fatalf("read server log: %v", err)
+	}
+	deleted, err := strconv.Atoi(strings.TrimSpace(string(out.Stdout)))
+	if err != nil {
+		t.Fatalf("deletion count = %q: %v", out.Stdout, err)
+	}
+	return deleted
+}
+
 func TestCorruptIndexSurfacesTheServerLog(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

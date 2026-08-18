@@ -328,6 +328,47 @@ func TestProvisionRestoresSnapshotDir(t *testing.T) {
 	}
 }
 
+// TestLaunchLinePinsRetentionOff pins the flags that stop the sandbox
+// server from applying a retention policy to the artifact it was handed.
+// Measured on both verified versions: with neither flag set the server
+// enforces its default 15-day window when the TSDB opens and deletes
+// every block outside it from the restored copy — so a snapshot spanning
+// more than 15 days fails a census it should pass, and every check reads
+// less than the backup holds. The values are as load-bearing as the
+// flags: 0 reads as unset and restores that same default, and a duration
+// above 100y is refused outright.
+func TestLaunchLinePinsRetentionOff(t *testing.T) {
+	dir := writeSnapshot(t, filepath.Join(t.TempDir(), "snap"), maxAug2026-60000, maxAug2026)
+	var sequence []string
+	_, calls, exit := driveOp(t, "provision",
+		provisionPayload(t, "prometheus_snapshot", dir, nil),
+		provisionHandler(t, &sequence, defaultSimulated(2)))
+	if exit != 0 {
+		t.Fatalf("provision exit=%d", exit)
+	}
+	script := launchScript(t, calls)
+	if !strings.Contains(script,
+		"--storage.tsdb.retention.time=100y --storage.tsdb.retention.size=0") {
+		t.Errorf("launch line does not pin retention off: %s", script)
+	}
+}
+
+// launchScript returns the one shell script that starts the server.
+func launchScript(t *testing.T, calls []verbCall) string {
+	t.Helper()
+	for _, call := range calls {
+		if call.Verb != "exec" {
+			continue
+		}
+		argv := argvOf(t, call)
+		if argv[0] == "sh" && len(argv) == 3 && strings.Contains(argv[2], "--config.file") {
+			return argv[2]
+		}
+	}
+	t.Fatal("no server launch among the exec calls")
+	return ""
+}
+
 func TestProvisionUnpacksArchive(t *testing.T) {
 	path := buildTar(t, filepath.Join(t.TempDir(), "snap.tar.gz"), true,
 		snapshotTarEntries("snapname", maxAug2026))

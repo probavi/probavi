@@ -11,6 +11,26 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Prometheus drill no longer inherits the server's default
+  retention** (`adapters/prometheus` 0.3.0, #165). Started without
+  retention flags, the sandbox server applies its 15-day default when the
+  TSDB opens and *deletes* every block lying wholly outside that window
+  from the restored copy — so a snapshot covering more than 15 days, the
+  ordinary shape of a monitoring history kept for compliance, failed the
+  block census as a partial restore; and had the census not caught it,
+  every check would have read less than the backup holds. The drill now
+  starts the server with retention pinned off in both dimensions
+  (`--storage.tsdb.retention.time=100y --storage.tsdb.retention.size=0`),
+  the right trade for a disposable sandbox: retention states what a
+  running server should keep, while a drill proves what the backup
+  holds — and the operator's real policy is already expressed in which
+  blocks the snapshot contains. Measured on both verified versions, where
+  the trigger turned out to be the snapshot's own span rather than its
+  age: a snapshot taken a minute ago loses blocks if it covers more than
+  the window, while a year-old one covering two days does not.
+
 ## [0.15.0] - 2026-08-17
 
 The standing cadence holds — InfluxDB, the fifteenth engine — but this

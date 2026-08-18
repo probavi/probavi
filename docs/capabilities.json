@@ -551,7 +551,7 @@
       "id": "prometheus",
       "name": "Prometheus",
       "status": "experimental",
-      "adapter_version": "0.2.0",
+      "adapter_version": "0.3.0",
       "engine": {
         "id": "prometheus",
         "name": "prometheus"
