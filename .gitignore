@@ -23,6 +23,7 @@
 /cassandra
 /opensearch
 /influxdb
+/victoriametrics
 # …and `go build ./...` run from inside an adapter drops it beside the
 # source, where the rules above do not reach
 /adapters/*/postgres
@@ -40,6 +41,7 @@
 /adapters/*/cassandra
 /adapters/*/opensearch
 /adapters/*/influxdb
+/adapters/*/victoriametrics
 
 # Test and coverage artifacts
 *.test

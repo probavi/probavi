@@ -755,6 +755,49 @@
       "pitr": false,
       "conformance_verified": true,
       "docs": "adapters/valkey/README.md"
+    },
+    {
+      "id": "victoriametrics",
+      "name": "VictoriaMetrics",
+      "status": "experimental",
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "victoriametrics",
+        "name": "victoriametrics"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "1.150",
+          "image": "victoriametrics/victoria-metrics:v1.150.0"
+        },
+        {
+          "engine_version": "1.120",
+          "image": "victoriametrics/victoria-metrics:v1.120.0"
+        }
+      ],
+      "sources": [
+        {
+          "id": "victoriametrics_backup",
+          "name": "One `vmbackup` output directory",
+          "pitr": false
+        },
+        {
+          "id": "victoriametrics_backup_dir",
+          "name": "A directory of `vmbackup` outputs; the one whose own metadata claims the newest instant is restored",
+          "pitr": false
+        },
+        {
+          "id": "victoriametrics_backup_tar",
+          "name": "One tar archive (plain or gzip) of a `vmbackup` output, its files at the root or under one wrapping directory",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/victoriametrics/README.md"
     }
   ],
   "sandbox_providers": [

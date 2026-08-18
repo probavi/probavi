@@ -1,0 +1,25 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. A drill needs the server, vmrestore and a query client in one image, and VictoriaMetrics ships them separately (and no query client at all), so the suite builds the small wrapper the adapter README documents FROM the listed image: the server exercised is exactly the listed version's. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "victoriametrics",
+  "name": "VictoriaMetrics",
+  "status": "experimental",
+  "engine_name": "victoriametrics",
+  "conformance_verified": true,
+  "docs": "adapters/victoriametrics/README.md",
+  "verified": [
+    {
+      "engine_version": "1.150",
+      "image": "victoriametrics/victoria-metrics:v1.150.0",
+      "baseline": true
+    },
+    {
+      "engine_version": "1.120",
+      "image": "victoriametrics/victoria-metrics:v1.120.0"
+    }
+  ],
+  "sources": {
+    "victoriametrics_backup_tar": "One tar archive (plain or gzip) of a `vmbackup` output, its files at the root or under one wrapping directory",
+    "victoriametrics_backup": "One `vmbackup` output directory",
+    "victoriametrics_backup_dir": "A directory of `vmbackup` outputs; the one whose own metadata claims the newest instant is restored"
+  }
+}
