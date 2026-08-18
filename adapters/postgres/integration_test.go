@@ -1050,13 +1050,136 @@ func TestTimescaleRestoreDrill(t *testing.T) {
 	// Every hypertable property the fixture carries must survive: the
 	// rows across chunks, the compressed chunks still readable, the
 	// continuous aggregate's data, and the restored retention policy.
-	assertRunnerRow(t, ctx, sbx, probe, res, "SELECT count(*) FROM metrics", "2000")
+	assertRunnerRow(t, ctx, sbx, probe, res, "SELECT count(*) FROM metrics", timescaleRows)
 	assertRunnerRow(t, ctx, sbx, probe, res,
 		"SELECT count(*) > 0 FROM timescaledb_information.chunks WHERE hypertable_name = 'metrics' AND is_compressed",
 		"t")
-	assertRunnerRow(t, ctx, sbx, probe, res, "SELECT count(*) FROM metrics_hourly", "2000")
+	assertRunnerRow(t, ctx, sbx, probe, res, "SELECT count(*) FROM metrics_hourly", timescaleRows)
 	assertRunnerRow(t, ctx, sbx, probe, res,
 		"SELECT count(*) FROM timescaledb_information.jobs WHERE proc_name = 'policy_retention'", "1")
+}
+
+// TestTimescalePolicyJobsCannotTouchTheArtifact is the measured heart of
+// the policy pin. A restored TimescaleDB catalog brings its own
+// automation with it, and timescaledb_post_restore() does not merely
+// release the background workers: the retention policy runs in the same
+// second it returns, because bgw_job_stat is absent from the dump and a
+// job with no next_start is due immediately (measured, unpinned: 15 of 29
+// chunks and 52% of the rows gone before the frame closed, with the
+// restore reported successful).
+//
+// The test proves both halves. With the pin the whole hypertable is
+// there and the policy has not run; then it hands the policy its
+// next_start back and the same chunks disappear — which is what makes the
+// first half mean something.
+func TestTimescalePolicyJobsCannotTouchTheArtifact(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-postgres"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	provider := docker.New(nil)
+	params := map[string]string{"image": verifiedImage(t), "env.POSTGRES_HOST_AUTH_METHOD": "trust",
+		"memory": engineMemoryLimit}
+
+	fixture := filepath.Join(t.TempDir(), "timescale.dump")
+	if !makeTimescaleFixture(t, ctx, provider, params, fixture) {
+		t.Skip("image does not provide the timescaledb extension; the timescaledb matrix job exercises this test")
+	}
+
+	sbx, err := provider.Create(ctx, params)
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("postgres", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "timescaledb_dump", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v — a hypertable older than its own retention policy is a healthy backup", err)
+	}
+
+	// The artifact arrived whole, the policy that would trim it has not
+	// run, and the flag the dump carried is untouched: the pin writes
+	// next_start, which the dump never had.
+	before := timescaleChunks(t, ctx, sbx)
+	assertRunnerRow(t, ctx, sbx, probe, res, "SELECT count(*) FROM metrics", timescaleRows)
+	assertRunnerRow(t, ctx, sbx, probe, res,
+		"SELECT coalesce(max(js.total_runs), 0) FROM timescaledb_information.job_stats js "+
+			"JOIN timescaledb_information.jobs j ON j.job_id = js.job_id "+
+			"WHERE j.proc_name = 'policy_retention'", "0")
+	assertRunnerRow(t, ctx, sbx, probe, res,
+		"SELECT bool_and(scheduled) FROM timescaledb_information.jobs", "t")
+	assertRunnerRow(t, ctx, sbx, probe, res,
+		"SELECT min(ts) < now() - interval '90 days' FROM metrics", "t")
+
+	// Hand the policy its next_start back, and it takes what the drill
+	// just proved — the artifact was retention-eligible all along, so the
+	// assertions above are about the pin and not about a fixture with
+	// nothing to lose.
+	mustExec(t, ctx, sbx, "psql", "-h", "127.0.0.1", "-U", "postgres", "-tA", "-v", "ON_ERROR_STOP=1", "-c",
+		"SELECT alter_job(job_id, next_start => now()) FROM timescaledb_information.jobs "+
+			"WHERE proc_name = 'policy_retention'")
+	awaitRetentionRun(t, ctx, sbx, time.Minute)
+	if after := timescaleChunks(t, ctx, sbx); after >= before {
+		t.Errorf("the released retention policy dropped nothing (%d chunks before, %d after) — "+
+			"the fixture cannot show what the pin prevents", before, after)
+	}
+}
+
+// timescaleChunks counts the hypertable's chunks right now.
+func timescaleChunks(t *testing.T, ctx context.Context, sbx *docker.Sandbox) int {
+	t.Helper()
+	out := psqlValue(t, ctx, sbx,
+		"SELECT count(*) FROM timescaledb_information.chunks WHERE hypertable_name = 'metrics'")
+	n, err := strconv.Atoi(out)
+	if err != nil {
+		t.Fatalf("chunk count = %q: %v", out, err)
+	}
+	return n
+}
+
+// awaitRetentionRun waits for the retention policy to run once it is
+// allowed to.
+func awaitRetentionRun(t *testing.T, ctx context.Context, sbx *docker.Sandbox, budget time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(budget)
+	for time.Now().Before(deadline) {
+		if psqlValue(t, ctx, sbx,
+			"SELECT coalesce(max(js.total_runs), 0) > 0 FROM timescaledb_information.job_stats js "+
+				"JOIN timescaledb_information.jobs j ON j.job_id = js.job_id "+
+				"WHERE j.proc_name = 'policy_retention'") == "t" {
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("the retention policy never ran within %s of being released", budget)
+}
+
+// psqlValue reads one value straight from the sandbox's server.
+func psqlValue(t *testing.T, ctx context.Context, sbx *docker.Sandbox, sql string) string {
+	t.Helper()
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"psql", "-h", "127.0.0.1",
+		"-U", "postgres", "-tA", "-v", "ON_ERROR_STOP=1", "-c", sql}})
+	if err != nil || out.ExitCode != 0 {
+		t.Fatalf("psql %q: %v (exit %d, stderr %s)", sql, err, out.ExitCode, out.Stderr)
+	}
+	return strings.TrimSpace(string(out.Stdout))
 }
 
 // TestTimescaleDumpIsFencedFromThePlainKind proves the fence end to end:
@@ -1103,6 +1226,13 @@ func TestTimescaleDumpIsFencedFromThePlainKind(t *testing.T) {
 	}
 }
 
+// timescaleRows is one hourly sample per row, so the fixture's hypertable
+// spans 200 days — more than the 90-day retention policy it also carries.
+// That is the ordinary shape of a metrics database kept for compliance,
+// and the reason this fixture can tell a whole restore from a restore the
+// engine trimmed on its way in.
+const timescaleRows = "4800"
+
 // makeTimescaleFixture seeds a production-shaped hypertable and dumps
 // it; false reports an image without the extension.
 func makeTimescaleFixture(t *testing.T, ctx context.Context, provider *docker.Provider,
@@ -1128,14 +1258,25 @@ func makeTimescaleFixture(t *testing.T, ctx context.Context, provider *docker.Pr
 	for _, sql := range []string{
 		"CREATE EXTENSION IF NOT EXISTS timescaledb",
 		"CREATE TABLE metrics (ts timestamptz NOT NULL, device int NOT NULL, value double precision)",
-		"SELECT create_hypertable('metrics', 'ts', chunk_time_interval => interval '1 day')",
-		"INSERT INTO metrics SELECT now() - (i || ' hours')::interval, i % 10, random() FROM generate_series(1, 2000) i",
+		"SELECT create_hypertable('metrics', 'ts', chunk_time_interval => interval '7 days')",
+		"INSERT INTO metrics SELECT now() - (i || ' hours')::interval, i % 10, random() FROM generate_series(1, " +
+			timescaleRows + ") i",
 		"ALTER TABLE metrics SET (timescaledb.compress, timescaledb.compress_segmentby = 'device')",
 		"SELECT count(compress_chunk(c)) FROM show_chunks('metrics', older_than => interval '2 days') c",
 		"CREATE MATERIALIZED VIEW metrics_hourly WITH (timescaledb.continuous) AS " +
 			"SELECT time_bucket('1 hour', ts) AS bucket, device, avg(value) FROM metrics GROUP BY 1, 2 WITH NO DATA",
 		"CALL refresh_continuous_aggregate('metrics_hourly', NULL, NULL)",
-		"SELECT add_retention_policy('metrics', interval '90 days')",
+		// Each policy is created and parked in one statement: the seed's
+		// own scheduler runs a new retention policy within the second
+		// (measured), and a fixture that expired its own history before
+		// pg_dump reached it would prove nothing. next_start lives in
+		// bgw_job_stat, which the dump does not carry, so the artifact is
+		// the same either way.
+		"SELECT alter_job(add_retention_policy('metrics', interval '90 days'), next_start => 'infinity')",
+		"SELECT alter_job(add_compression_policy('metrics', interval '7 days'), next_start => 'infinity')",
+		"SELECT alter_job(add_continuous_aggregate_policy('metrics_hourly', " +
+			"start_offset => interval '30 days', end_offset => interval '1 hour', " +
+			"schedule_interval => interval '1 hour'), next_start => 'infinity')",
 	} {
 		mustExec(t, ctx, seed, "psql", "-h", "127.0.0.1", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-c", sql)
 	}

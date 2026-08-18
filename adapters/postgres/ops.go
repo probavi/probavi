@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "postgres"
-	adapterVersion = "0.11.0"
+	adapterVersion = "0.12.0"
 
 	defaultUser     = "postgres"
 	defaultDatabase = "postgres"
@@ -165,11 +165,15 @@ func restoreDump(ctx context.Context, c *core, user, database string, dump sandb
 		return 0, mapRestoreFailure(restore.ExitCode, stderr, dump.storage)
 	}
 	if framed {
+		pin, perr := pinPolicyJobs(ctx, c, user, database)
+		if perr != nil {
+			return 0, perr
+		}
 		post, perr := endTimescaleFrame(ctx, c, user, database)
 		if perr != nil {
 			return 0, perr
 		}
-		framingSeconds += post
+		framingSeconds += pin + post
 	}
 	return restore.DurationSeconds + framingSeconds, nil
 }
@@ -221,6 +225,55 @@ func endTimescaleFrame(ctx context.Context, c *core, user, database string) (flo
 				"database in the restoring state: %s", firstLine(stderr))
 	}
 	return post.DurationSeconds, nil
+}
+
+// pinPolicyJobsSQL holds every job in the restored catalog out of reach
+// for the life of the sandbox.
+//
+// next_start is the deliberate lever rather than the job's scheduled
+// flag. The dump does not carry bgw_job_stat — measured: straight after
+// pg_restore a restored job exists with scheduled set and no statistics
+// at all — so writing next_start fills a field the restore left empty and
+// overwrites nothing the backup contained, while the scheduled flag the
+// backup did carry stays exactly as it was. A drill that reads the
+// restored policies still sees what the backup held.
+const pinPolicyJobsSQL = `WITH pinned AS (` +
+	`SELECT alter_job(job_id, next_start => 'infinity') FROM timescaledb_information.jobs) ` +
+	`SELECT count(*) FROM pinned`
+
+// pinPolicyJobs stops the restored database's own automation from acting
+// on the artifact, inside the window the frame already owns: after the
+// restore, while timescaledb_pre_restore() still holds the background
+// workers down.
+//
+// It has to be here, because timescaledb_post_restore() does not merely
+// release the workers — the retention policy runs in the same second it
+// returns (measured: 15 of 29 chunks and 52% of the rows gone before
+// post_restore's own call finished, on a hypertable holding 200 days
+// under a 90-day policy). Nothing is racing: bgw_job_stat is absent from
+// the dump, so a restored job has no next_start and the scheduler treats
+// it as due immediately. A policy is a statement about what a running
+// database should keep; a drill proves what the backup holds, and the
+// operator's real policy is already expressed in which chunks the dump
+// contains.
+//
+// A failure fails the restore. Carrying on would hand back a record of a
+// database that deleted part of itself between the restore and the first
+// check, with the restore reported successful — which is precisely the
+// evidence this product must never produce.
+func pinPolicyJobs(ctx context.Context, c *core, user, database string) (float64, *protoError) {
+	pin, stderr, perr := psqlStatement(ctx, c, user, database, pinPolicyJobsSQL)
+	if perr != nil {
+		return 0, perr
+	}
+	if pin.ExitCode != 0 {
+		return 0, protoErr("restore_failed", false,
+			"the restored policy jobs could not be held back: %s — releasing the background "+
+				"workers would let them act on the artifact (measured: a retention policy drops "+
+				"its chunks in the same second the restore frame closes), so the drill would "+
+				"prove a database that deleted part of itself", firstLine(stderr))
+	}
+	return pin.DurationSeconds, nil
 }
 
 // psqlStatement runs one SQL statement the frame needs, with the same

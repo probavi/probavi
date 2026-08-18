@@ -103,6 +103,29 @@ loudly, never silently. Version discipline is the extension's own rule
 and the dump does not state its origin extension version, so mismatches
 surface as the engine's own errors rather than a pre-check.
 
+**The restored policies are held back for the life of the sandbox.**
+Inside the frame, after the restore and before `timescaledb_post_restore()`,
+every job in the restored catalog gets `next_start => 'infinity'`. This
+is not tidiness: `timescaledb_post_restore()` releases the background
+workers, and a restored retention policy runs *in the same second it
+returns* — measured on a hypertable holding 200 days under a 90-day
+policy, 15 of 29 chunks and 52% of the rows were gone before the frame
+closed, with the restore reported successful. Nothing is racing there:
+`bgw_job_stat` is absent from the dump, so a restored job has no
+`next_start` and the scheduler treats it as due immediately.
+
+A policy states what a *running* database should keep; a drill proves
+what the backup holds, and the operator's real policy is already
+expressed in which chunks the dump contains. The lever is deliberately
+`next_start` and not the job's `scheduled` flag: the dump carries
+`scheduled`, but not the statistics row `next_start` lives in, so the pin
+fills a field the restore left empty and overwrites nothing the backup
+contained. A check that reads `timescaledb_information.jobs` still sees
+the policies exactly as the backup had them, `scheduled` included — they
+simply never run. If they cannot be held back, the restore fails
+(`restore_failed`) rather than proving a database that deleted part of
+itself.
+
 ## The pgdump_with_globals kind (cluster globals first)
 
 A logical recovery runs in two steps: the cluster-level objects — roles,
