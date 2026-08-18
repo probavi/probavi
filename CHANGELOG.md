@@ -11,6 +11,29 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-08-18
+
+One field report set the whole cycle's direction. A Prometheus drill
+refused a healthy backup, and the cause turned out not to be the census
+that refused it but the sandbox behind it: the restored server was
+applying its own fifteen-day retention to data it had just been handed.
+The fix is small. The question it raised is not — *which other engines
+quietly enforce a policy about what a running server should keep, on an
+artifact a drill is supposed to prove?* — and this release is the first
+two answers, both yes. MongoDB deletes expired documents about a minute
+after the sandbox starts, so what a drill proved depended on how long the
+restore took. TimescaleDB is worse: a restored retention policy runs in
+the same second the restore frame closes, deterministically, taking half
+the rows with it. Both are now held back, and both refuse the drill
+rather than record a database that deleted part of itself.
+
+The cycle's new engine arrived with that lesson already applied.
+VictoriaMetrics keeps one month by default, and the adapter pins retention
+off before its first release rather than after a bug report — one of four
+fences that came out of measurement, the sharpest being that a copy of a
+live storage directory starts and serves every sample in a quiet moment,
+which is exactly why it must be refused by name.
+
 ### Added
 
 - **A VictoriaMetrics adapter** (`adapters/victoriametrics` 0.1.0), the
@@ -45,23 +68,23 @@ always called out explicitly.
 
 ### Fixed
 
-- **A TimescaleDB drill no longer lets the restored database trim itself**
-  (`adapters/postgres` 0.12.0, #166). `timescaledb_post_restore()` does
-  not merely release the background workers: a restored retention policy
-  runs in the same second it returns, because `bgw_job_stat` is absent
-  from the dump and a job with no `next_start` is due immediately.
-  Measured on a hypertable holding 200 days under a 90-day policy: 15 of
-  29 chunks and 52% of the rows gone before the frame closed, with the
-  restore reported successful — deterministic, not a race. The framed
-  kinds now park every job in the restored catalog
-  (`next_start => 'infinity'`) inside the window the frame already owns,
-  and fail the restore if they cannot. The lever is `next_start` rather
-  than the job's `scheduled` flag on purpose: the dump carries
-  `scheduled` but not the statistics row, so the pin fills a field the
-  restore left empty and overwrites nothing the backup held — checks
-  reading `timescaledb_information.jobs` still see the policies the
-  backup carried, they simply never run. Second verdict of the survey in
-  #166.
+- **A Prometheus drill no longer inherits the server's default
+  retention** (`adapters/prometheus` 0.3.0, #165). Started without
+  retention flags, the sandbox server applies its 15-day default when the
+  TSDB opens and *deletes* every block lying wholly outside that window
+  from the restored copy — so a snapshot covering more than 15 days, the
+  ordinary shape of a monitoring history kept for compliance, failed the
+  block census as a partial restore; and had the census not caught it,
+  every check would have read less than the backup holds. The drill now
+  starts the server with retention pinned off in both dimensions
+  (`--storage.tsdb.retention.time=100y --storage.tsdb.retention.size=0`),
+  the right trade for a disposable sandbox: retention states what a
+  running server should keep, while a drill proves what the backup
+  holds — and the operator's real policy is already expressed in which
+  blocks the snapshot contains. Measured on both verified versions, where
+  the trigger turned out to be the snapshot's own span rather than its
+  age: a snapshot taken a minute ago loses blocks if it covers more than
+  the window, while a year-old one covering two days does not.
 
 - **A MongoDB drill no longer lets the sandbox expire the artifact**
   (`adapters/mongodb` 0.5.0, #166). MongoDB deletes documents past a TTL
@@ -81,25 +104,24 @@ always called out explicitly.
   engine will not let it — a record whose content depends on how long a
   restore took is not evidence. First verdict of the survey in #166.
 
-### Fixed
 
-- **A Prometheus drill no longer inherits the server's default
-  retention** (`adapters/prometheus` 0.3.0, #165). Started without
-  retention flags, the sandbox server applies its 15-day default when the
-  TSDB opens and *deletes* every block lying wholly outside that window
-  from the restored copy — so a snapshot covering more than 15 days, the
-  ordinary shape of a monitoring history kept for compliance, failed the
-  block census as a partial restore; and had the census not caught it,
-  every check would have read less than the backup holds. The drill now
-  starts the server with retention pinned off in both dimensions
-  (`--storage.tsdb.retention.time=100y --storage.tsdb.retention.size=0`),
-  the right trade for a disposable sandbox: retention states what a
-  running server should keep, while a drill proves what the backup
-  holds — and the operator's real policy is already expressed in which
-  blocks the snapshot contains. Measured on both verified versions, where
-  the trigger turned out to be the snapshot's own span rather than its
-  age: a snapshot taken a minute ago loses blocks if it covers more than
-  the window, while a year-old one covering two days does not.
+- **A TimescaleDB drill no longer lets the restored database trim itself**
+  (`adapters/postgres` 0.12.0, #166). `timescaledb_post_restore()` does
+  not merely release the background workers: a restored retention policy
+  runs in the same second it returns, because `bgw_job_stat` is absent
+  from the dump and a job with no `next_start` is due immediately.
+  Measured on a hypertable holding 200 days under a 90-day policy: 15 of
+  29 chunks and 52% of the rows gone before the frame closed, with the
+  restore reported successful — deterministic, not a race. The framed
+  kinds now park every job in the restored catalog
+  (`next_start => 'infinity'`) inside the window the frame already owns,
+  and fail the restore if they cannot. The lever is `next_start` rather
+  than the job's `scheduled` flag on purpose: the dump carries
+  `scheduled` but not the statistics row, so the pin fills a field the
+  restore left empty and overwrites nothing the backup held — checks
+  reading `timescaledb_information.jobs` still see the policies the
+  backup carried, they simply never run. Second verdict of the survey in
+  #166.
 
 ## [0.15.0] - 2026-08-17
 
@@ -2354,7 +2376,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/probavi/probavi/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/probavi/probavi/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/probavi/probavi/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/probavi/probavi/compare/v0.12.0...v0.13.0
