@@ -2,6 +2,11 @@
 /probavi
 /dist/
 *.exe
+# go build ./internal/tools/<name> drops the binary in the repo root too
+/adapterversion
+/capabilities
+/versionmatrix
+
 # go build ./adapters/<name> drops the binary in the repo root
 /postgres
 /mysql

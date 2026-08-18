@@ -21,8 +21,9 @@ on:
   # ci.yml's integration job covers only the packages outside adapters/.
   # A pull request that edits what is claimed, or the machinery that turns
   # a claim into a job, widens to the full matrix; one whose changes all
-  # sit under adapter directories narrows to those adapters' baselines
-  # (see the scope step below).
+  # sit under adapter directories — bookkeeping every such change carries
+  # with it aside — narrows to those adapters' baselines. The rule lives
+  # in internal/tools/versionmatrix, where it is tested case by case.
   pull_request:
   schedule:
     # Weekly, offset from the other scheduled workflows so a slow matrix
@@ -59,41 +60,23 @@ jobs:
           go-version-file: go.mod
       - name: decide how wide this run has to be
         id: scope
-        # A schedule, a manual run, and a release tag always run everything.
-        # A pull request runs baselines — the everyday gate — unless it
-        # touches what is claimed or the machinery that turns a claim into
-        # a job, in which case it has to prove the whole matrix before the
-        # claim can merge (docs/engine-versions.md §3). Within the baseline
-        # tier there is one narrowing: a pull request whose every changed
-        # file sits under adapter directories runs those adapters'
-        # baselines only — an adapter is an external process nobody
-        # imports, so its change cannot alter another adapter's restore,
-        # and the gate proves exactly what changed as the catalog grows.
-        # Anything touching shared code keeps every baseline, and the
-        # narrowing only names directories that carry a manifest, so a
-        # work-in-progress directory falls back to the full baseline set
-        # instead of failing the enumeration.
+        # A schedule, a manual run, and a release tag always run
+        # everything. What a pull request needs is a decision with cases —
+        # widen for anything that edits a claim or the machinery behind
+        # it, narrow to the adapters a change actually touches, and keep
+        # every baseline whenever the answer is not obvious — so it lives
+        # in the tool that already turns claims into jobs, where each case
+        # has a test. Shell inside a workflow is the one place in this
+        # repository no test can reach; it therefore holds no decision at
+        # all beyond the event name (docs/engine-versions.md §3).
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "full=1" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          changed=$(git diff --name-only "$BASE_SHA"...HEAD)
-          if printf '%s\n' "$changed" | grep -qE '^(adapters/[^/]+/adapter\.json|internal/tools/versionmatrix/|internal/capabilities/adapters\.go|\.github/workflows/version-matrix\.yml)'; then
-            echo "full=1" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          echo "full=0" >> "$GITHUB_OUTPUT"
-          if [ -n "$changed" ] && ! printf '%s\n' "$changed" | grep -qvE '^adapters/[^/]+/'; then
-            adapters=$(printf '%s\n' "$changed" | sed -E 's#^adapters/([^/]+)/.*#\1#' | sort -u | paste -sd,)
-            for a in $(printf '%s' "$adapters" | tr ',' ' '); do
-              if [ ! -f "adapters/$a/adapter.json" ]; then
-                adapters=""
-                break
-              fi
-            done
-            echo "adapters=$adapters" >> "$GITHUB_OUTPUT"
-          fi
+          git diff --name-only "$BASE_SHA"...HEAD |
+            go run ./internal/tools/versionmatrix -scope >> "$GITHUB_OUTPUT"
       - name: read the versions the manifests claim
         id: list
         env:

@@ -110,7 +110,7 @@ func TestRunPrintsTheMatrix(t *testing.T) {
 	root := filepath.Join("..", "..", "..")
 
 	var full bytes.Buffer
-	if err := run([]string{"-root", root}, &full, io.Discard); err != nil {
+	if err := run([]string{"-root", root}, strings.NewReader(""), &full, io.Discard); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	var all []target
@@ -122,7 +122,7 @@ func TestRunPrintsTheMatrix(t *testing.T) {
 	}
 
 	var everyday bytes.Buffer
-	if err := run([]string{"-root", root, "-baselines-only"}, &everyday, io.Discard); err != nil {
+	if err := run([]string{"-root", root, "-baselines-only"}, strings.NewReader(""), &everyday, io.Discard); err != nil {
 		t.Fatalf("run -baselines-only: %v", err)
 	}
 	var base []target
@@ -133,7 +133,7 @@ func TestRunPrintsTheMatrix(t *testing.T) {
 		t.Errorf("baselines emitted %d of %d targets, want a proper non-empty subset", len(base), len(all))
 	}
 
-	if err := run([]string{"-root", filepath.Join(t.TempDir(), "absent")}, io.Discard, io.Discard); err == nil {
+	if err := run([]string{"-root", filepath.Join(t.TempDir(), "absent")}, strings.NewReader(""), io.Discard, io.Discard); err == nil {
 		t.Error("run with a missing root must fail")
 	}
 }
@@ -186,7 +186,7 @@ func TestRunScopesToNamedAdapters(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
-			err := run(tc.args, &out, io.Discard)
+			err := run(tc.args, strings.NewReader(""), &out, io.Discard)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("run error = %v, want one containing %q", err, tc.wantErr)
@@ -202,6 +202,166 @@ func TestRunScopesToNamedAdapters(t *testing.T) {
 			}
 			assertTargets(t, got, tc.want)
 		})
+	}
+}
+
+// scopeInvocation is how the workflow asks for the scope decision. The
+// decision is only worth testing while the workflow actually delegates
+// it, so this string is the seam TestWorkflowDelegatesTheScopeDecision
+// guards.
+const scopeInvocation = "go run ./internal/tools/versionmatrix -scope"
+
+// TestScopeFromDecidesHowWideARunHasToBe walks the decision case by case.
+// Both mistakes it can make are expensive in opposite ways: narrowing too
+// eagerly merges an engine nothing restored from, and widening for every
+// pull request buys nothing back as the adapter catalog grows.
+func TestScopeFromDecidesHowWideARunHasToBe(t *testing.T) {
+	root := t.TempDir()
+	writeAdapter(t, root, "alpha", `{"id":"alpha","verified":[{"engine_version":"1","image":"a:1","baseline":true}]}`)
+	writeAdapter(t, root, "mid", `{"id":"mid","verified":[{"engine_version":"5","image":"m:5","baseline":true}]}`)
+	if err := os.MkdirAll(filepath.Join(root, "adapters", "wip"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		changed []string
+		want    scopeDecision
+	}{
+		{
+			name:    "an adapter manifest is the claim itself",
+			changed: []string{"adapters/alpha/adapter.json"},
+			want:    scopeDecision{full: true},
+		},
+		{
+			name:    "the tool that turns claims into jobs",
+			changed: []string{"internal/tools/versionmatrix/main.go"},
+			want:    scopeDecision{full: true},
+		},
+		{
+			name:    "the manifest reader",
+			changed: []string{"internal/capabilities/adapters.go"},
+			want:    scopeDecision{full: true},
+		},
+		{
+			name:    "the workflow itself",
+			changed: []string{".github/workflows/version-matrix.yml"},
+			want:    scopeDecision{full: true},
+		},
+		{
+			name:    "one adapter's own files",
+			changed: []string{"adapters/alpha/ops.go", "adapters/alpha/README.md"},
+			want:    scopeDecision{adapters: []string{"alpha"}},
+		},
+		{
+			name:    "the bookkeeping an adapter change carries with it",
+			changed: []string{"adapters/alpha/ops.go", "docs/capabilities.json", "CHANGELOG.md"},
+			want:    scopeDecision{adapters: []string{"alpha"}},
+		},
+		{
+			name:    "two adapters, whatever order they arrive in",
+			changed: []string{"adapters/mid/ops.go", "adapters/alpha/ops.go"},
+			want:    scopeDecision{adapters: []string{"alpha", "mid"}},
+		},
+		{
+			name:    "shared code keeps every baseline",
+			changed: []string{"adapters/alpha/ops.go", "internal/adapter/client.go"},
+			want:    scopeDecision{},
+		},
+		{
+			name:    "bookkeeping alone narrows nothing",
+			changed: []string{"CHANGELOG.md", "docs/capabilities.json"},
+			want:    scopeDecision{},
+		},
+		{
+			name:    "a directory carrying no manifest keeps every baseline",
+			changed: []string{"adapters/wip/ops.go"},
+			want:    scopeDecision{},
+		},
+		{
+			name:    "nothing changed",
+			changed: nil,
+			want:    scopeDecision{},
+		},
+		{
+			name:    "a widening path outranks the bookkeeping beside it",
+			changed: []string{"CHANGELOG.md", "adapters/alpha/adapter.json"},
+			want:    scopeDecision{full: true},
+		},
+		{
+			name:    "a widening path is found wherever it sits",
+			changed: []string{"adapters/alpha/ops.go", ".github/workflows/version-matrix.yml"},
+			want:    scopeDecision{full: true},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := scopeFrom(root, tc.changed)
+			if got.full != tc.want.full ||
+				strings.Join(got.adapters, ",") != strings.Join(tc.want.adapters, ",") {
+				t.Errorf("scopeFrom = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRunScopeWritesTheWorkflowOutputs pins the bytes the workflow step
+// appends to $GITHUB_OUTPUT. An adapters key the tool cannot fill is
+// omitted rather than emitted empty: the workflow reads its absence as
+// "every baseline", while an empty value would reach -adapters as an
+// error.
+func TestRunScopeWritesTheWorkflowOutputs(t *testing.T) {
+	root := t.TempDir()
+	writeAdapter(t, root, "alpha", `{"id":"alpha","verified":[{"engine_version":"1","image":"a:1","baseline":true}]}`)
+
+	tests := []struct {
+		name    string
+		changed string
+		want    string
+	}{
+		{
+			name:    "an adapter-local change with its bookkeeping",
+			changed: "adapters/alpha/ops.go\ndocs/capabilities.json\nCHANGELOG.md\n",
+			want:    "full=0\nadapters=alpha\n",
+		},
+		{
+			name:    "a change to what is claimed",
+			changed: "adapters/alpha/adapter.json\n",
+			want:    "full=1\n",
+		},
+		{
+			name:    "a change to shared code",
+			changed: "internal/adapter/client.go\n",
+			want:    "full=0\n",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := run([]string{"-root", root, "-scope"},
+				strings.NewReader(tc.changed), &out, io.Discard); err != nil {
+				t.Fatalf("run -scope: %v", err)
+			}
+			if got := out.String(); got != tc.want {
+				t.Errorf("scope outputs = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWorkflowDelegatesTheScopeDecision keeps the tested decision and the
+// running one the same thing. Shell in a workflow is the one place in
+// this repository no test can reach, so the rule is that it holds no
+// decision at all.
+func TestWorkflowDelegatesTheScopeDecision(t *testing.T) {
+	path := filepath.Join("..", "..", "..", ".github", "workflows", "version-matrix.yml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read workflow: %v", err)
+	}
+	if !strings.Contains(string(raw), scopeInvocation) {
+		t.Errorf("%s does not call %q — the scope decision this file tests would not be the one CI makes",
+			path, scopeInvocation)
 	}
 }
 
