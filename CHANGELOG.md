@@ -11,6 +11,38 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **A VictoriaMetrics adapter** (`adapters/victoriametrics` 0.1.0), the
+  sixteenth engine. It restores `vmbackup` outputs in three forms: one
+  backup directory (`victoriametrics_backup`), a tar archive of one
+  (`victoriametrics_backup_tar`, plain or gzip), or the newest of a
+  directory of them (`victoriametrics_backup_dir`, ranked by the instant
+  each backup's own metadata states rather than by file times a copy
+  would reset). Four measured fences carry it. A copy of a live
+  `-storageDataPath` is refused by name — it carries the server's lock
+  and scratch directories, and it is the dangerous artifact precisely
+  because it starts and serves every sample in a quiet moment. A backup
+  without the `backup_complete.ignore` marker vmbackup writes last is
+  refused, without reaching for the `-skipBackupCompleteCheck` flag the
+  tool itself offers. A part named in a partition's `parts.json` but
+  absent from the artifact is refused host-side, before a byte is
+  transferred, with the engine's own startup check as the backstop for an
+  archive the host could only walk for markers. And the restored server's
+  own series count refuses a well-formed zero, because `vmrestore`
+  restores a truncated backup silently (measured). The sandbox pins
+  `-retentionPeriod=100y`: the engine keeps one month by default, so a
+  restored 90-day history would otherwise serve 48 of its 89 samples with
+  nothing reporting the loss — the survey in #166 applied to a new engine
+  before its first line of code. Checks are MetricsQL through `promtool`
+  as a query client, travelling as one argv element, because a
+  form-encoded query decodes `.+` as `. ` and answers zero on a populated
+  server (measured). A drill needs the server, `vmrestore` and a client in
+  one image and VictoriaMetrics ships them apart, so the README documents
+  a four-line wrapper that also ties their versions together. Zero core
+  changes, conformance 16/16, verified against VictoriaMetrics 1.150 and
+  1.120.
+
 ### Fixed
 
 - **A TimescaleDB drill no longer lets the restored database trim itself**
