@@ -75,12 +75,29 @@ CI restores from; which of them ran on the last push is our business.
 
 | Trigger | What runs | Why |
 | --- | --- | --- |
-| A pull request whose every changed file sits under adapter directories | the baseline version of each touched adapter | An adapter is an external process nobody imports, so its change cannot alter another adapter's restore; the gate proves exactly what changed, and its clock stays short as the catalog grows. |
+| A pull request whose every changed file sits under adapter directories, bookkeeping aside | the baseline version of each touched adapter | An adapter is an external process nobody imports, so its change cannot alter another adapter's restore; the gate proves exactly what changed, and its clock stays short as the catalog grows. |
 | Every other pull request | the baseline version of every adapter, one job each | Shared code can affect any restore, and the everyday gate has to stay minutes, not hours, or it stops being a gate people wait for. |
 | A pull request touching a manifest, the matrix tool, or the workflow | every listed version | The change that edits a claim is the one that has to prove it, and asking a reviewer to remember that is not a mechanism. This row wins over the two above: a manifest change is adapter-local and still runs everything. |
 | Weekly, on schedule | every listed version | Engine images move under us — a new patch release, a changed entrypoint, a dropped tool — and this is what notices. |
 | Every `v*` tag, before artifacts are built | every listed version | A release publishes the manifest. The claims in it are re-earned by that commit rather than inherited from whenever the schedule last ran. |
 | On demand (`workflow_dispatch`) | every listed version | For the change that adds or removes a version, so it is proven before merge rather than discovered by the schedule. |
+
+*Bookkeeping* means `docs/capabilities.json` and `CHANGELOG.md`, and the
+exception is what makes the first row reachable at all. An adapter's
+source may not change without its `adapterVersion` moving, moving it
+regenerates the capability statement, and a change worth releasing writes
+a changelog entry too — so without this, an adapter-local pull request
+would carry two non-adapter files and widen every time, leaving the
+narrowing to fire for test-only changes alone. Neither file can alter
+what a restore job does: the matrix is derived from the manifests, and a
+manifest change is already the row below.
+
+The decision is made by `internal/tools/versionmatrix -scope`, which
+reads the changed paths and answers with the scope; the workflow supplies
+the paths and reads the answer back. It lives there rather than in the
+workflow's shell because every row of this table is then a test case, and
+shell inside a workflow is the one place in this repository no test
+reaches.
 
 Every run uses `fail-fast: false`. One version failing is information
 about that version; hiding the rest behind it is not.
