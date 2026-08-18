@@ -54,28 +54,38 @@ func kindHandler(t *testing.T, b kindBehavior) func(verbCall) (any, *protoError)
 		case slices.Contains(args.Argv, pingURI):
 			return stdoutExec("1\n"), nil
 		case args.Argv[0] == "mongosh":
-			eval := args.Argv[len(args.Argv)-1]
-			if b.gateEvals != nil {
-				*b.gateEvals = append(*b.gateEvals, eval)
-			}
-			if b.gateExit != 0 {
-				return execValue{ExitCode: b.gateExit, StderrB64: b64(b.gateStderr)}, nil
-			}
-			switch eval {
-			case userCountEval:
-				count := b.userCount
-				if count == "" {
-					count = "2"
-				}
-				return stdoutExec(count + "\n"), nil
-			case orphanedRoleRefsEval:
-				return stdoutExec(b.orphans), nil
-			}
-			t.Fatalf("unexpected mongosh eval: %s", eval)
+			return kindEvalResponse(t, b, args.Argv[len(args.Argv)-1]), nil
 		}
 		t.Fatalf("unexpected exec: %v", args.Argv)
 		return nil, nil
 	}
+}
+
+// kindEvalResponse answers one mongosh expression. The TTL pin runs before
+// every restore and is not a gate, so it is answered ahead of the gate
+// scripting — which keeps the gate cases measuring gates.
+func kindEvalResponse(t *testing.T, b kindBehavior, eval string) any {
+	if eval == ttlPinEval {
+		return stdoutExec("1\n")
+	}
+	if b.gateEvals != nil {
+		*b.gateEvals = append(*b.gateEvals, eval)
+	}
+	if b.gateExit != 0 {
+		return execValue{ExitCode: b.gateExit, StderrB64: b64(b.gateStderr)}
+	}
+	switch eval {
+	case userCountEval:
+		count := b.userCount
+		if count == "" {
+			count = "2"
+		}
+		return stdoutExec(count + "\n")
+	case orphanedRoleRefsEval:
+		return stdoutExec(b.orphans)
+	}
+	t.Fatalf("unexpected mongosh eval: %s", eval)
+	return nil
 }
 
 // oplogSuccessStderr is what mongorestore logs when it replays a captured
@@ -98,9 +108,10 @@ func TestProvisionWithUsers(t *testing.T) {
 	if !f.OK {
 		t.Fatalf("final = %+v", f)
 	}
-	// readiness, put_file, mongorestore, account count, orphaned roles
-	if len(calls) != 5 {
-		t.Errorf("calls = %d, want 5", len(calls))
+	// readiness, ttl pin, put_file, mongorestore, account count,
+	// orphaned roles
+	if len(calls) != 6 {
+		t.Errorf("calls = %d, want 6", len(calls))
 	}
 	if i := slices.Index(argv, "--restoreDbUsersAndRoles"); i < 0 {
 		t.Errorf("restore argv = %v, want --restoreDbUsersAndRoles", argv)
@@ -155,10 +166,11 @@ func TestProvisionWithOplog(t *testing.T) {
 	if !f.OK {
 		t.Fatalf("final = %+v", f)
 	}
-	// readiness, put_file, mongorestore — the oplog verdict is read from
-	// the restore's own output, so it costs no extra sandbox call.
-	if len(calls) != 3 {
-		t.Errorf("calls = %d, want 3", len(calls))
+	// readiness, ttl pin, put_file, mongorestore — the oplog verdict is
+	// read from the restore's own output, so it costs no extra sandbox
+	// call.
+	if len(calls) != 4 {
+		t.Errorf("calls = %d, want 4", len(calls))
 	}
 	if !slices.Contains(argv, "--oplogReplay") {
 		t.Errorf("restore argv = %v, want --oplogReplay", argv)

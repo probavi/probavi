@@ -295,7 +295,7 @@
       "id": "mongodb",
       "name": "MongoDB",
       "status": "experimental",
-      "adapter_version": "0.4.0",
+      "adapter_version": "0.5.0",
       "engine": {
         "id": "mongodb",
         "name": "MongoDB"

@@ -5,9 +5,11 @@ package main_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -183,6 +185,169 @@ func TestCorruptArchiveVerdict(t *testing.T) {
 
 // buildAdapterOnPath builds the adapter binary and puts it on PATH under
 // its protocol name.
+// The TTL fixture: an hour's expiry over documents two hours old, so the
+// artifact carries documents a restored server considers expired the
+// moment it sees them. An hour-long session TTL in yesterday's backup is
+// the everyday version of this; a ninety-day audit collection in a backup
+// older than that is the compliance one.
+const (
+	ttlDatabase   = "drill"
+	ttlCollection = "sessions"
+	ttlControl    = "orders"
+	ttlDocs       = 500
+)
+
+// ttlPassesJS reads the server's own count of TTL passes. Number() flattens
+// the 64-bit shape mongosh prints so the answer parses as an integer.
+const ttlPassesJS = `print(Number(db.serverStatus().metrics.ttl.passes))`
+
+// TestTTLExpiredDocumentsSurviveTheDrill is the measured heart of the TTL
+// pin. Without it MongoDB deletes every expired document about a minute
+// after the sandbox starts — from a background thread, in one pass, while
+// mongorestore reports success — so what a drill proved would depend on
+// how long the restore took. The test proves both halves: the documents
+// survive a monitor that cannot run, and the same documents disappear the
+// moment the monitor is allowed to, which is what makes the first half
+// mean something.
+func TestTTLExpiredDocumentsSurviveTheDrill(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	provider := docker.New(nil)
+	fixture := filepath.Join(t.TempDir(), "ttl.archive")
+	makeTTLArchive(t, ctx, provider, fixture)
+
+	sbx := freshSandbox(t, ctx, provider)
+	runner, err := adapter.New("mongodb", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	if _, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "mongodump", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx); err != nil {
+		t.Fatalf("provision: %v — a backup of expired documents is a healthy backup", err)
+	}
+	if got := ttlCount(t, ctx, sbx, ttlCollection); got != ttlDocs {
+		t.Fatalf("restored %d of the %d expired documents the backup holds", got, ttlDocs)
+	}
+
+	// Not merely slow: on a one-second cycle the monitor would run several
+	// times over the window below, and it still never runs at all.
+	mustEval(t, ctx, sbx, "admin",
+		`print(db.adminCommand({setParameter: 1, ttlMonitorSleepSecs: 1}).ok)`)
+	assertNoTTLPassWithin(t, ctx, sbx, 5*time.Second)
+	if got := ttlCount(t, ctx, sbx, ttlCollection); got != ttlDocs {
+		t.Errorf("%d of %d documents survived the pinned monitor", got, ttlDocs)
+	}
+
+	// And now the half that keeps the other honest: let the monitor run
+	// and the same documents go, which is exactly what an unpinned drill
+	// would have recorded as a successful restore.
+	mustEval(t, ctx, sbx, "admin",
+		`print(db.adminCommand({setParameter: 1, ttlMonitorEnabled: true}).ok)`)
+	awaitTTLPass(t, ctx, sbx, 30*time.Second)
+	if got := ttlCount(t, ctx, sbx, ttlCollection); got != 0 {
+		t.Errorf("%d documents left after a TTL pass — the fixture was not expiry-eligible, "+
+			"so the assertions above proved nothing", got)
+	}
+	if got := ttlCount(t, ctx, sbx, ttlControl); got != ttlDocs {
+		t.Errorf("the control collection holds %d of %d documents — a TTL pass took "+
+			"documents no index had marked", got, ttlDocs)
+	}
+}
+
+// makeTTLArchive dumps a server holding already-expired documents. The
+// seed's own monitor is pinned off first: without that the fixture engine
+// deletes the documents before mongodump reaches them, and the artifact
+// this test needs is precisely the one a real server produced while they
+// were still live.
+func makeTTLArchive(t *testing.T, ctx context.Context, provider *docker.Provider, dest string) {
+	t.Helper()
+	seed, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+	awaitReady(t, ctx, seed)
+	mustEval(t, ctx, seed, "admin",
+		`print(db.adminCommand({setParameter: 1, ttlMonitorEnabled: false}).ok)`)
+
+	seedJS := fmt.Sprintf(`db.%s.createIndex({createdAt: 1}, {expireAfterSeconds: 3600});
+const stale = new Date(Date.now() - 2 * 3600 * 1000);
+const docs = [];
+for (let i = 0; i < %d; i++) docs.push({_id: i, createdAt: stale});
+db.%s.insertMany(docs);
+db.%s.insertMany(docs.map(d => ({_id: d._id, at: d.createdAt})));
+print(db.%s.countDocuments({}));`,
+		ttlCollection, ttlDocs, ttlCollection, ttlControl, ttlCollection)
+	if got := evalJSON(t, ctx, seed, ttlDatabase, seedJS); got != strconv.Itoa(ttlDocs) {
+		t.Fatalf("seeded %s documents, want %d", got, ttlDocs)
+	}
+	mustExec(t, ctx, seed, "mongodump", "--host", "127.0.0.1", "--archive=/tmp/ttl.archive")
+	copyOut(t, ctx, seed, "/tmp/ttl.archive", dest)
+}
+
+// mustEval runs one mongosh expression that has to answer ok.
+func mustEval(t *testing.T, ctx context.Context, sbx *docker.Sandbox, database, js string) {
+	t.Helper()
+	if got := evalJSON(t, ctx, sbx, database, js); got != "1" {
+		t.Fatalf("eval %q answered %q, want 1", js, got)
+	}
+}
+
+// ttlCount counts what a collection holds right now.
+func ttlCount(t *testing.T, ctx context.Context, sbx *docker.Sandbox, collection string) int {
+	t.Helper()
+	out := evalJSON(t, ctx, sbx, ttlDatabase,
+		fmt.Sprintf(`print(db.%s.countDocuments({}))`, collection))
+	n, err := strconv.Atoi(out)
+	if err != nil {
+		t.Fatalf("count of %s = %q: %v", collection, out, err)
+	}
+	return n
+}
+
+// ttlPasses reads how many times the monitor has run since the server
+// started — the difference between a monitor that ran and deleted nothing
+// and one that never ran at all.
+func ttlPasses(t *testing.T, ctx context.Context, sbx *docker.Sandbox) int {
+	t.Helper()
+	out := evalJSON(t, ctx, sbx, "admin", ttlPassesJS)
+	n, err := strconv.Atoi(out)
+	if err != nil {
+		t.Fatalf("ttl passes = %q: %v", out, err)
+	}
+	return n
+}
+
+// assertNoTTLPassWithin fails the moment the monitor runs, rather than
+// only noticing at the end of the window.
+func assertNoTTLPassWithin(t *testing.T, ctx context.Context, sbx *docker.Sandbox, window time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(window)
+	for time.Now().Before(deadline) {
+		if passes := ttlPasses(t, ctx, sbx); passes != 0 {
+			t.Fatalf("the TTL monitor ran %d time(s) with the pin in place", passes)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// awaitTTLPass waits for the monitor to run once it is allowed to.
+func awaitTTLPass(t *testing.T, ctx context.Context, sbx *docker.Sandbox, budget time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(budget)
+	for time.Now().Before(deadline) {
+		if ttlPasses(t, ctx, sbx) > 0 {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("the TTL monitor never ran within %s of being re-enabled", budget)
+}
+
 func buildAdapterOnPath(t *testing.T, ctx context.Context) {
 	t.Helper()
 	binDir := t.TempDir()

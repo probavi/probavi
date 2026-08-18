@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "mongodb"
-	adapterVersion = "0.4.0"
+	adapterVersion = "0.5.0"
 
 	// defaultDatabase is the connection database when the drill config
 	// does not name one: admin always exists, so healthchecks and the
@@ -108,7 +108,16 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if perr != nil {
 		return nil, perr
 	}
-	logger.Info("engine ready", "seconds", readySeconds)
+	// A sandbox is ready for a drill only once it has stopped expiring the
+	// artifact (see ttl.go), so the pin's measured cost belongs to
+	// readiness — and it has to happen before the restore, because the
+	// background pass runs on the server's clock, not the drill's.
+	pinSeconds, perr := pinTTLMonitor(ctx, c)
+	if perr != nil {
+		return nil, perr
+	}
+	readySeconds += pinSeconds
+	logger.Info("engine ready", "seconds", readySeconds, "ttl_monitor", "pinned off")
 
 	archiveInSandbox := scratch + "/probavi-restore.archive"
 	put, perr := c.putFile(ctx, putFileArgs{SourcePath: src.path, DestPath: archiveInSandbox, Mode: "0600"})

@@ -248,6 +248,12 @@ func happyExecResponse(t *testing.T, call verbCall, readyCalls *int, wantGzip bo
 	args := parseExec(t, call)
 	switch args.Argv[0] {
 	case "mongosh":
+		if args.Argv[len(args.Argv)-1] == ttlPinEval {
+			if strings.Join(args.Argv, " ") != strings.Join(ttlPinArgv, " ") {
+				t.Errorf("ttl pin argv = %v, want %v", args.Argv, ttlPinArgv)
+			}
+			return stdoutExec("1\n")
+		}
 		want := []string{"mongosh", "--quiet", "--norc", pingURI, "--eval", pingEval}
 		if strings.Join(args.Argv, " ") != strings.Join(want, " ") {
 			t.Errorf("readiness argv = %v", args.Argv)
@@ -307,8 +313,8 @@ func TestProvisionHappyPath(t *testing.T) {
 	if !f.OK {
 		t.Fatalf("final = %+v", f)
 	}
-	if len(calls) != 4 { // ready fail, ready ok, put_file, mongorestore
-		t.Errorf("calls = %d, want 4", len(calls))
+	if len(calls) != 5 { // ready fail, ready ok, ttl pin, put_file, mongorestore
+		t.Errorf("calls = %d, want 5", len(calls))
 	}
 	assertProvisionResult(t, f.Payload)
 }
@@ -360,6 +366,85 @@ func TestProvisionGzipArchive(t *testing.T) {
 	}
 	if res.Connection.Database != "admin" {
 		t.Errorf("database = %s, want the admin default", res.Connection.Database)
+	}
+}
+
+// ttlPinArgv is the one command that stops the sandbox from expiring the
+// artifact. It is spelled out here rather than built from the adapter's
+// pieces so that changing the command has to change this line too.
+var ttlPinArgv = []string{"mongosh", "--quiet", "--norc",
+	"--host", "127.0.0.1", "--port", "27017", "admin", "--eval", ttlPinEval}
+
+// TestProvisionPinsTheTTLMonitorBeforeRestoring pins the order the fix
+// depends on. MongoDB's TTL thread runs on the server's clock, not the
+// drill's, so a pin issued after the restore leaves exactly the window
+// this change exists to close — the longer the restore, the more of the
+// artifact is gone before anything reads it.
+func TestProvisionPinsTheTTLMonitorBeforeRestoring(t *testing.T) {
+	fixture := writeFixture(t, "FAKE-MONGODUMP-BYTES")
+	readyCalls := 0
+	_, calls, exit := driveOp(t, "provision", provisionPayload(fixture, "{}"),
+		happyProvisionHandler(t, fixture, &readyCalls, false))
+	if exit != 0 {
+		t.Fatalf("provision exit = %d", exit)
+	}
+	pin, restore := -1, -1
+	for i, call := range calls {
+		if call.Verb != "exec" {
+			continue
+		}
+		argv := parseExec(t, call).Argv
+		switch {
+		case argv[len(argv)-1] == ttlPinEval:
+			pin = i
+		case argv[0] == "mongorestore":
+			restore = i
+		}
+	}
+	if pin < 0 {
+		t.Fatal("provision never disabled the TTL monitor")
+	}
+	if restore < 0 {
+		t.Fatal("provision never restored")
+	}
+	if pin > restore {
+		t.Errorf("TTL monitor pinned at call %d, after the restore at call %d", pin, restore)
+	}
+}
+
+// TestProvisionRefusesAnUnpinnableTTLMonitor holds the deliberate choice
+// behind the pin: a drill that cannot stop the engine expiring the
+// artifact fails loudly instead of recording whatever survived the clock.
+// The message names the parameter, so a server that renamed it says which
+// one rather than leaving an operator to guess.
+func TestProvisionRefusesAnUnpinnableTTLMonitor(t *testing.T) {
+	fixture := writeFixture(t, "FAKE-MONGODUMP-BYTES")
+	line, calls, exit := driveOp(t, "provision", provisionPayload(fixture, "{}"),
+		func(call verbCall) (any, *protoError) {
+			if call.Verb != "exec" {
+				t.Fatalf("unexpected verb %s — the artifact must not move before the pin", call.Verb)
+			}
+			args := parseExec(t, call)
+			if args.Argv[len(args.Argv)-1] == ttlPinEval {
+				return errExec(1, "MongoServerError: attempted to set unrecognized "+
+					"parameter [ttlMonitorEnabled], use help:true to see options"), nil
+			}
+			return stdoutExec("1\n"), nil
+		})
+	f := parseFinal(t, line)
+	if exit != 0 || f.OK {
+		t.Fatalf("exit=%d final=%+v", exit, f)
+	}
+	if f.Error.Code != "invalid_request" {
+		t.Errorf("code = %s (%s), want invalid_request", f.Error.Code, f.Error.Message)
+	}
+	if !strings.Contains(f.Error.Message, "ttlMonitorEnabled") {
+		t.Errorf("message = %q, want it to name the parameter", f.Error.Message)
+	}
+	for _, call := range calls {
+		if call.Verb == "exec" && parseExec(t, call).Argv[0] == "mongorestore" {
+			t.Error("the drill restored anyway — an unpinnable engine must stop it first")
+		}
 	}
 }
 
