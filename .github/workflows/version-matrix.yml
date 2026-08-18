@@ -22,8 +22,9 @@ on:
   # A pull request that edits what is claimed, or the machinery that turns
   # a claim into a job, widens to the full matrix; one whose changes all
   # sit under adapter directories — bookkeeping every such change carries
-  # with it aside — narrows to those adapters' baselines. The rule lives
-  # in internal/tools/versionmatrix, where it is tested case by case.
+  # with it aside — narrows to those adapters, and there runs every
+  # version they claim rather than the baseline alone. The rule lives in
+  # internal/tools/versionmatrix, where it is tested case by case.
   pull_request:
   schedule:
     # Weekly, offset from the other scheduled workflows so a slow matrix
@@ -77,6 +78,10 @@ jobs:
           fi
           git diff --name-only "$BASE_SHA"...HEAD |
             go run ./internal/tools/versionmatrix -scope >> "$GITHUB_OUTPUT"
+      # Narrowed to an adapter, the run takes that adapter's whole column:
+      # the baseline alone cannot exercise a variant image, and a version
+      # nobody ran on the pull request that wrote the code is a version
+      # the pull request did not prove (docs/engine-versions.md §3).
       - name: read the versions the manifests claim
         id: list
         env:
@@ -85,7 +90,7 @@ jobs:
           if [ "${{ steps.scope.outputs.full }}" = "1" ]; then
             echo "targets=$(go run ./internal/tools/versionmatrix)" >> "$GITHUB_OUTPUT"
           elif [ -n "$SCOPED_ADAPTERS" ]; then
-            echo "targets=$(go run ./internal/tools/versionmatrix -baselines-only -adapters "$SCOPED_ADAPTERS")" >> "$GITHUB_OUTPUT"
+            echo "targets=$(go run ./internal/tools/versionmatrix -adapters "$SCOPED_ADAPTERS")" >> "$GITHUB_OUTPUT"
           else
             echo "targets=$(go run ./internal/tools/versionmatrix -baselines-only)" >> "$GITHUB_OUTPUT"
           fi

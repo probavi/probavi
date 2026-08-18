@@ -134,8 +134,8 @@ func filterAdapters(targets []target, list string) ([]target, error) {
 }
 
 // scopeDecision is what a pull request's changed paths imply: the whole
-// matrix, every adapter's baseline, or the baselines of the adapters the
-// change actually touched.
+// matrix, every adapter's baseline, or every version claimed by the
+// adapters the change actually touched.
 type scopeDecision struct {
 	full     bool
 	adapters []string
@@ -177,6 +177,10 @@ func bookkeeping(path string) bool {
 // directory that carries a manifest, so a work-in-progress directory, a
 // shared-code change, or a path nobody anticipated keeps the full
 // baseline set rather than quietly shrinking the gate.
+//
+// What it narrows is which adapters run, never which of their versions:
+// a change to an adapter can affect any engine version that adapter
+// claims, and the baseline alone cannot exercise a variant image at all.
 func scopeFrom(root string, changed []string) scopeDecision {
 	var touched []string
 	seen := map[string]bool{}

@@ -75,7 +75,7 @@ CI restores from; which of them ran on the last push is our business.
 
 | Trigger | What runs | Why |
 | --- | --- | --- |
-| A pull request whose every changed file sits under adapter directories, bookkeeping aside | the baseline version of each touched adapter | An adapter is an external process nobody imports, so its change cannot alter another adapter's restore; the gate proves exactly what changed, and its clock stays short as the catalog grows. |
+| A pull request whose every changed file sits under adapter directories, bookkeeping aside | **every version each touched adapter claims** | An adapter is an external process nobody imports, so its change cannot alter another adapter's restore — but it can affect any version of its own. The gate proves exactly what changed, and its clock stays bounded by one adapter's column instead of the whole catalog. |
 | Every other pull request | the baseline version of every adapter, one job each | Shared code can affect any restore, and the everyday gate has to stay minutes, not hours, or it stops being a gate people wait for. |
 | A pull request touching a manifest, the matrix tool, or the workflow | every listed version | The change that edits a claim is the one that has to prove it, and asking a reviewer to remember that is not a mechanism. This row wins over the two above: a manifest change is adapter-local and still runs everything. |
 | Weekly, on schedule | every listed version | Engine images move under us — a new patch release, a changed entrypoint, a dropped tool — and this is what notices. |
@@ -91,6 +91,18 @@ would carry two non-adapter files and widen every time, leaving the
 narrowing to fire for test-only changes alone. Neither file can alter
 what a restore job does: the matrix is derived from the manifests, and a
 manifest change is already the row below.
+
+The narrowing has **one dimension, and only one**: which adapters run,
+never which of their versions. A change to an adapter can break any
+engine version that adapter claims, and a variant image — a
+`timescale/timescaledb`, a `pgvector/pgvector`, a `percona/percona-server`
+— cannot be exercised by the baseline at all, which §1 already requires
+of every variant entry. Two measured reminders of what version narrowing
+would hide: the valkey append-only work failed on 9.0 and 9.1 alone
+(`valkey-check-aof` misreads the `VALKEY`-magic base a 9.x rewrite
+writes), and the TimescaleDB policy pin lives in a code path the
+`postgres` baseline never reaches. A version nobody ran on the pull
+request that wrote the code is a version that pull request did not prove.
 
 The decision is made by `internal/tools/versionmatrix -scope`, which
 reads the changed paths and answers with the scope; the workflow supplies
