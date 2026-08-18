@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "prometheus"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 
 	// workDirName is created under the provider's scratch directory — the
 	// one directory the provider guarantees writable (the official images
@@ -31,6 +31,24 @@ const (
 	// on restored production data is acceptable.
 	listenAddr = "127.0.0.1:9090"
 	serverURL  = "http://" + listenAddr
+
+	// The sandbox server must not apply a retention policy to the artifact
+	// it was handed. With neither retention flag set the server applies its
+	// default 15-day window at TSDB open and deletes every block lying
+	// wholly outside it — measured: a snapshot spanning 30 days lost two of
+	// its four blocks, removed from the restored copy on disk before any
+	// check could read them. Retention states what a running server should
+	// keep; a drill proves what the backup holds, and the operator's own
+	// policy is already expressed in which blocks the snapshot contains.
+	//
+	// retentionTime is the largest value the server accepts: 100y starts,
+	// 1000y is refused outright ("duration out of range"), and 0 does not
+	// disable retention at all — it reads as unset and restores the 15-day
+	// default (all measured, on both verified versions).
+	retentionTime = "100y"
+	// retentionSize is disabled today by default; pinning it keeps the
+	// sandbox's behaviour independent of that default ever changing.
+	retentionSize = "0"
 
 	readinessBudget = 2 * time.Minute
 	readinessPoll   = 500 * time.Millisecond
@@ -348,8 +366,9 @@ func recoverCensus(ctx context.Context, c *core, dataDir string) (snapshotInfo, 
 // startEngine writes the server's empty config, launches it in the
 // background on the restored data, and waits for readiness — which flips
 // only after the TSDB has opened, so this wait is the engine accepting
-// connections in the §7 sense. The config scrapes nothing: the restored
-// server serves the backup, it must not collect.
+// connections in the §7 sense. The config scrapes nothing and retention
+// is pinned off (see retentionTime): the restored server serves the
+// backup, it must not collect — and must not expire it either.
 func startEngine(ctx context.Context, c *core, workDir, dataDir string) (float64, *protoError) {
 	cfgPath := path.Join(workDir, "prometheus.yml")
 	logPath := path.Join(workDir, "prometheus.log")
@@ -362,8 +381,10 @@ func startEngine(ctx context.Context, c *core, workDir, dataDir string) (float64
 		return 0, protoErr("internal", false, "write server config: %s", firstLine(stderr))
 	}
 	script := fmt.Sprintf(
-		`prometheus --config.file=%s --storage.tsdb.path=%s --web.listen-address=%s >%s 2>&1 </dev/null &`,
-		cfgPath, dataDir, listenAddr, logPath)
+		`prometheus --config.file=%s --storage.tsdb.path=%s --web.listen-address=%s `+
+			`--storage.tsdb.retention.time=%s --storage.tsdb.retention.size=%s `+
+			`>%s 2>&1 </dev/null &`,
+		cfgPath, dataDir, listenAddr, retentionTime, retentionSize, logPath)
 	start, _, stderr2, perr := c.exec(ctx, execArgs{Argv: []string{"sh", "-c", script}})
 	if perr != nil {
 		return 0, perr

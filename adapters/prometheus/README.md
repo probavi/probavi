@@ -104,6 +104,21 @@ zero-ingress (`--network none`, no ports expressible). Its config
 scrapes nothing — the restored server serves the backup, it must not
 collect.
 
+It also runs with **retention disabled**
+(`--storage.tsdb.retention.time=100y --storage.tsdb.retention.size=0`).
+A server started without those flags applies its default 15-day window
+when the TSDB opens and *deletes* every block lying wholly outside it —
+measured: a snapshot covering 30 days lost two of its four blocks from
+the restored copy before a single check ran. Retention states what a
+running server should keep; a drill proves what the backup holds, and
+the operator's own policy is already expressed in which blocks the
+snapshot contains. The trigger is the snapshot's own span rather than
+its age: one taken a minute ago loses blocks if it covers more than the
+window, while a year-old one covering two days does not. (Should you
+ever pin these yourself, note that `retention.time=0` does not disable
+retention — the server reads it as unset and restores the same 15-day
+default.)
+
 ## Checks: the PromQL dialect, evaluated at the backup's own instant
 
 Prometheus has no SQL. The declared runner passes the check text to
