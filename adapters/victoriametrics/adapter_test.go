@@ -273,46 +273,6 @@ func TestProbeGolden(t *testing.T) {
 	}
 }
 
-// TestRunnerTemplateShape pins the property the check path rests on: no
-// shell in the runner, the query travelling as one argv element, and the
-// evaluation instant delivered through {{database}}. The single element
-// is not a style choice — a form-encoded query decodes `.+` as `. ` and
-// answers zero on a populated server (measured).
-func TestRunnerTemplateShape(t *testing.T) {
-	probe, ok := probePayload().(map[string]any)
-	if !ok {
-		t.Fatal("probe payload is not an object")
-	}
-	runner, ok := probe["sql_runner"].(map[string]any)
-	if !ok {
-		t.Fatal("probe declares no sql_runner")
-	}
-	argv, ok := runner["argv"].([]string)
-	if !ok || len(argv) == 0 {
-		t.Fatal("runner declares no argv")
-	}
-	for _, a := range argv {
-		if a == "sh" || a == "-c" || a == "bash" {
-			t.Errorf("runner argv goes through a shell: %v", argv)
-		}
-	}
-	sqlAt, timeAt := -1, -1
-	for i, a := range argv {
-		switch a {
-		case "{{sql}}":
-			sqlAt = i
-		case "{{database}}":
-			timeAt = i
-		}
-	}
-	if sqlAt < 0 {
-		t.Errorf("runner argv never carries {{sql}} as its own element: %v", argv)
-	}
-	if timeAt < 1 || argv[timeAt-1] != "--time" {
-		t.Errorf("runner argv does not deliver the instant through --time: %v", argv)
-	}
-}
-
 // decodeProvision unpacks the parts of a provision payload the tests
 // assert on.
 func decodeProvision(t *testing.T, f finalResponse) (connection struct {

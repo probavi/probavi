@@ -132,9 +132,24 @@ states, delivered through the protocol's `{{database}}` placeholder:
 checks:
   - name: history_survived
     sql: sum(count_over_time(probavi_history[90d]))
+    expect: "12960"
   - name: targets_were_up
     sql: count(count_over_time(up[1h]))
+    expect: "3"
 ```
+
+`expect` is required and compared against the runner's whole output, so a
+check has to name one number. The runner prints the sample **value** and
+nothing else — one line per series — so aggregate to a single series
+(`count`, `sum`) and the comparison is the number you would read off a
+graph. Labels are not part of the row, and neither is the evaluation
+instant.
+
+That last point is the fix in issue #175: the runner used to print
+promtool's annotated sample (`{} => 45886 @[1787113801]`), which no
+`expect` could match, and the trailing instant changes with every backup —
+so no literal could be written that matched twice. §6.1 of the protocol
+requires undecorated rows; the adapter now delivers them.
 
 **Why a client binary and not `wget`.** The obvious one-liner —
 `wget --post-data="query=…"` — sends a form-encoded body, in which `+`
