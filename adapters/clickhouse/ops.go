@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "clickhouse"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.2.0"
 
 	// defaultDatabase is ClickHouse's own default: it always exists, so the
 	// healthcheck and the sql_runner have a valid target before anything is
@@ -304,26 +304,13 @@ func prepareBackupDir(ctx context.Context, c *core, dir string) *protoError {
 // codes, and none of them is 91.
 const notRestoredExit = 91
 
-// restoreScript replays the archive and then proves the engine said so.
-//
-// RESTORE ALL is the one statement that covers every artifact shape:
-// measured against ClickHouse 26.3, it restores a `BACKUP DATABASE`
-// archive as readily as a `BACKUP ALL` one, so the adapter never has to
-// know what the operator backed up.
-//
-// The status check lives here rather than in adapter code for the same
-// reason the mysql adapter's completeness gate does: an exit code is a
-// verdict the sandbox reaches, and a verdict reached inside the sandbox is
-// one this adapter cannot accidentally soften while reading output.
-const restoreScript = `
-out=$(clickhouse-client --host 127.0.0.1 --user "$1" --database "$2" --query "$3") || exit $?
-printf '%s\n' "$out" | grep -q RESTORED || exit 91
-`
-
+// execRestore replays the archive in the two passes retention.go
+// explains, with the engine's own retention policy pinned off between
+// them.
 func execRestore(ctx context.Context, c *core) (*execValue, []byte, *protoError) {
-	query := fmt.Sprintf("RESTORE ALL FROM File('%s')", restoreArchiveName)
+	structure, pin, data := restoreStatements()
 	val, _, stderr, perr := c.exec(ctx, execArgs{
-		Argv: []string{"sh", "-c", restoreScript, "sh", defaultUser, defaultDatabase, query},
+		Argv: []string{"sh", "-c", restoreScript, "sh", defaultUser, defaultDatabase, structure, pin, data},
 	})
 	if perr != nil {
 		return nil, nil, perr
@@ -339,6 +326,9 @@ func mapRestoreFailure(exitCode int, stderr []byte) *protoError {
 	if exitCode == notRestoredExit {
 		return protoErr("restore_failed", false,
 			"clickhouse accepted the RESTORE statement but reported no RESTORED status for the archive")
+	}
+	if exitCode == pinRefusedExit {
+		return refusedPin(stderr)
 	}
 	line := verdictLine(stderr)
 	switch {

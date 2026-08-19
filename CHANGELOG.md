@@ -11,6 +11,25 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **ClickHouse drills no longer let the sandbox expire the artifact they
+  are proving** (`adapters/clickhouse` 0.2.0). A `TTL` clause states what
+  a running server should keep; a backup that spent a night in storage
+  holds rows that were inside their TTL when it was taken and are past it
+  by the drill, and the restored server deletes them exactly as production
+  would. Measured on both verified images: a table whose rows had all
+  expired went from 60 rows to 0, one where some had from 200 to 146, a
+  `TTL … GROUP BY` rollup from 60 to 10, and a column TTL blanked its
+  payload while leaving the row count untouched — the quiet case a census
+  would not catch. `RESTORE ALL` reported success for every one of them.
+  The restore now runs in two passes with `SYSTEM STOP TTL MERGES`
+  between them, because the lock only covers tables that already exist and
+  the restore is what creates them; a sandbox that refuses the statement
+  fails the drill instead of recording a database that deleted part of
+  itself. Third engine of the class opened by the Prometheus report in
+  0.16.0.
+
 ## [0.16.0] - 2026-08-18
 
 One field report set the whole cycle's direction. A Prometheus drill
