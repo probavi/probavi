@@ -363,6 +363,107 @@ func TestCorruptAOFVerdict(t *testing.T) {
 	}
 }
 
+// expiringKeyTTL is how long the fixture's keys live. It only has to
+// outlast writing them and saving the artifact; the drill then waits it
+// out, so it is as short as that leaves room for.
+const expiringKeyTTL = 10 * time.Second
+
+// TestExpiredKeysFailTheDrillInsteadOfPassingAsEmpty is this adapter's
+// half of issue #166. Redis stores an absolute instant with every
+// expiring key, so a backup drilled after those instants serves none of
+// them — the engine drops them as it reads the artifact and says so in
+// its own counters. Nothing used to read those counters, and a drill of
+// an empty server reported a successful restore.
+//
+// The fixture is every operator who keeps a keyspace of sessions or
+// caches: all keys expiring, and a backup that outlived them.
+func TestExpiredKeysFailTheDrillInsteadOfPassingAsEmpty(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := verifiedImage(t)
+	provider := docker.New(nil)
+
+	rdb := filepath.Join(t.TempDir(), "dump.rdb")
+	expiry := makeExpiringRDBFixture(t, ctx, provider, image, rdb)
+
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	// A redis sandbox starts in seconds, so unlike the slower engines
+	// this wait is the whole premise rather than a formality.
+	select {
+	case <-ctx.Done():
+		t.Fatal("cancelled while waiting for the fixture's keys to expire")
+	case <-time.After(time.Until(expiry)):
+	}
+
+	runner, err := adapter.New("redis", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	_, err = runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "redis_rdb", Path: rdb},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+
+	var aerr *adapter.Error
+	if err == nil || !errors.As(err, &aerr) || aerr.Code != "restore_failed" {
+		t.Fatalf("provision error = %v, want restore_failed for a drill with nothing to prove", err)
+	}
+	for _, want := range []string{"holds no keys", "at least 100", "not damaged"} {
+		if !strings.Contains(aerr.Message, want) {
+			t.Errorf("message = %q, want it to carry %q", aerr.Message, want)
+		}
+	}
+}
+
+// makeExpiringRDBFixture saves an artifact whose every key is alive when
+// it is written and dead by the time a drill reads it, and reports the
+// instant after which none of them can be served.
+func makeExpiringRDBFixture(t *testing.T, ctx context.Context, provider *docker.Provider,
+	image, dest string) time.Time {
+	t.Helper()
+	seed, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+
+	seedScript := `set -e
+mkdir -p /tmp/seedrdb
+redis-server --daemonize yes --dir /tmp/seedrdb --dbfilename dump.rdb --appendonly no \
+  --save "" --logfile /tmp/seedrdb.log
+i=0
+until redis-cli -e ping >/dev/null 2>&1; do
+  i=$((i+1)); [ "$i" -gt 60 ] && { tail -n 5 /tmp/seedrdb.log >&2; exit 1; }
+  sleep 1
+done
+redis-cli -e eval "for i=1,100 do redis.call('SET','session:'..i,'v'..i,'PX',10000) end return 1" 0 >/dev/null
+held=$(redis-cli -e dbsize)
+[ "$held" = "100" ] || { echo "fixture holds $held keys, want 100" >&2; exit 1; }
+redis-cli -e save >/dev/null`
+	res, err := seed.Exec(ctx, sandbox.ExecRequest{Argv: []string{"sh", "-c", seedScript}})
+	if err != nil {
+		t.Fatalf("seed exec: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("seed fixture: exit %d: %s", res.ExitCode, res.Stderr)
+	}
+	// The keys were written before the save, so counting from here is the
+	// safe side of their expiry.
+	expiry := time.Now().Add(expiringKeyTTL + 2*time.Second)
+	if out, err := exec.CommandContext(ctx, "docker", "cp",
+		seed.ID()+":/tmp/seedrdb/dump.rdb", dest).CombinedOutput(); err != nil {
+		t.Fatalf("extract fixture: %v: %s", err, out)
+	}
+	return expiry
+}
+
 // makeAOFFixture seeds a real server with append-only persistence on,
 // forces a rewrite so the set holds a genuine base, writes one more key
 // so the incremental tail carries data of its own, and copies the

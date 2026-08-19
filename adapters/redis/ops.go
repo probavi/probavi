@@ -14,7 +14,7 @@ import (
 
 const (
 	adapterName    = "redis"
-	adapterVersion = "0.3.0"
+	adapterVersion = "0.4.0"
 
 	// Where the restored server serves inside the sandbox. No TLS and no
 	// auth: a Probavi sandbox is zero-ingress (--network none, no ports
@@ -143,6 +143,16 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	logger.Info("engine serving restored data",
 		"load_seconds", restoreSeconds, "ready_seconds", readySeconds)
 
+	census, censusSeconds, perr := readKeyCensus(ctx, c)
+	if perr != nil {
+		return nil, perr
+	}
+	if census.serving == 0 && census.carried() > 0 {
+		return nil, refusedEmptyKeyspace(census)
+	}
+	logger.Info("keyspace census", "carried_at_least", census.carried(),
+		"serving", census.serving, "expired_at_load", census.expired)
+
 	return map[string]any{
 		"connection": map[string]any{
 			"scheme": "redis", "host": "127.0.0.1", "port": defaultPort,
@@ -157,7 +167,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		"timings": map[string]any{
 			"engine_ready_seconds": readySeconds,
 			"transfer_seconds":     transferSeconds,
-			"restore_seconds":      restoreSeconds,
+			"restore_seconds":      restoreSeconds + censusSeconds,
 		},
 		"state": src.state(),
 	}, nil
