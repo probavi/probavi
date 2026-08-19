@@ -132,9 +132,25 @@ instead of an empty "now" hours after the backup was taken:
 checks:
   - name: targets_were_up
     sql: count(up == 1)
+    expect: "3"
   - name: samples_survived
-    sql: sum(max_over_time(prometheus_tsdb_head_samples_appended_total[1h]))
+    sql: sum(count_over_time(probavi_history[90d]))
+    expect: "12960"
 ```
+
+`expect` is required and compared against the runner's whole output, so a
+check has to name one number. The runner prints the sample **value** and
+nothing else — one line per series — so aggregate to a single series
+(`count`, `sum`) and the comparison is the number you would read off a
+graph. Labels are not part of the row, and neither is the evaluation
+instant.
+
+That last point is the fix in issue #175: the runner used to print
+promtool's annotated sample (`{} => 45886 @[1787113801]`), which no
+`expect` could match, and the trailing instant changes with every backup —
+so no literal could be written that matched twice. §6.1 of the protocol
+requires undecorated rows; the adapter now delivers them.
+
 
 Built-in checks that generate SQL (`row_count`, `table_exists`,
 `freshness`) do not apply to this adapter — the same trade the mongodb

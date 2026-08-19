@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -250,25 +249,6 @@ func TestProbeGolden(t *testing.T) {
 	}
 	if !bytes.Equal(append(line, '\n'), want) {
 		t.Errorf("probe response deviates from golden:\n got: %s\nwant: %s", line, bytes.TrimSpace(want))
-	}
-}
-
-// TestRunnerTemplateShape pins the property the check path rests on: no
-// shell in the runner, the PromQL travelling as one argv element, and the
-// evaluation instant delivered through {{database}} so checks read the
-// backup's data instead of an empty now.
-func TestRunnerTemplateShape(t *testing.T) {
-	probe, ok := probePayload().(map[string]any)
-	if !ok {
-		t.Fatal("probe payload is not an object")
-	}
-	runner, ok := probe["sql_runner"].(map[string]any)
-	if !ok {
-		t.Fatal("sql_runner is not an object")
-	}
-	want := []string{"promtool", "query", "instant", "--time", "{{database}}", serverURL, "{{sql}}"}
-	if got, ok := runner["argv"].([]string); !ok || !reflect.DeepEqual(got, want) {
-		t.Errorf("sql_runner argv = %v, want %v", runner["argv"], want)
 	}
 }
 

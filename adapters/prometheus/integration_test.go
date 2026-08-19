@@ -17,6 +17,8 @@ import (
 
 	"github.com/probavi/probavi/internal/adapter"
 	"github.com/probavi/probavi/internal/capabilities"
+	"github.com/probavi/probavi/internal/checks"
+	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/sandbox"
 	"github.com/probavi/probavi/internal/sandbox/docker"
 )
@@ -179,9 +181,9 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 
 	// The check dialect this adapter documents: PromQL through the
 	// probe-declared template, evaluated at the backup's own instant.
-	assertCheck(t, ctx, sbx, probe, res.Connection.Database, "count(up)", "=> 1 @")
+	assertCheck(t, ctx, sbx, probe, res.Connection.Database, "count(up)", "1")
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database,
-		"sum(max_over_time(up[1h]))", "=> 1 @")
+		"sum(max_over_time(up[1h]))", "1")
 
 	teardown, err := runner.Teardown(ctx, res.State, "completed", sbx)
 	if err != nil {
@@ -231,7 +233,7 @@ func TestArchiveDrillUnpacksAndServes(t *testing.T) {
 	if res.SourceIdentity.CreatedAt == nil {
 		t.Error("created_at = nil, want the archive's own claim")
 	}
-	assertCheck(t, ctx, sbx, probe, res.Connection.Database, "count(up)", "=> 1 @")
+	assertCheck(t, ctx, sbx, probe, res.Connection.Database, "count(up)", "1")
 }
 
 // TestCompactionWindowSnapshotPassesTheCensus reproduces issue #155
@@ -444,7 +446,7 @@ func TestLongHistorySnapshotSurvivesRetention(t *testing.T) {
 	// nothing anywhere reports a failure.
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database,
 		fmt.Sprintf("sum(count_over_time(%s[%dd]))", historyMetric, historySpanDays+5),
-		fmt.Sprintf("=> %d @", historySamples))
+		strconv.Itoa(historySamples))
 
 	health, err := runner.Healthcheck(ctx, &res.Connection, res.State, sbx)
 	if err != nil || !health.Healthy {
@@ -767,7 +769,7 @@ func resolveOwnClaim(dir string) (time.Time, error) {
 // and {{sql}} with the check text — and asserts the output carries the
 // wanted fragment.
 func assertCheck(t *testing.T, ctx context.Context, sbx *docker.Sandbox,
-	probe *adapter.ProbeResult, database, checkText, wantFragment string) {
+	probe *adapter.ProbeResult, database, checkText, want string) {
 	t.Helper()
 	argv := make([]string, 0, len(probe.SQLRunner.Argv))
 	for _, a := range probe.SQLRunner.Argv {
@@ -778,9 +780,12 @@ func assertCheck(t *testing.T, ctx context.Context, sbx *docker.Sandbox,
 	if err != nil {
 		t.Fatalf("runner exec: %v", err)
 	}
-	if out.ExitCode != 0 || !strings.Contains(string(out.Stdout), wantFragment) {
-		t.Fatalf("check %q = %q (exit %d, stderr %s), want it to carry %q",
-			checkText, out.Stdout, out.ExitCode, out.Stderr, wantFragment)
+	// Exact equality, not a fragment: this is what the core does with a
+	// check's expect (internal/checks), and comparing any other way here
+	// would hide the decoration issue #175 was about.
+	if got := strings.TrimSpace(string(out.Stdout)); out.ExitCode != 0 || got != want {
+		t.Fatalf("check %q = %q (exit %d, stderr %s), want exactly %q",
+			checkText, out.Stdout, out.ExitCode, out.Stderr, want)
 	}
 }
 
@@ -800,5 +805,77 @@ func destroy(t *testing.T, sbx *docker.Sandbox) {
 	t.Helper()
 	if err := sbx.Destroy(context.Background()); err != nil {
 		t.Errorf("destroy sandbox: %v", err)
+	}
+}
+
+// TestCustomCheckPassesThroughTheCore is issue #175 end to end, driven by
+// the core's own check machinery rather than by a fragment match.
+//
+// The defect was that `expect` is compared against the runner's whole
+// trimmed stdout, while the runner printed promtool's annotated sample —
+// so no custom check could pass, and none could ever be written to,
+// because the line ends with an evaluation instant that changes with every
+// backup.
+//
+// The counter-assertion matters as much as the first: an expect that is
+// wrong must still fail, or this would only prove that checks stopped
+// meaning anything.
+func TestCustomCheckPassesThroughTheCore(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := wrapperImage(t, ctx, verifiedImage(t))
+	provider := docker.New(nil)
+
+	fixture := filepath.Join(t.TempDir(), "snap")
+	makeFixtures(t, ctx, provider, image, fixture, "", "")
+
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("prometheus", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "prometheus_snapshot", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	deps := checks.Deps{
+		Exec:   sbx,
+		Runner: checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
+		Target: checks.Target{User: res.Connection.User, Database: res.Connection.Database},
+	}
+	query := "count(up)"
+	value := "1"
+
+	results, err := checks.Run(ctx, []config.Check{
+		{Name: "history_survived", SQL: query, Expect: config.ScalarFromString(value)},
+		{Name: "wrong_on_purpose", SQL: query, Expect: config.ScalarFromString(value + "0")},
+	}, deps)
+	if err != nil {
+		t.Fatalf("checks.Run: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %+v, want two", results)
+	}
+	if !results[0].OK {
+		t.Errorf("check %q = %+v, want it to pass — a custom check must be able to (#175)",
+			query, results[0])
+	}
+	if results[1].OK {
+		t.Errorf("a check expecting the wrong value passed: %+v", results[1])
 	}
 }

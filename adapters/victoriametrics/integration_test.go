@@ -16,6 +16,8 @@ import (
 
 	"github.com/probavi/probavi/internal/adapter"
 	"github.com/probavi/probavi/internal/capabilities"
+	"github.com/probavi/probavi/internal/checks"
+	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/sandbox"
 	"github.com/probavi/probavi/internal/sandbox/docker"
 )
@@ -267,7 +269,7 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 	// for.
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database,
 		fmt.Sprintf("sum(count_over_time(probavi_history[%dd]))", fixtureDays+10),
-		fmt.Sprintf("=> %d @", samples))
+		strconv.Itoa(samples))
 
 	teardown, err := runner.Teardown(ctx, res.State, "completed", sbx)
 	if err != nil {
@@ -296,13 +298,13 @@ func TestRetentionDoesNotTrimTheArtifact(t *testing.T) {
 	}
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database,
 		fmt.Sprintf("sum(count_over_time(probavi_history[%dd]))", fixtureDays+10),
-		fmt.Sprintf("=> %d @", samples))
+		strconv.Itoa(samples))
 
 	// And the server really is holding data the default would have
 	// dropped: the oldest sample is older than one month.
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database,
 		fmt.Sprintf("count(min_over_time(probavi_history[%dd]) offset 40d)", fixtureDays+10),
-		"=> 1 @")
+		"1")
 }
 
 // TestArchiveDrillUnpacksAndServes proves the tar kind end to end,
@@ -328,7 +330,7 @@ func TestArchiveDrillUnpacksAndServes(t *testing.T) {
 	}
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database,
 		fmt.Sprintf("sum(count_over_time(probavi_history[%dd]))", fixtureDays+10),
-		fmt.Sprintf("=> %d @", samples))
+		strconv.Itoa(samples))
 }
 
 // TestTruncatedBackupRefusesTheDrill covers the artifact's own
@@ -460,7 +462,7 @@ func removeOnePart(t *testing.T, backup string) string {
 // — exactly how internal/checks runs checks without engine knowledge —
 // and asserts the output carries the wanted fragment.
 func assertCheck(t *testing.T, ctx context.Context, sbx *docker.Sandbox,
-	probe *adapter.ProbeResult, database, checkText, wantFragment string) {
+	probe *adapter.ProbeResult, database, checkText, want string) {
 	t.Helper()
 	argv := make([]string, 0, len(probe.SQLRunner.Argv))
 	for _, a := range probe.SQLRunner.Argv {
@@ -471,9 +473,12 @@ func assertCheck(t *testing.T, ctx context.Context, sbx *docker.Sandbox,
 	if err != nil {
 		t.Fatalf("runner exec: %v", err)
 	}
-	if out.ExitCode != 0 || !strings.Contains(string(out.Stdout), wantFragment) {
-		t.Fatalf("check %q = %q (exit %d, stderr %s), want it to carry %q",
-			checkText, out.Stdout, out.ExitCode, out.Stderr, wantFragment)
+	// Exact equality, not a fragment: this is what the core does with a
+	// check's expect (internal/checks), and comparing any other way here
+	// would hide the decoration issue #175 was about.
+	if got := strings.TrimSpace(string(out.Stdout)); out.ExitCode != 0 || got != want {
+		t.Fatalf("check %q = %q (exit %d, stderr %s), want exactly %q",
+			checkText, out.Stdout, out.ExitCode, out.Stderr, want)
 	}
 }
 
@@ -495,5 +500,58 @@ func destroy(t *testing.T, sbx *docker.Sandbox) {
 	defer cancel()
 	if err := sbx.Destroy(ctx); err != nil {
 		t.Errorf("destroy sandbox: %v", err)
+	}
+}
+
+// TestCustomCheckPassesThroughTheCore is issue #175 end to end, driven by
+// the core's own check machinery rather than by a fragment match.
+//
+// The defect was that `expect` is compared against the runner's whole
+// trimmed stdout, while the runner printed promtool's annotated sample —
+// so no custom check could pass, and none could ever be written to,
+// because the line ends with an evaluation instant that changes with every
+// backup.
+//
+// The counter-assertion matters as much as the first: an expect that is
+// wrong must still fail, or this would only prove that checks stopped
+// meaning anything.
+func TestCustomCheckPassesThroughTheCore(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	rig := newRig(t, ctx)
+	fixture, samples := rig.fixture(t, ctx)
+	sbx, _, probe, res, err := rig.provision(t, ctx, "victoriametrics_backup", fixture)
+	if sbx != nil {
+		defer destroy(t, sbx)
+	}
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	deps := checks.Deps{
+		Exec:   sbx,
+		Runner: checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
+		Target: checks.Target{User: res.Connection.User, Database: res.Connection.Database},
+	}
+	query := fmt.Sprintf("sum(count_over_time(probavi_history[%dd]))", fixtureDays+10)
+	value := strconv.Itoa(samples)
+
+	results, err := checks.Run(ctx, []config.Check{
+		{Name: "history_survived", SQL: query, Expect: config.ScalarFromString(value)},
+		{Name: "wrong_on_purpose", SQL: query, Expect: config.ScalarFromString(value + "0")},
+	}, deps)
+	if err != nil {
+		t.Fatalf("checks.Run: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %+v, want two", results)
+	}
+	if !results[0].OK {
+		t.Errorf("check %q = %+v, want it to pass — a custom check must be able to (#175)",
+			query, results[0])
+	}
+	if results[1].OK {
+		t.Errorf("a check expecting the wrong value passed: %+v", results[1])
 	}
 }

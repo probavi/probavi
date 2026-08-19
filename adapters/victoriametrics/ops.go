@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "victoriametrics"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.2.0"
 
 	// workDirName is created under the provider's scratch directory — the
 	// one directory the provider guarantees writable.
@@ -58,6 +58,37 @@ const (
 // rather than an HTTP one-liner.
 const censusQuery = `count({__name__=~".+"})`
 
+// runnerScript is the declared check runner. It exists because §6.1 of the
+// protocol requires the runner to print "result rows to stdout, one row per
+// line, tab-separated columns, no decoration", and promtool prints an
+// annotated sample instead:
+//
+//	{} => 45886 @[1787113801.349]
+//	up{instance="127.0.0.1:9090", job="self"} => 1 @[1787113801.414]
+//	scalar: 3 @[1787170412.246]
+//
+// The core compares a check's `expect` against the runner's whole trimmed
+// stdout, so with the raw output no `expect` could ever match — and the
+// trailing instant changes with every backup, so no literal could be
+// written that matched twice. Custom checks were unusable (issue #175).
+//
+// The filter keys on the shape rather than the separator: the value is
+// always the field before the evaluation instant, and the instant is
+// always the last field. That reads a scalar (`scalar: 3 @[…]`) and a
+// vector sample the same way, and it is unmoved by a label value
+// containing the separator — `{x="a => b"} => 1 @[…]` still yields 1, all
+// measured. A line of any other shape fails the check loudly rather than
+// being passed through as decoration, which is the failure this script
+// exists to end.
+//
+// The query still travels as a single argv element, so no check text is
+// ever word-split or interpreted by the shell.
+const runnerScript = `out=$(promtool query instant --time "$1" ` + serverURL + ` "$2") || exit $?
+[ -n "$out" ] || exit 0
+printf '%s\n' "$out" | awk '
+  $NF ~ /^@\[[0-9.]+\]$/ { print $(NF-1); next }
+  { print "unexpected promtool output: " $0 > "/dev/stderr"; exit 1 }'`
+
 // probePayload reports identity and capabilities (§6.1). Probe must not
 // touch the sandbox and needs no credentials.
 func probePayload() any {
@@ -81,9 +112,11 @@ func probePayload() any {
 			// the restored data rather than an empty now (§6.1). The
 			// engine dialect is absorbed here, declaratively — the core
 			// never learns it.
-			"argv": []string{"promtool", "query", "instant",
-				"--time", "{{database}}", serverURL, "{{sql}}"},
-			"env": map[string]string{},
+			// The dialect is absorbed here, declaratively — the core
+			// never learns it — and so is promtool's decoration, which
+			// §6.1 does not allow a runner to print (see runnerScript).
+			"argv": []string{"sh", "-c", runnerScript, "sh", "{{database}}", "{{sql}}"},
+			"env":  map[string]string{},
 		},
 		"verbs_required": []string{"exec", "put_file"},
 	}

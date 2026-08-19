@@ -13,6 +13,24 @@ always called out explicitly.
 
 ### Fixed
 
+- **Custom checks work again on the Prometheus and VictoriaMetrics
+  adapters** (`adapters/prometheus` 0.4.0, `adapters/victoriametrics`
+  0.2.0). Both declared `promtool query instant` as their check runner,
+  and promtool prints an annotated sample — `{} => 45886 @[1787113801]` —
+  while the core compares a check's `expect` against the runner's whole
+  trimmed output. No custom check could pass, and none could be written
+  that ever would: the line ends with an evaluation instant that changes
+  with every backup. §6.1 of the adapter protocol requires a runner to
+  print result rows "with no decoration", so this was an adapter defect
+  rather than a missing protocol affordance. The runners now print the
+  sample value alone, one line per series, reading a scalar and a vector
+  sample the same way and unmoved by a label value containing the
+  separator; output of any other shape fails the check loudly instead of
+  reaching the core as if it were a value. Both READMEs' check examples
+  now run as written.
+
+### Fixed
+
 - **An etcd drill no longer lets the backup's leases expire under it**
   (`adapters/etcd` 0.2.0). A key attached to a lease exists only while
   somebody renews it, and on restore the lessor re-arms every lease with
