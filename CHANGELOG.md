@@ -13,6 +13,22 @@ always called out explicitly.
 
 ### Fixed
 
+- **A Cassandra drill no longer reports a table proven when it reads
+  nothing** (`adapters/cassandra` 0.2.0). Cassandra filters TTL'd cells at
+  read time, so a snapshot drilled after its own time-to-live serves less
+  than it holds: measured on the baseline image, a table with
+  `default_time_to_live = 60` went from 100 rows in the snapshot to 0 in
+  the drill, and one whose rows were half written `USING TTL 60` to 50 —
+  while `sstabledump` shows the artifact itself intact, every partition
+  present and marked expired. Unlike the four engines before it, this one
+  offers no policy to suspend: of the 358 `cassandra.*` system properties
+  the jar names, none makes a read return expired data. So the
+  post-restore probe, which used to accept an empty answer, now fails the
+  drill when the artifact's own sstables declare a time-to-live — a table
+  nobody ever wrote (no sstable) and a table whose rows were all deleted
+  (`TTL max: 0`) are both still accepted, measured. Fifth engine of the
+  class opened by the Prometheus report in 0.16.0.
+
 - **InfluxDB drills no longer let the sandbox enforce the backup's own
   retention** (`adapters/influxdb` 0.2.0). `influx restore` restores a
   bucket's retention period along with its data, and the restored server
