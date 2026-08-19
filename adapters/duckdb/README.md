@@ -154,6 +154,22 @@ changes the hash.
   key-handling design the first release does not assume; an encrypted
   file fails its opening read with the engine's own words.
 
+## Nothing expires between checks
+
+DuckDB is a library, not a server. The drill sandbox runs **no engine
+process between checks** — each check is one `duckdb` invocation — so there is
+nothing that could expire, compact or purge anything on its own while a
+drill is running.
+
+Measured on every verified version, to close the question rather than
+reason it away: a restored database left alone for twenty seconds is
+**byte-identical** afterwards, with no engine process in the sandbox. An
+integration test asserts the same thing on every drill, so the day this
+engine grows a background task, a red test says so.
+
+That is this adapter's line of the data-lifecycle survey (issue #166),
+which found nine other engines that do subtract from a restored artifact.
+
 ## Errors it reports
 
 | Situation | Code |

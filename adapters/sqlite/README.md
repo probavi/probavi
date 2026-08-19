@@ -162,6 +162,22 @@ ranks every regular file, SQL text having no magic to filter by.
   image* is a different claim than proving a backup restores; the drill
   refuses the pair rather than blurring the two.
 
+## Nothing expires between checks
+
+SQLite is a library, not a server. The drill sandbox runs **no engine
+process between checks** — each check is one `sqlite3` invocation — so there is
+nothing that could expire, compact or purge anything on its own while a
+drill is running.
+
+Measured on every verified version, to close the question rather than
+reason it away: a restored database left alone for twenty seconds is
+**byte-identical** afterwards, with no engine process in the sandbox. An
+integration test asserts the same thing on every drill, so the day this
+engine grows a background task, a red test says so.
+
+That is this adapter's line of the data-lifecycle survey (issue #166),
+which found nine other engines that do subtract from a restored artifact.
+
 ## Errors it reports
 
 | Situation | Code |

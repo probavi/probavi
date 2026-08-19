@@ -950,3 +950,133 @@ func makeChainFixture(t *testing.T, ctx context.Context, provider *docker.Provid
 	}
 	return dir
 }
+
+// TestTheEngineDisablesTemporalRetentionOnRestore closes this engine's
+// line of issue #166.
+//
+// SQL Server's per-row expiry is a system-versioned temporal table with a
+// HISTORY_RETENTION_PERIOD, cleaned by a background task. Measured on both
+// verified versions, the engine turns that task **off by itself** when a
+// database is restored — `is_temporal_history_retention_enabled` goes from
+// 1 on the source to 0 in the drill — while the table keeps declaring the
+// operator's own period. So the sibling adapters' pin has nothing to do
+// here.
+//
+// That is an upstream behaviour this adapter depends on without stating
+// it, which is exactly the shape that is worth a test: the day a release
+// stops doing it, this is what notices.
+//
+// The Agent is the other half of the question, and it answers itself: its
+// jobs live in msdb, and a drill restores one user database.
+func TestTheEngineDisablesTemporalRetentionOnRestore(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	provider := docker.New(nil)
+
+	fixture := filepath.Join(t.TempDir(), "temporal.bak")
+	makeTemporalFixture(t, ctx, provider, fixture)
+
+	sbx, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("mssql", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "bak", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	restored := res.Connection.Database
+
+	if got := drillQuery(t, ctx, sbx, "master",
+		"SELECT is_temporal_history_retention_enabled FROM sys.databases WHERE name='"+restored+"'"); got != "0" {
+		t.Errorf("temporal history retention = %q in the drill, want it off — the engine used to "+
+			"disable it on restore, and the drill relies on that", got)
+	}
+	// What the backup declared is still what a check reads.
+	if got := drillQuery(t, ctx, sbx, restored,
+		"SELECT CONVERT(varchar,history_retention_period) FROM sys.tables WHERE name='orders'"); got != "1" {
+		t.Errorf("declared retention period = %q, want the backup's own 1 DAY", got)
+	}
+	// And the history the artifact carried is all there.
+	if got := drillQuery(t, ctx, sbx, restored, "SELECT COUNT(*) FROM dbo.orders_history"); got != "50" {
+		t.Errorf("history rows = %q, want 50", got)
+	}
+	if got := drillQuery(t, ctx, sbx, restored, "SELECT COUNT(*) FROM dbo.orders"); got != "50" {
+		t.Errorf("current rows = %q, want 50", got)
+	}
+	// The Agent's jobs live in msdb, which a user-database drill never
+	// restores — so no schedule of the operator's can run here.
+	if got := drillQuery(t, ctx, sbx, "msdb", "SELECT COUNT(*) FROM dbo.sysjobs"); got != "0" {
+		t.Errorf("agent jobs in the drill = %q, want none", got)
+	}
+}
+
+// makeTemporalFixture backs up a database whose temporal history is older
+// than the retention period it declares — the shape a cleanup task would
+// act on if one were running.
+func makeTemporalFixture(t *testing.T, ctx context.Context, provider *docker.Provider, dest string) {
+	t.Helper()
+	seed, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+
+	startEngine(t, ctx, seed, seedPassword)
+	awaitReady(t, ctx, seed, seedPassword)
+	const versioningOn = "ALTER TABLE dbo.orders SET (SYSTEM_VERSIONING = ON " +
+		"(HISTORY_TABLE = dbo.orders_history, HISTORY_RETENTION_PERIOD = 1 DAY))"
+	for _, stmt := range []string{
+		"CREATE DATABASE shop",
+		"USE shop; CREATE TABLE dbo.orders (id INT PRIMARY KEY, total INT, " +
+			"SysStart DATETIME2 GENERATED ALWAYS AS ROW START NOT NULL, " +
+			"SysEnd DATETIME2 GENERATED ALWAYS AS ROW END NOT NULL, " +
+			"PERIOD FOR SYSTEM_TIME (SysStart, SysEnd)) WITH (SYSTEM_VERSIONING = ON " +
+			"(HISTORY_TABLE = dbo.orders_history, HISTORY_RETENTION_PERIOD = 1 DAY))",
+		"USE shop; INSERT INTO dbo.orders (id,total) SELECT TOP 50 " +
+			"ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), 10 FROM sys.all_objects",
+		// History rows are written by the engine, so backdating them means
+		// turning versioning off, inserting, and turning it back on — each
+		// its own batch, because the metadata change is not visible inside
+		// the one that made it.
+		"USE shop; ALTER TABLE dbo.orders SET (SYSTEM_VERSIONING = OFF)",
+		"USE shop; INSERT INTO dbo.orders_history (id,total,SysStart,SysEnd) SELECT id, 1, " +
+			"DATEADD(day,-30,SYSUTCDATETIME()), DATEADD(day,-20,SYSUTCDATETIME()) FROM dbo.orders",
+		"USE shop; " + versioningOn,
+		"BACKUP DATABASE shop TO DISK = N'/tmp/temporal.bak' WITH INIT, FORMAT",
+	} {
+		mustSQL(t, ctx, seed, seedPassword, stmt)
+	}
+
+	if out, err := exec.CommandContext(ctx, "docker", "cp",
+		seed.ID()+":/tmp/temporal.bak", dest).CombinedOutput(); err != nil {
+		t.Fatalf("extract fixture: %v: %s", err, out)
+	}
+}
+
+// drillQuery asks the restored engine one scalar question.
+func drillQuery(t *testing.T, ctx context.Context, sbx *docker.Sandbox, database, query string) string {
+	t.Helper()
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{
+		Argv: []string{"/opt/mssql-tools18/bin/sqlcmd", "-S", "127.0.0.1,1433", "-U", "sa",
+			"-C", "-b", "-l", "5", "-d", database, "-h", "-1", "-W", "-Q", "SET NOCOUNT ON; " + query},
+		Env: map[string]string{"SQLCMDPASSWORD": "Probavi!DrillSandbox0"},
+	})
+	if err != nil {
+		t.Fatalf("drill query %q: %v", query, err)
+	}
+	if out.ExitCode != 0 {
+		t.Fatalf("drill query %q: exit %d: %s%s", query, out.ExitCode, out.Stdout, out.Stderr)
+	}
+	return strings.TrimSpace(string(out.Stdout))
+}

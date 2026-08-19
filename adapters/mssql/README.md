@@ -359,6 +359,34 @@ the earlier of the two is chosen.
   script carries no timestamp of its own, so the pair's freshness rests on
   the member that can be dated.
 
+## The engine disables temporal retention on restore
+
+SQL Server's per-row expiry is a system-versioned temporal table with a
+`HISTORY_RETENTION_PERIOD`, cleaned by a background task. A drill must not
+run one — the artifact is what it is proving.
+
+It does not, and the reason is the engine's own: measured on both verified
+versions, `is_temporal_history_retention_enabled` is **1 on the source and
+0 in the drill**. SQL Server turns the cleanup task off when a database is
+restored, while the table goes on declaring the operator's period, so a
+check reading `sys.tables` sees the truth:
+
+| | on the source | in the drill |
+| --- | --- | --- |
+| `is_temporal_history_retention_enabled` | 1 | **0** |
+| the table's declared `HISTORY_RETENTION_PERIOD` | 1 DAY | 1 DAY |
+| history rows aged past it | 50 | 50 |
+
+**SQL Agent answers itself.** Its jobs live in `msdb`, and a drill restores
+one user database — measured, `msdb.dbo.sysjobs` is empty in the sandbox
+and the Agent service is not running in the official Linux images.
+
+This adapter therefore needs none of the pins its siblings grew in the
+data-lifecycle survey (issue #166). It does have an integration test for
+it, because the first line above is an upstream behaviour the drill relies
+on without stating it: the day a release stops disabling that task, a red
+test says so.
+
 ## Source params
 
 Set under `source.params` in the drill config.

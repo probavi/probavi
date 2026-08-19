@@ -4,11 +4,13 @@ package main_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -437,4 +439,107 @@ func destroy(t *testing.T, sbx *docker.Sandbox) {
 	if err := sbx.Destroy(context.Background()); err != nil {
 		t.Errorf("destroy sandbox: %v", err)
 	}
+}
+
+// TestNothingTouchesTheArtifactBetweenChecks closes this engine's line of
+// issue #166.
+//
+// DuckDB is a library, not a server: the drill sandbox runs no engine
+// process between checks, so nothing can expire, compact or purge on its
+// own. That is a structural answer rather than a measured one, which is
+// exactly why it deserves a test — the day this engine grows a background
+// task, this is what notices.
+//
+// The assertion is the restored file's own bytes: a row count could be
+// unchanged while something rewrote the file underneath it.
+func TestNothingTouchesTheArtifactBetweenChecks(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := wrapperImage(t, ctx, verifiedImage(t))
+	provider := docker.New(nil)
+
+	fixture := filepath.Join(t.TempDir(), "nightly.duckdb")
+	makeFixtures(t, ctx, provider, image, "restored-ok", fixture, "")
+
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("duckdb", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "duckdb_db", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	dbPath := restoredPath(t, res.State)
+	before := sandboxSum(t, ctx, sbx, dbPath)
+	select {
+	case <-ctx.Done():
+		t.Fatal("cancelled while watching the restored database")
+	case <-time.After(20 * time.Second):
+	}
+	if after := sandboxSum(t, ctx, sbx, dbPath); after != before {
+		t.Errorf("the restored database changed while nobody queried it: %s then %s", before, after)
+	}
+	if procs := engineProcesses(t, ctx, sbx); procs != 0 {
+		t.Errorf("%d engine processes run between checks — this engine had none", procs)
+	}
+}
+
+// restoredPath reads where the adapter left the restored database.
+func restoredPath(t *testing.T, state json.RawMessage) string {
+	t.Helper()
+	got := struct {
+		DBPath string `json:"db_path"`
+	}{}
+	if err := json.Unmarshal(state, &got); err != nil {
+		t.Fatalf("provision state: %v", err)
+	}
+	if got.DBPath == "" {
+		t.Fatal("provision state names no database file")
+	}
+	return got.DBPath
+}
+
+// sandboxSum hashes a file inside the sandbox.
+func sandboxSum(t *testing.T, ctx context.Context, sbx *docker.Sandbox, path string) string {
+	t.Helper()
+	res, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"sha256sum", path}})
+	if err != nil {
+		t.Fatalf("sha256sum %s: %v", path, err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("sha256sum %s: exit %d: %s", path, res.ExitCode, res.Stderr)
+	}
+	fields := strings.Fields(string(res.Stdout))
+	if len(fields) == 0 || len(fields[0]) != 64 {
+		t.Fatalf("sha256sum %s = %q", path, res.Stdout)
+	}
+	return fields[0]
+}
+
+// engineProcesses counts what runs in the sandbox that could touch the
+// artifact. A library engine leaves nothing behind between checks.
+func engineProcesses(t *testing.T, ctx context.Context, sbx *docker.Sandbox) int {
+	t.Helper()
+	res, err := sbx.Exec(ctx, sandbox.ExecRequest{
+		Argv: []string{"sh", "-c", "ps -eo comm 2>/dev/null | grep -c duckdb || true"}})
+	if err != nil {
+		t.Fatalf("ps: %v", err)
+	}
+	count, convErr := strconv.Atoi(strings.TrimSpace(string(res.Stdout)))
+	if convErr != nil {
+		t.Fatalf("process count = %q: %v", res.Stdout, convErr)
+	}
+	return count
 }
