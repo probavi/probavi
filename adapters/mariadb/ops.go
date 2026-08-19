@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "mariadb"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 
 	defaultUser     = "root"
 	defaultDatabase = "probavi"
@@ -102,7 +102,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		return provisionPhysical(ctx, c, req, src, logger)
 	}
 
-	readySeconds, perr := awaitEngine(ctx, c, user)
+	readySeconds, perr := prepareEngine(ctx, c, user)
 	if perr != nil {
 		return nil, perr
 	}

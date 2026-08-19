@@ -175,6 +175,8 @@ func physicalHandler(t *testing.T, sequence *[]string) func(verbCall) (any, *pro
 		}
 		args, stmt := lastArg(t, call)
 		switch {
+		case stmt == pinnedQuery:
+			return pinnedExec(), nil
 		case args.Argv[0] == "mariadb" && !started:
 			*sequence = append(*sequence, "client-idle")
 			return okExec(1), nil // idle: engine not running

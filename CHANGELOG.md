@@ -13,6 +13,24 @@ always called out explicitly.
 
 ### Fixed
 
+- **A MySQL or MariaDB drill no longer runs the backup's own scheduled
+  jobs** (`adapters/mysql` 0.12.0, `adapters/mariadb` 0.3.0). A dump taken
+  with `--events` carries the operator's `CREATE EVENT` statements, and a
+  purge event deletes rows in the drill exactly as it does in production:
+  measured, an artifact of ten rows and one such event held two rows five
+  seconds after the restore, the event arriving `ENABLED`. Whether it runs
+  is a default the two families disagree about — `mysql:8.4` and Percona
+  ship `event_scheduler=ON`, MariaDB ships it off, and MySQL turned it on
+  in 8.0 after years of the opposite — so the drill now pins it rather
+  than trusting the answer: `SET GLOBAL event_scheduler = OFF` before a
+  logical restore, a startup flag for the physical kind where a statement
+  would race the scheduler, and a refusal if the engine will not comply. A
+  server started with `--event-scheduler=DISABLED` is left alone. The
+  events keep the definitions and status the backup recorded, so checks
+  reading `information_schema.events` still see the operator's own
+  schedule. Eighth engine of the class opened by the Prometheus report in
+  0.16.0.
+
 - **A Redis or Valkey drill no longer reports a successful restore of an
   empty server** (`adapters/redis` 0.4.0, `adapters/valkey` 0.3.0). Both
   engines store an absolute instant with every expiring key, so a backup

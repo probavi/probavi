@@ -244,7 +244,7 @@
       "id": "mariadb",
       "name": "MariaDB",
       "status": "experimental",
-      "adapter_version": "0.2.0",
+      "adapter_version": "0.3.0",
       "engine": {
         "id": "mariadb",
         "name": "MariaDB"
@@ -391,7 +391,7 @@
       "id": "mysql",
       "name": "MySQL",
       "status": "experimental",
-      "adapter_version": "0.11.0",
+      "adapter_version": "0.12.0",
       "engine": {
         "id": "mysql",
         "name": "MySQL"

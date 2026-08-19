@@ -188,8 +188,8 @@ chown mysql:mysql %s`,
 func startEngine(ctx context.Context, c *core) (float64, *protoError) {
 	script := fmt.Sprintf(`set -e
 mkdir -p /var/run/mysqld && chown mysql:mysql /var/run/mysqld
-gosu mysql mariadbd --init-file=%s --log-error=%s >/dev/null 2>&1 </dev/null &`,
-		initFilePath, serverErrLog)
+gosu mysql mariadbd %s --init-file=%s --log-error=%s >/dev/null 2>&1 </dev/null &`,
+		eventSchedulerFlag, initFilePath, serverErrLog)
 	start, stderr, perr := execChecked(ctx, c, "sh", "-c", script)
 	if perr != nil {
 		return 0, perr
@@ -201,7 +201,13 @@ gosu mysql mariadbd --init-file=%s --log-error=%s >/dev/null 2>&1 </dev/null &`,
 	if perr != nil {
 		return 0, describeStartFailure(ctx, c, perr)
 	}
-	return start.DurationSeconds + readySeconds, nil
+	// The flag above is the pin; this is the server confirming it, which
+	// is what the drill is entitled to rest on (retention.go).
+	pinSeconds, perr := pinEventScheduler(ctx, c, defaultUser)
+	if perr != nil {
+		return 0, perr
+	}
+	return start.DurationSeconds + readySeconds + pinSeconds, nil
 }
 
 // serverErrLog is where the restored server writes its error log; the

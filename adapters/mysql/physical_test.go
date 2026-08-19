@@ -147,6 +147,8 @@ func physicalHandler(t *testing.T, sequence *[]string) func(verbCall) (any, *pro
 		}
 		args, stmt := lastArg(t, call)
 		switch {
+		case stmt == pinnedQuery:
+			return pinnedExec(), nil
 		case args.Argv[0] == "mysql" && !started:
 			*sequence = append(*sequence, "mysql-idle")
 			return okExec(1), nil // idle: engine not running

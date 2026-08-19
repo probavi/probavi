@@ -224,6 +224,9 @@ func compressedDumpHandler(t *testing.T, fixture string, loadArgv *[]string) fun
 			return putFileValue{BytesCopied: 60, DurationSeconds: 0.2}, nil
 		case "exec":
 			args, stmt := lastArg(t, call)
+			if stmt == pinnedQuery {
+				return pinnedExec(), nil
+			}
 			if stmt == "SELECT 1" || strings.HasPrefix(stmt, "CREATE DATABASE") {
 				return okExec(0), nil
 			}
@@ -290,6 +293,8 @@ func TestCompressedRestoreFailuresAreNamed(t *testing.T) {
 				return putFileValue{}, nil
 			}
 			switch _, stmt := lastArg(t, call); {
+			case stmt == pinnedQuery:
+				return pinnedExec(), nil
 			case stmt == "SELECT 1", strings.HasPrefix(stmt, "CREATE DATABASE"):
 				return okExec(0), nil
 			}
@@ -389,15 +394,11 @@ func compressedMembersHandler(t *testing.T, usersInSandbox, dumpInSandbox string
 		}
 		args, stmt := lastArg(t, call)
 		if args.Argv[0] == "sh" {
-			member := "dump"
-			if args.Argv[2] == compressedUsersLoadScript {
-				member = "users"
-			}
-			*order = append(*order, member)
-			if strings.Join(args.Argv, "\x00") != strings.Join(loads[member], "\x00") {
-				t.Errorf("%s load argv = %q, want %q", member, args.Argv, loads[member])
-			}
+			*order = append(*order, assertMemberLoad(t, args.Argv, loads))
 			return execValue{ExitCode: 0, DurationSeconds: 1.5}, nil
+		}
+		if stmt == pinnedQuery {
+			return pinnedExec(), nil
 		}
 		if stmt == "SELECT 1" || strings.HasPrefix(stmt, "SELECT COUNT(*) FROM (") {
 			return execValue{ExitCode: 0, StdoutB64: base64.StdEncoding.EncodeToString([]byte("1\n"))}, nil
@@ -405,4 +406,18 @@ func compressedMembersHandler(t *testing.T, usersInSandbox, dumpInSandbox string
 		// The remaining gate queries report nothing wrong.
 		return okExec(0), nil
 	}
+}
+
+// assertMemberLoad names the member a load argv belongs to and pins the
+// argv it ran under.
+func assertMemberLoad(t *testing.T, argv []string, loads map[string][]string) string {
+	t.Helper()
+	member := "dump"
+	if argv[2] == compressedUsersLoadScript {
+		member = "users"
+	}
+	if strings.Join(argv, "\x00") != strings.Join(loads[member], "\x00") {
+		t.Errorf("%s load argv = %q, want %q", member, argv, loads[member])
+	}
+	return member
 }

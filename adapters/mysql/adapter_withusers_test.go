@@ -81,6 +81,8 @@ func withUsersExec(t *testing.T, call verbCall, b withUsersBehavior) any {
 	}
 	stmt := args.Argv[len(args.Argv)-1]
 	switch {
+	case stmt == pinnedQuery:
+		return pinnedExec()
 	case stmt == "SELECT 1":
 		return execValue{ExitCode: 0, StdoutB64: base64.StdEncoding.EncodeToString([]byte("1\n"))}
 	case strings.HasPrefix(stmt, "CREATE DATABASE IF NOT EXISTS `shop`"):
@@ -141,10 +143,10 @@ func TestProvisionWithUsers(t *testing.T) {
 	if !f.OK {
 		t.Fatalf("final = %+v", f)
 	}
-	// readiness, put(users), replay, put(dump), create db, load dump,
-	// definer gate, view list, EXPLAIN batch, reachability gate
-	if len(calls) != 10 {
-		t.Errorf("calls = %d, want 10", len(calls))
+	// readiness, scheduler pin, put(users), replay, put(dump), create db,
+	// load dump, definer gate, view list, EXPLAIN batch, reachability gate
+	if len(calls) != 11 {
+		t.Errorf("calls = %d, want 11", len(calls))
 	}
 	if explains != 1 {
 		t.Errorf("EXPLAIN batches = %d, want exactly 1", explains)
@@ -196,27 +198,29 @@ func TestProvisionWithUsersFailures(t *testing.T) {
 		name     string
 		behavior withUsersBehavior
 		wantHas  string
+		// maxCalls includes the scheduler pin the flow now issues before
+		// anything else touches the artifact (retention.go).
 		maxCalls int
 	}{
 		{"application account collision",
 			withUsersBehavior{usersStderr: "ERROR 1396 (HY000) at line 3: Operation CREATE USER failed for 'app'@'%'"},
-			"app", 3},
+			"app", 4},
 		{"replay refused with silent stderr",
 			withUsersBehavior{usersExit: 1},
-			"mysql exited 1", 3},
+			"mysql exited 1", 4},
 		{"orphaned definers flagged",
 			withUsersBehavior{definers: "app@%\nreport@%\n"},
-			"app@%, report@%", 7},
+			"app@%, report@%", 8},
 		{"broken view flagged",
 			withUsersBehavior{views: "v_orders\n", explainExit: 1,
 				explainErr: "ERROR 1356 (HY000) at line 1: View 'shop.v_orders' references invalid table(s) or column(s) or function(s) or definer/invoker of view lack rights to use them"},
-			"restored view is not usable", 10},
+			"restored view is not usable", 11},
 		{"unreachable database flagged before the view check",
 			withUsersBehavior{views: "v_orders\n", reachCount: "0"},
-			"no restored account can reach database shop", 8},
+			"no restored account can reach database shop", 9},
 		{"gate query breaks",
 			withUsersBehavior{checkExit: 1, checkStderr: "ERROR 1045 (28000): Access denied for user 'root'@'localhost'"},
-			"principal-chain check failed", 7},
+			"principal-chain check failed", 8},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -256,9 +260,9 @@ func TestProvisionWithUsersSandboxFailure(t *testing.T) {
 	if exit != 0 || f.OK || f.Error.Code != "sandbox_error" {
 		t.Fatalf("exit=%d final=%+v, want the sandbox error to pass through untranslated", exit, f)
 	}
-	// readiness, put_file(users) — nothing after the dead sandbox
-	if len(calls) != 2 {
-		t.Errorf("calls = %d, want 2", len(calls))
+	// readiness, scheduler pin, put_file(users) — nothing after the dead sandbox
+	if len(calls) != 3 {
+		t.Errorf("calls = %d, want 3", len(calls))
 	}
 }
 
@@ -283,7 +287,7 @@ func TestProvisionCharsetOptions(t *testing.T) {
 					t.Errorf("create statement = %q, want %q", stmt, want)
 				}
 			}
-			if stmt == "SELECT 1" {
+			if stmt == "SELECT 1" || stmt == pinnedQuery {
 				return execValue{ExitCode: 0, StdoutB64: base64.StdEncoding.EncodeToString([]byte("1\n"))}, nil
 			}
 			return okExec(0), nil

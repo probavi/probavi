@@ -275,6 +275,8 @@ func happyExecResponse(t *testing.T, call verbCall, readyCalls *int) any {
 		return execValue{ExitCode: 0, DurationSeconds: 1.5}
 	}
 	switch {
+	case stmt == pinnedQuery:
+		return pinnedExec()
 	case stmt == "SELECT 1":
 		want := []string{"mysql", "-h", "127.0.0.1", "-u", "orders_admin", "-N", "-B", "-e", "SELECT 1"}
 		if strings.Join(args.Argv, " ") != strings.Join(want, " ") {
@@ -355,8 +357,8 @@ func TestProvisionHappyPath(t *testing.T) {
 	if !f.OK {
 		t.Fatalf("final = %+v", f)
 	}
-	if len(calls) != 5 { // ready fail, ready ok, put_file, create db, load
-		t.Errorf("calls = %d, want 5", len(calls))
+	if len(calls) != 6 { // ready fail, ready ok, scheduler pin, put_file, create db, load
+		t.Errorf("calls = %d, want 6", len(calls))
 	}
 	assertProvisionResult(t, f.Payload)
 }
@@ -367,6 +369,8 @@ func TestProvisionFailures(t *testing.T) {
 		return func(call verbCall) (any, *protoError) {
 			if call.Verb == "exec" {
 				switch _, stmt := lastArg(t, call); {
+				case stmt == pinnedQuery:
+					return pinnedExec(), nil
 				case stmt == "SELECT 1":
 					return okExec(0), nil
 				case strings.HasPrefix(stmt, "CREATE DATABASE"):

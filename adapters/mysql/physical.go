@@ -173,8 +173,8 @@ chown mysql:mysql %s`,
 func startEngine(ctx context.Context, c *core) (float64, *protoError) {
 	script := fmt.Sprintf(`set -e
 mkdir -p /var/run/mysqld && chown mysql:mysql /var/run/mysqld
-gosu mysql mysqld --daemonize --init-file=%s --pid-file=/tmp/probavi-mysqld.pid --log-error=/tmp/probavi-mysqld.err || { tail -n 20 /tmp/probavi-mysqld.err >&2; exit 1; }`,
-		initFilePath)
+gosu mysql mysqld --daemonize %s --init-file=%s --pid-file=/tmp/probavi-mysqld.pid --log-error=/tmp/probavi-mysqld.err || { tail -n 20 /tmp/probavi-mysqld.err >&2; exit 1; }`,
+		eventSchedulerFlag, initFilePath)
 	start, stderr, perr := execChecked(ctx, c, "sh", "-c", script)
 	if perr != nil {
 		return 0, perr
@@ -186,6 +186,13 @@ gosu mysql mysqld --daemonize --init-file=%s --pid-file=/tmp/probavi-mysqld.pid 
 	if perr != nil {
 		return 0, perr
 	}
+	// The flag above is the pin; this is the server confirming it, which
+	// is what the drill is entitled to rest on (retention.go).
+	pinSeconds, perr := pinEventScheduler(ctx, c, defaultUser)
+	if perr != nil {
+		return 0, perr
+	}
+	readySeconds += pinSeconds
 	return start.DurationSeconds + readySeconds, nil
 }
 

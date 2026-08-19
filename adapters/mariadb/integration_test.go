@@ -829,3 +829,107 @@ gzip -c partial.sql > partial.sql.gz`)
 		}
 	}
 }
+
+// TestRestoredEventsDoNotRunInTheDrill is this adapter's half of issue
+// #166. A dump taken with --events carries the backup's own scheduled
+// jobs, and an operator's purge event deletes rows in the drill exactly
+// as it does in production — measured, ten rows down to two five seconds
+// after the restore, with the event arriving ENABLED.
+//
+// MariaDB ships the scheduler off, so this drill turns it on through
+// the sandbox parameters — the configuration an operator can produce
+// today, and the one MySQL made its default in 8.0.
+func TestRestoredEventsDoNotRunInTheDrill(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	provider := docker.New(nil)
+
+	fixture := filepath.Join(t.TempDir(), "events.sql")
+	makeEventFixture(t, ctx, provider, fixture)
+
+	params := sandboxParams(t)
+	// MariaDB ships the scheduler off, so the exposure is one sandbox
+	// parameter away rather than the default — which is exactly how the
+	// drill must not depend on it.
+	params["command"] = "--event-scheduler=ON"
+	sbx, err := provider.Create(ctx, params)
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+	awaitReady(t, ctx, sbx)
+
+	runner, err := adapter.New("mariadb", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	if _, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "mariadb_dump", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+		Options: map[string]string{"database": "probavi"},
+	}, sbx); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	// The event arrived and is enabled: what the backup recorded is what a
+	// check reading information_schema.events sees. Only its execution is
+	// suspended.
+	if got := rootRows(t, ctx, sbx,
+		"SELECT status FROM information_schema.events WHERE event_schema='probavi'"); len(got) != 1 ||
+		!strings.EqualFold(got[0], "ENABLED") {
+		t.Errorf("restored event status = %v, want the ENABLED the backup carried", got)
+	}
+	if got := rootRows(t, ctx, sbx, "SELECT @@event_scheduler"); len(got) != 1 ||
+		(!strings.EqualFold(got[0], "OFF") && !strings.EqualFold(got[0], "DISABLED")) {
+		t.Errorf("scheduler = %v, want it suspended for the drill", got)
+	}
+
+	// Long enough that an event scheduled every second would have run many
+	// times over: measured, an unpinned sandbox is down to two rows within
+	// five seconds of the restore.
+	select {
+	case <-ctx.Done():
+		t.Fatal("cancelled while watching the restored rows")
+	case <-time.After(15 * time.Second):
+	}
+	if got := rootRows(t, ctx, sbx, "SELECT COUNT(*) FROM probavi.orders"); len(got) != 1 || got[0] != "10" {
+		t.Errorf("rows = %v, want all 10 — the drill ran the backup's purge event", got)
+	}
+}
+
+// makeEventFixture dumps a database whose rows an event would delete,
+// with --events so the artifact carries the job the way an operator's
+// backup does.
+func makeEventFixture(t *testing.T, ctx context.Context, provider *docker.Provider, dest string) {
+	t.Helper()
+	seed, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+
+	awaitReady(t, ctx, seed)
+	// The seed's own scheduler is suspended while the fixture is built:
+	// on the MySQL side it is on by default and would purge the rows
+	// before the dump ran, leaving an artifact that proves nothing. What
+	// this produces is an ordinary backup taken between two event runs.
+	seedSQL := `SET GLOBAL event_scheduler = OFF;
+CREATE DATABASE probavi;
+USE probavi;
+CREATE TABLE orders (id INT PRIMARY KEY, created DATETIME NOT NULL);
+INSERT INTO orders SELECT n, NOW() - INTERVAL n DAY FROM
+  (SELECT 1 n UNION SELECT 2 UNION SELECT 3 UNION SELECT 4 UNION SELECT 5
+   UNION SELECT 6 UNION SELECT 7 UNION SELECT 8 UNION SELECT 9 UNION SELECT 10) t;
+CREATE EVENT orders_purge ON SCHEDULE EVERY 1 SECOND
+  DO DELETE FROM orders WHERE created < NOW() - INTERVAL 3 DAY;`
+	mustExec(t, ctx, seed, "mariadb", "-h", "127.0.0.1", "-u", "root", "-e", seedSQL)
+	mustExec(t, ctx, seed, "mariadb-dump", "-h", "127.0.0.1", "-u", "root", "--events",
+		"--result-file=/tmp/events.sql", "probavi")
+
+	if out, err := exec.CommandContext(ctx, "docker", "cp",
+		seed.ID()+":/tmp/events.sql", dest).CombinedOutput(); err != nil {
+		t.Fatalf("extract fixture: %v: %s", err, out)
+	}
+}
