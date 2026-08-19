@@ -172,6 +172,18 @@ func argvOf(t *testing.T, call verbCall) []string {
 // provisionHandler simulates the idle sandbox through the whole flow,
 // recording a label per call.
 func provisionHandler(t *testing.T, sequence *[]string) func(verbCall) (any, *protoError) {
+	return provisionHandlerCensus(t, sequence, healthyCensus)
+}
+
+// healthyCensus is what a restored server answers INFO with when the
+// artifact's keys are all still alive — the real thing's field names and
+// CRLF line endings (measured).
+const healthyCensus = "# Persistence\r\nrdb_last_load_keys_expired:0\r\n" +
+	"rdb_last_load_keys_loaded:500\r\n# Keyspace\r\ndb0:keys=500,expires=0,avg_ttl=0\r\n"
+
+// provisionHandlerCensus is provisionHandler with the restored server's
+// account of its own load under the test's control.
+func provisionHandlerCensus(t *testing.T, sequence *[]string, census string) func(verbCall) (any, *protoError) {
 	started := false
 	return func(call verbCall) (any, *protoError) {
 		if call.Verb == "put_file" {
@@ -179,7 +191,7 @@ func provisionHandler(t *testing.T, sequence *[]string) func(verbCall) (any, *pr
 			return handlePut(t, call), nil
 		}
 		argv := argvOf(t, call)
-		label, value := classifyExec(argv, &started)
+		label, value := classifyExec(argv, &started, census)
 		if label == "" {
 			t.Fatalf("unexpected exec: %v", argv)
 		}
@@ -207,7 +219,7 @@ func handlePut(t *testing.T, call verbCall) any {
 
 // classifyExec labels one exec call of the happy path and returns its
 // simulated result; an empty label means the call was not expected.
-func classifyExec(argv []string, started *bool) (string, any) {
+func classifyExec(argv []string, started *bool, census string) (string, any) {
 	switch {
 	case argv[0] == "redis-server" && argv[1] == "--version":
 		return "version", outExec(engineVersionOut)
@@ -220,6 +232,8 @@ func classifyExec(argv []string, started *bool) (string, any) {
 	case argv[0] == "redis-server":
 		*started = true
 		return "start", execValue{ExitCode: 0, DurationSeconds: 0.2}
+	case argv[0] == "redis-cli" && argv[len(argv)-1] == "info":
+		return "census", outExec(census)
 	case argv[0] == "redis-cli":
 		return "ping", outExec("PONG\n")
 	}
@@ -288,7 +302,7 @@ func TestProvisionRestoresRDB(t *testing.T) {
 	if exit != 0 || !f.OK {
 		t.Fatalf("exit=%d final=%+v", exit, f)
 	}
-	want := "version|mkdir|put_file|check|start|ping"
+	want := "version|mkdir|put_file|check|start|ping|census"
 	if got := strings.Join(sequence, "|"); got != want {
 		t.Errorf("sequence = %s, want %s", got, want)
 	}
@@ -376,7 +390,7 @@ func TestProvisionRestoresAOF(t *testing.T) {
 	if exit != 0 || !f.OK {
 		t.Fatalf("exit=%d final=%+v", exit, f)
 	}
-	want := "version|mkdir|put_file|put_file|put_file|checkaof|start|ping"
+	want := "version|mkdir|put_file|put_file|put_file|checkaof|start|ping|census"
 	if got := strings.Join(sequence, "|"); got != want {
 		t.Errorf("sequence = %s, want %s", got, want)
 	}

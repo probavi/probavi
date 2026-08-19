@@ -594,7 +594,7 @@
       "id": "redis",
       "name": "Redis",
       "status": "experimental",
-      "adapter_version": "0.3.0",
+      "adapter_version": "0.4.0",
       "engine": {
         "id": "redis",
         "name": "redis"
@@ -705,7 +705,7 @@
       "id": "valkey",
       "name": "Valkey",
       "status": "experimental",
-      "adapter_version": "0.2.0",
+      "adapter_version": "0.3.0",
       "engine": {
         "id": "valkey",
         "name": "valkey"

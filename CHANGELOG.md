@@ -13,6 +13,21 @@ always called out explicitly.
 
 ### Fixed
 
+- **A Redis or Valkey drill no longer reports a successful restore of an
+  empty server** (`adapters/redis` 0.4.0, `adapters/valkey` 0.3.0). Both
+  engines store an absolute instant with every expiring key, so a backup
+  drilled after those instants serves none of them — measured on all nine
+  verified images, an artifact of 100 permanent and 100 expiring keys
+  served 100 either way: dropped as the RDB is read (the engine reports
+  `rdb_last_load_keys_expired`), or removed by the ordinary expiry cycle
+  seconds after an append-only load, where the counters report nothing at
+  all. Neither adapter ran a key census, so nothing said so. There is no
+  setting to suspend it, and the one shape that skips the discard — a
+  replica — is worse: it reports `DBSIZE 200` while every read misses.
+  The drill now reads the engine's own account of the load and fails when
+  the artifact carried keys and the restored server serves none. Seventh
+  engine of the class opened by the Prometheus report in 0.16.0.
+
 - **A Cassandra drill no longer reports a table proven when it reads
   nothing** (`adapters/cassandra` 0.2.0). Cassandra filters TTL'd cells at
   read time, so a snapshot drilled after its own time-to-live serves less

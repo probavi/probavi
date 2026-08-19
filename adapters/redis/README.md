@@ -73,6 +73,50 @@ carries no credentials. The server serves without auth inside a sandbox
 that has no network exposure whatsoever (`--network none`, no ports
 expressible).
 
+## Expiry: what a drill can and cannot prove
+
+Redis expires by wall clock, not by elapsed time. Every key with a TTL
+is stored with an **absolute instant**, and the artifact carries those
+instants unchanged — so a backup taken while its keys were alive holds
+keys that are dead by the time a drill reads it, and the restored server
+treats them exactly as a production server would.
+
+It happens twice over, by two different mechanisms. Both measured on every
+verified version, with 100 permanent keys beside 100 given a
+twenty-second expiry:
+
+| | at the backup | in the drill |
+| --- | --- | --- |
+| RDB kind — keys dropped as the artifact is read | 200 | **100** |
+| append-only kind — keys removed by the expiry cycle after load | 200 | **100** |
+
+The engine is candid about the first: `rdb_last_load_keys_loaded:100`,
+`rdb_last_load_keys_expired:100`, and a log line saying the same. The
+second is quieter — the base file is read as an append-only preamble,
+which skips the check entirely (`expired:0`, `loaded:200`), and the
+ordinary expiry cycle takes the keys seconds later.
+
+**There is nothing to switch off.** The discard is what a master does; the
+one shape that skips it is a replica, and that is worse rather than
+better. Measured: a replica started on the same artifact reports
+`DBSIZE 200` and `rdb_last_load_keys_expired:0` while `GET session:1`
+returns nothing. The keys are in the keyspace and unreadable — a count
+that lies is a worse foundation for evidence than a count that is short,
+so the sandbox stays a master.
+
+**What the drill does instead** is read the engine's own account of the
+load. The artifact carried `loaded + expired` keys; the server now serves
+what `INFO keyspace` adds up to. When that sum is zero and the artifact
+carried keys, the drill has nothing to prove anything with, and fails
+saying so rather than reporting a successful restore of an empty server.
+
+The residual is worth stating plainly: a backup that lost only *some* of
+its keys still serves keys, so the drill proceeds and proves what remains.
+No fence can do better — a threshold would be arbitrary, and no setting
+makes a server return an expired key. **Drill backups younger than their
+keys' time to live**; for a keyspace that is all sessions or caches, that
+is the only arrangement that proves anything.
+
 ## Checks: lines of redis-cli arguments
 
 Redis has no SQL, so the generating built-in checks (`row_count`,
