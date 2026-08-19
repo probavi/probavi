@@ -111,6 +111,43 @@ expressible). System indices (`.` -prefixed, the security plugin's
 among them) are excluded from the restore; they belong to the running
 node and collide with it by name (measured).
 
+## Lifecycle automation stays out of the drill
+
+Index State Management is OpenSearch's retention machinery: policies that
+roll over, shrink or **delete** indices as they age. A drill must not run
+one — the artifact is what it is proving, and a policy inherited from the
+backup can only subtract from it.
+
+It does not, and the reason is worth stating because it is not obvious:
+ISM keeps both the policies and the jobs that run them in
+`.opendistro-ism-config`, and the restore excludes every dot-index. So the
+automation stays in the artifact.
+
+Measured on both verified images, with a snapshot deliberately built to
+carry it — a policy whose only action is `delete`, attached to one index
+through the ISM API and to another through the per-index setting, snapshot
+taken with `include_global_state: true`:
+
+| | in the snapshot | in the drill |
+| --- | --- | --- |
+| `.opendistro-ism-config` | present | not restored |
+| ISM policies | 1 | **0** |
+| managed indices | 1 | **0** |
+| documents in each index | 3 | 3 |
+
+One detail travels and is inert: an index whose *settings* name a policy
+keeps `index.plugins.index_state_management.policy_id` after the restore.
+It names a policy the sandbox does not have, so nothing runs — the
+restored index is not managed, on either version.
+
+The dot-index exclusion is in this adapter for a different reason
+(collision with the running node's own system indices), so this property
+was nobody's stated intent. It is now: an integration test builds that
+snapshot and fails if any policy or managed index appears in the drill.
+Widen the restore pattern and it goes red — which is the only warning
+anyone would get before a drill began running someone's retention policy
+against the backup it is meant to prove.
+
 ## Checks: OpenSearch SQL through the bundled SQL plugin
 
 Checks are one OpenSearch SQL statement each, sent to the node's
