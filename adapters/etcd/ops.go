@@ -11,7 +11,7 @@ import (
 
 const (
 	adapterName    = "etcd"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.2.0"
 
 	// clientEndpoint is where the restored server serves inside the
 	// sandbox. No TLS and no auth: a Probavi sandbox is zero-ingress
@@ -139,6 +139,13 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		return nil, perr
 	}
 	logger.Info("engine serving restored data", "seconds", readySeconds)
+
+	leases, holdSeconds, perr := holdLeases(ctx, c)
+	if perr != nil {
+		return nil, perr
+	}
+	readySeconds += holdSeconds
+	logger.Info("leases held open for the drill", "leases", leases, "seconds", holdSeconds)
 
 	return map[string]any{
 		"connection": map[string]any{

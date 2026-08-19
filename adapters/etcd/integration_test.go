@@ -301,6 +301,135 @@ func buildAdapterOnPath(t *testing.T, ctx context.Context) {
 // makeSnapshotFixture seeds a real server in a wrapper container and takes
 // a genuine `etcdctl snapshot save` snapshot — the format with the
 // appended integrity hash, which is what the adapter restores.
+// leaseTTL is the fixture's lease. It only has to outlast seeding and the
+// snapshot; the drill then waits it out, so it is as short as that leaves
+// room for.
+const leaseTTL = 10
+
+// TestLeasedKeysSurviveTheDrill is this adapter's half of issue #166.
+//
+// Auto-compaction, the mechanism the survey expected, is off by default in
+// both verified versions and removes superseded revisions rather than live
+// keys. Leases are the mechanism that bites: a restored lease is re-armed
+// with its full time to live when the sandbox starts, and then runs out
+// mid-drill, taking every key attached to it — measured, 100 keys gone
+// twenty-seven seconds after the restore, with the drill reporting success.
+//
+// The plain keys beside them are the control: they must not move either
+// way, so a failure here names the leases rather than the restore.
+func TestLeasedKeysSurviveTheDrill(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := wrapperImage(t, ctx)
+	provider := docker.New(nil)
+
+	snapshot := filepath.Join(t.TempDir(), "snap.db")
+	makeLeaseFixture(t, ctx, provider, image, snapshot)
+
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("etcd", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	if _, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "etcd_snapshot", Path: snapshot},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	// Twice the lease, so an unheld one has expired several times over.
+	select {
+	case <-ctx.Done():
+		t.Fatal("cancelled while waiting past the lease")
+	case <-time.After(2 * leaseTTL * time.Second):
+	}
+
+	if got := countKeys(t, ctx, sbx, "/probavi/leased/"); got != 100 {
+		t.Errorf("leased keys = %d, want 100 — the drill let the backup's leases expire", got)
+	}
+	if got := countKeys(t, ctx, sbx, "/probavi/plain/"); got != 100 {
+		t.Errorf("plain keys = %d, want 100", got)
+	}
+	// The lease itself is untouched: what the backup declared is what a
+	// check reading it sees. Only its expiry is suspended.
+	if got := etcdctl(t, ctx, sbx, "lease", "list"); !strings.Contains(got, "found 1 leases") {
+		t.Errorf("lease list = %q, want the backup's own lease still there", got)
+	}
+}
+
+// makeLeaseFixture snapshots a keyspace holding both kinds of key: plain
+// ones, and 100 attached to a short lease.
+func makeLeaseFixture(t *testing.T, ctx context.Context, provider *docker.Provider, image, dest string) {
+	t.Helper()
+	seed, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+
+	seedScript := `set -e
+etcd --data-dir=/tmp/seed --listen-client-urls=http://127.0.0.1:2379 --advertise-client-urls=http://127.0.0.1:2379 >/tmp/etcd.log 2>&1 </dev/null &
+i=0
+until etcdctl --dial-timeout=2s endpoint health >/dev/null 2>&1; do
+  i=$((i+1)); [ "$i" -gt 60 ] && { tail -n 5 /tmp/etcd.log >&2; exit 1; }
+  sleep 1
+done
+n=1
+while [ "$n" -le 100 ]; do etcdctl put /probavi/plain/$n v$n >/dev/null; n=$((n+1)); done
+lease=$(etcdctl lease grant ` + strconv.Itoa(leaseTTL) + ` | awk '{print $2}')
+n=1
+while [ "$n" -le 100 ]; do etcdctl put /probavi/leased/$n v$n --lease="$lease" >/dev/null; n=$((n+1)); done
+held=$(etcdctl get /probavi/leased/ --prefix --keys-only | grep -c leased)
+[ "$held" = "100" ] || { echo "fixture holds $held leased keys, want 100" >&2; exit 1; }
+etcdctl snapshot save /tmp/snap.db >/dev/null 2>&1`
+	res, err := seed.Exec(ctx, sandbox.ExecRequest{Argv: []string{"sh", "-c", seedScript}})
+	if err != nil {
+		t.Fatalf("seed exec: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("seed fixture: exit %d: %s", res.ExitCode, res.Stderr)
+	}
+	if out, err := exec.CommandContext(ctx, "docker", "cp",
+		seed.ID()+":/tmp/snap.db", dest).CombinedOutput(); err != nil {
+		t.Fatalf("extract fixture: %v: %s", err, out)
+	}
+}
+
+// countKeys reads how many keys the restored server serves under a prefix.
+func countKeys(t *testing.T, ctx context.Context, sbx *docker.Sandbox, prefix string) int {
+	t.Helper()
+	out := etcdctl(t, ctx, sbx, "get", prefix, "--prefix", "--keys-only")
+	count := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), prefix) {
+			count++
+		}
+	}
+	return count
+}
+
+// etcdctl runs one client command against the restored server.
+func etcdctl(t *testing.T, ctx context.Context, sbx *docker.Sandbox, args ...string) string {
+	t.Helper()
+	res, err := sbx.Exec(ctx, sandbox.ExecRequest{
+		Argv: append([]string{"etcdctl", "--endpoints=http://127.0.0.1:2379"}, args...)})
+	if err != nil {
+		t.Fatalf("etcdctl %v: %v", args, err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("etcdctl %v: exit %d: %s", args, res.ExitCode, res.Stderr)
+	}
+	return string(res.Stdout)
+}
+
 func makeSnapshotFixture(t *testing.T, ctx context.Context, provider *docker.Provider, image, dest string) {
 	t.Helper()
 	seed, err := provider.Create(ctx, sandboxParams(image))

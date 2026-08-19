@@ -198,6 +198,9 @@ func classifyExec(argv []string, started *bool) (string, any) {
 	switch {
 	case argv[0] == "sh" && strings.Contains(joined, "true"):
 		return "shell-probe", okExec()
+	case argv[0] == "etcdctl" && len(argv) > 2 && argv[2] == "lease":
+		// A snapshot with no leases: the keeper is not started at all.
+		return "leases", okExec()
 	case argv[0] == "etcdctl":
 		return "health", okExec()
 	case argv[0] == "etcdutl" && argv[1] == "snapshot" && argv[2] == "status":
@@ -280,7 +283,7 @@ func TestProvisionRestoresSnapshot(t *testing.T) {
 	if exit != 0 || !f.OK {
 		t.Fatalf("exit=%d final=%+v", exit, f)
 	}
-	want := "shell-probe|put_file|status|restore|start|health"
+	want := "shell-probe|put_file|status|restore|start|health|leases"
 	if got := strings.Join(sequence, "|"); got != want {
 		t.Errorf("sequence = %s, want %s", got, want)
 	}

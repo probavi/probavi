@@ -13,6 +13,21 @@ always called out explicitly.
 
 ### Fixed
 
+- **An etcd drill no longer lets the backup's leases expire under it**
+  (`adapters/etcd` 0.2.0). A key attached to a lease exists only while
+  somebody renews it, and on restore the lessor re-arms every lease with
+  its full time to live — so the countdown starts again when the sandbox
+  starts and runs out *during* the drill. Measured on both verified
+  versions: 100 keys attached to a twenty-second lease were gone
+  twenty-seven seconds after a restore that reported success, while the
+  plain keys beside them were untouched. The drill now refreshes the
+  snapshot's leases for as long as the sandbox lives, leaving their
+  declared time to live exactly as the backup recorded it. Auto-compaction,
+  the mechanism this engine was surveyed for, turned out not to be the
+  problem: it is off by default in both versions and removes superseded
+  revisions rather than live keys. Ninth engine of the class opened by the
+  Prometheus report in 0.16.0.
+
 - **A MySQL or MariaDB drill no longer runs the backup's own scheduled
   jobs** (`adapters/mysql` 0.12.0, `adapters/mariadb` 0.3.0). A dump taken
   with `--events` carries the operator's `CREATE EVENT` statements, and a

@@ -70,6 +70,57 @@ the disposable container can reach the restored data. A snapshot restore
 also generates a fresh cluster identity — the restored member never tries
 to reach its original peers, and could not if it tried.
 
+## Leases are held open for the drill
+
+A key attached to a lease exists only while somebody keeps renewing it. A
+snapshot captures both the key and the lease, and on restore the lessor
+**re-arms every lease with its full time to live** — etcd says so itself,
+in the help text of the flag that exists to prevent it
+(`--experimental-enable-lease-checkpoint`, which "prevents indefinite
+auto-renewal of long lived leases"). So the countdown starts again when
+the sandbox starts, and then runs out *during the drill*.
+
+Measured on both verified versions, a snapshot of 100 plain keys beside
+100 attached to a twenty-second lease:
+
+| seconds after the restore | plain keys | leased keys |
+| --- | --- | --- |
+| 1 | 100 | 100 |
+| 20 | 100 | 100 |
+| 27 | 100 | **0** |
+
+The restore reports success either way. What a check reads depends on when
+it runs — the same backup, drilled twice, answering differently for
+reasons that have nothing to do with the backup.
+
+**Auto-compaction, by contrast, is not the problem.** It is off by default
+in both versions (`"auto-compaction-retention":"0s"` in the server's own
+startup log) and removes superseded revisions rather than live keys, so a
+drill reading current values would not notice it either way.
+
+**There is no server-side pin.** The only lease-related flags either
+version offers are the checkpoint pair, and they make expiry *stricter*.
+So the drill uses the mechanism etcd's own clients use: it refreshes the
+snapshot's leases for as long as the sandbox lives. The leases stay
+exactly as the backup declared them — `lease timetolive` in a drill
+reports the operator's own `granted with TTL(20s)` — and only their expiry
+is suspended. A snapshot with no leases gets no keeper at all.
+
+### One keeper, not one per lease
+
+The obvious shape is one streaming `etcdctl lease keep-alive` per lease,
+and it is a trap worth naming: measured, 200 leases spawned 133 client
+processes and the sandbox's own server was killed for memory before the
+drill could read anything. A single loop refreshing each lease in turn
+costs one process at a time and held the same 200 leases indefinitely,
+with the server healthy throughout.
+
+The cost is about **10 ms per lease per sweep** — 200 leases sweep in two
+seconds — which bounds the residual honestly: a snapshot with enough
+leases, or leases short enough, that a sweep cannot outrun the shortest
+time to live will still lose them. That is no worse than what happens
+without a keeper, and it is stated here rather than implied away.
+
 ## Checks: the etcdctl dialect
 
 etcd has no SQL. The declared runner passes the check text to `etcdctl`
