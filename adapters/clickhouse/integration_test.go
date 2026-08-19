@@ -133,6 +133,125 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 	}
 }
 
+// ttlWindow is how long the fixture's rows stay inside their TTL. It has
+// to outlast seeding and taking the backup — a fixture that expired while
+// being written would prove nothing — and the drill then waits it out, so
+// it is as short as that leaves room for.
+const ttlWindow = 40 * time.Second
+
+// ttlGrace is how long an unpinned engine is given to act before the
+// assertion is made. Measured on both verified images: the TTL merge lands
+// within five seconds of the rows expiring, in the same second as the
+// restore when they expired before it.
+const ttlGrace = 15 * time.Second
+
+// TestRetentionPolicyDoesNotRunDuringTheDrill proves the sandbox does not
+// apply the engine's own TTL to the artifact it was handed.
+//
+// The rows are inside their TTL when the BACKUP runs — an artifact whose
+// rows were already past it cannot exist, because ClickHouse applies row
+// TTL when a part is written — and past it by the time the drill reads
+// them, which is the ordinary case for any backup that spent a night in
+// storage.
+//
+// The counter-proof is what keeps the first assertion from being vacuous:
+// releasing the same lock deletes the same rows, so the engine really
+// would have taken them.
+func TestRetentionPolicyDoesNotRunDuringTheDrill(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	provider := docker.New(nil)
+
+	fixture := filepath.Join(t.TempDir(), "expiring.zip")
+	expiry := makeExpiringFixture(t, ctx, provider, fixture)
+
+	sbx, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("clickhouse", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	if _, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "clickhouse_backup", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+		Options: map[string]string{"database": "shop"},
+	}, sbx); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	select {
+	case <-ctx.Done():
+		t.Fatal("cancelled while waiting for the fixture to age past its TTL")
+	case <-time.After(time.Until(expiry.Add(ttlGrace))):
+	}
+
+	if got := queryValue(t, ctx, sbx, "SELECT count() FROM shop.expiring"); got != "500" {
+		t.Errorf("expiring rows = %s, want 500 — the sandbox expired data the backup holds", got)
+	}
+	// The control table has no TTL, so it says something else: that
+	// restoring in two passes lands every row exactly once.
+	if got := queryValue(t, ctx, sbx, "SELECT count() FROM shop.orders"); got != "500" {
+		t.Errorf("control rows = %s, want 500", got)
+	}
+
+	mustQuery(t, ctx, sbx, "SYSTEM START TTL MERGES")
+	deadline := time.Now().Add(time.Minute)
+	for queryValue(t, ctx, sbx, "SELECT count() FROM shop.expiring") != "0" {
+		if time.Now().After(deadline) {
+			t.Fatal("releasing the lock did not expire the rows: the engine would not have " +
+				"taken them anyway, so the assertion above proved nothing")
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// makeExpiringFixture backs up a database holding rows that are inside a
+// TTL now and outside it by the time a drill reads them, and reports the
+// instant they expire.
+func makeExpiringFixture(t *testing.T, ctx context.Context, provider *docker.Provider, dest string) time.Time {
+	t.Helper()
+	seed, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+
+	awaitReady(t, ctx, seed)
+	seedRows(t, ctx, seed, 500)
+	mustQuery(t, ctx, seed, "CREATE TABLE shop.expiring (ts DateTime, id UInt64) ENGINE=MergeTree "+
+		"ORDER BY id TTL ts + INTERVAL "+strconv.Itoa(int(ttlWindow.Seconds()))+" SECOND DELETE")
+	mustQuery(t, ctx, seed, "INSERT INTO shop.expiring SELECT now(), number FROM numbers(500)")
+	expiry := time.Now().Add(ttlWindow)
+
+	// A fixture that aged while it was being written would make the drill
+	// prove nothing, and would do it quietly.
+	if got := queryValue(t, ctx, seed, "SELECT count() FROM shop.expiring"); got != "500" {
+		t.Fatalf("fixture holds %s rows before the backup, want 500", got)
+	}
+	mustQuery(t, ctx, seed, "BACKUP DATABASE shop TO File('expiring.zip')")
+	extract(t, ctx, seed, "/var/lib/clickhouse/backups/expiring.zip", dest)
+	return expiry
+}
+
+// queryValue runs one statement against the engine and returns its answer.
+func queryValue(t *testing.T, ctx context.Context, sbx *docker.Sandbox, query string) string {
+	t.Helper()
+	res, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: clientArgv(query)})
+	if err != nil {
+		t.Fatalf("exec %q: %v", query, err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exec %q: exit %d: %s", query, res.ExitCode, res.Stderr)
+	}
+	return strings.TrimSpace(string(res.Stdout))
+}
+
 // TestCorruptArchiveVerdict proves a broken backup yields the right
 // verdict through the whole stack: the drill must say the backup is
 // unusable, not that something went wrong.

@@ -107,6 +107,54 @@ checks:
 Timestamps come back as `2026-08-14 14:37:45`, which the core reads as
 UTC — the documented behaviour for naive timestamps in `freshness` checks.
 
+## Retention is pinned off, because a drill proves the artifact
+
+A `TTL` clause states what a *running* server should keep. A drill proves
+what a backup holds, and the two disagree the moment a backup spends a
+night in storage: rows that were inside their TTL when the `BACKUP`
+statement ran are past it by the time the drill reads them, and the
+restored server deletes them exactly as a production server would.
+
+Measured on both verified images, restoring an artifact whose TTL had
+elapsed while it sat on disk — these are the counts a check reads seconds
+after `RESTORE ALL` reports `RESTORED`:
+
+| table | in the backup | in the drill |
+| --- | --- | --- |
+| row TTL, all rows expired | 60 | **0** |
+| row TTL, some rows expired | 200 | **146** |
+| `TTL … GROUP BY` (rollup) | 60 | **10** |
+| column TTL on a payload column | 60 | 60, payload **blanked** |
+| no TTL (control) | 60 | 60 |
+
+Nothing reports any of it. `RESTORE ALL` succeeds, the healthcheck passes,
+and the drill goes green having proved less than the backup holds — the
+column-TTL row is the quiet extreme, where even a row census would see
+nothing wrong. So the sandbox is pinned:
+
+```sql
+SYSTEM STOP TTL MERGES
+```
+
+**The restore therefore runs in two passes.** The lock covers the tables
+that exist when it is issued — measured: a table locked while it existed
+kept rows fifty seconds past a thirty-second TTL and lost every one of
+them within five seconds of the lock being released, while a table created
+*after* the same statement was not covered at all. Since `RESTORE ALL`
+creates the tables, a lock before it holds nothing and a lock after it is
+too late: the engine logs the TTL merge in the same second as the restore.
+So the structure is restored first (`SETTINGS structure_only = true`), the
+lock is taken, and the data follows. The extra pass reads metadata and
+nothing else — 143 ms + 264 ms against a single 146 ms pass on the test
+fixture, either way dwarfed by transferring a real archive.
+
+The lock is a runtime action, not a schema change: `SHOW CREATE TABLE`
+after a drill is byte-for-byte what the backup carried, so a check reading
+the table definition sees the operator's retention policy exactly as it
+was. If the engine refuses the statement, the **drill fails** rather than
+proceeding — a record whose contents depend on how much of the backup had
+aged past its TTL by restore time is not evidence.
+
 ## Two things that surprised the implementation
 
 Both are measured, both shape the code, and both are the kind of detail
@@ -151,6 +199,7 @@ engine's own message about it — which is a better diagnosis than a guess.
 | an unreadable archive is newer than the one chosen | `source_unreadable` |
 | the engine cannot unpack the archive | `source_corrupt` |
 | the engine restored nothing, or refused for engine reasons | `restore_failed` |
+| the engine will not stop its TTL merges | `invalid_request` |
 | the server never answered a query | `engine_not_ready` |
 
 The third one is worth a sentence. A backup job still writing its zip
