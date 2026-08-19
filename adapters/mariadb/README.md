@@ -126,6 +126,59 @@ without a readable `server_version` simply skips it, and the restore
 speaks for itself (with the error-log surfacing above as the diagnostic
 of last resort).
 
+## The event scheduler is suspended for the drill
+
+MariaDB has no per-row expiry, so its instance of the "a drill must not
+run the backup's own data-lifecycle policy" problem is the **event
+scheduler**. A dump taken with `--events` carries the operator's
+`CREATE EVENT` statements, and a purge event —
+`DELETE FROM orders WHERE created < NOW() - INTERVAL 90 DAY` is the
+canonical shape — deletes rows in the drill exactly as it does in
+production.
+
+Measured: an artifact of ten rows and one such event, restored into a
+sandbox whose scheduler was running, held **two rows five seconds after
+the restore**. The event arrives `ENABLED`, because a dump preserves the
+status the backup recorded.
+
+Whether it runs is a default, and defaults move:
+
+| image | `event_scheduler` |
+| --- | --- |
+| `mysql:8.4` | **ON** |
+| `percona/percona-server:8.4.10` | **ON** |
+| `mariadb:10.11` … `12.3` | OFF |
+
+MySQL turned this on in 8.0 after shipping it off for years, which is the
+whole argument for pinning rather than trusting the answer: a drill's
+independence must not rest on an upstream default. On the MariaDB side the
+same loss is one sandbox parameter away — a sandbox started with
+`--event-scheduler=ON` loses the same eight rows in four seconds
+(measured).
+
+So the drill pins it, in the way each restore path allows:
+
+- **Logical kinds** restore into a server this adapter did not start, so
+  the pin is `SET GLOBAL event_scheduler = OFF` issued before the load.
+  That ordering is what makes it deterministic — the events do not exist
+  until the dump creates them.
+- **The physical kind** restores a data directory that already holds the
+  event definitions and then starts the server itself, where a statement
+  would be racing the scheduler. There the pin is a startup flag, and the
+  same query verifies afterwards that the server agrees.
+
+A server started with `--event-scheduler=DISABLED` is left alone: it
+cannot run events and cannot be told to stop either — the statement fails
+against it with ERROR 1290 (measured), and refusing the safest state there
+is would be absurd.
+
+**The artifact is untouched.** The events keep the definitions and the
+`ENABLED` status the backup recorded, so a check reading
+`information_schema.events` sees the operator's own schedule. Only their
+execution is suspended, for the life of the sandbox. If the engine will
+not suspend it, the drill fails rather than producing a record whose
+contents depend on how long the restore took.
+
 ## Checks
 
 MariaDB speaks SQL, so the core's built-in checks work unchanged. The

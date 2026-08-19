@@ -180,6 +180,9 @@ func compressedDumpHandler(t *testing.T, fixture string, loadArgv *[]string) fun
 			return putFileValue{BytesCopied: 60, DurationSeconds: 0.2}, nil
 		case "exec":
 			args, stmt := lastArg(t, call)
+			if stmt == pinnedQuery {
+				return pinnedExec(), nil
+			}
 			if stmt == "SELECT 1" || strings.HasPrefix(stmt, "CREATE DATABASE") {
 				return okExec(0), nil
 			}
@@ -246,6 +249,8 @@ func TestCompressedRestoreFailuresAreNamed(t *testing.T) {
 				return putFileValue{}, nil
 			}
 			switch _, stmt := lastArg(t, call); {
+			case stmt == pinnedQuery:
+				return pinnedExec(), nil
 			case stmt == "SELECT 1", strings.HasPrefix(stmt, "CREATE DATABASE"):
 				return okExec(0), nil
 			}
