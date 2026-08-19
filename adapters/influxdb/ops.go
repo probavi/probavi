@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "influxdb"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.2.0"
 
 	// Where the restored instance serves inside the sandbox. No TLS and
 	// no operator credentials: a Probavi sandbox is zero-ingress
@@ -398,8 +398,8 @@ func startEngine(ctx context.Context, c *core, workDir string) (float64, *protoE
 	logPath := workDir + "/influxd.log"
 	script := fmt.Sprintf(
 		"influxd --bolt-path %s/influxd.bolt --engine-path %s/engine --sqlite-path %s/influxd.sqlite "+
-			"--http-bind-address %s >%s 2>&1 </dev/null &",
-		workDir, workDir, workDir, listenAddr, logPath)
+			"--http-bind-address %s --storage-retention-check-interval %s >%s 2>&1 </dev/null &",
+		workDir, workDir, workDir, listenAddr, retentionCheckInterval, logPath)
 	start, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"sh", "-c", script}})
 	if perr != nil {
 		return 0, perr
