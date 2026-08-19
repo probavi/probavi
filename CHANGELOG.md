@@ -13,6 +13,22 @@ always called out explicitly.
 
 ### Fixed
 
+- **InfluxDB drills no longer let the sandbox enforce the backup's own
+  retention** (`adapters/influxdb` 0.2.0). `influx restore` restores a
+  bucket's retention period along with its data, and the restored server
+  then applies it to what it has just been handed. Measured on the
+  baseline image: a one-hour bucket holding seven points spread over three
+  hours kept three of them one retention check after the restore, while a
+  control bucket with infinite retention was untouched — and the adapter's
+  bucket census saw all five buckets throughout, because a bucket that
+  lost every point it had is still a bucket. The enforcer runs on a
+  thirty-minute ticker by default, so whether a drill saw the loss
+  depended on how long it took. The sandbox instance now starts with
+  `--storage-retention-check-interval` set past any drill's life; the
+  buckets' declared retention is unchanged, so checks reading it still see
+  the operator's own policy. Fourth engine of the class opened by the
+  Prometheus report in 0.16.0.
+
 - **ClickHouse drills no longer let the sandbox expire the artifact they
   are proving** (`adapters/clickhouse` 0.2.0). A `TTL` clause states what
   a running server should keep; a backup that spent a night in storage

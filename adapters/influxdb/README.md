@@ -80,6 +80,57 @@ checks:
     expect: "500"
 ```
 
+## Retention is not enforced in the drill
+
+A bucket carries a retention period, and `influx restore` restores it
+with the data — a bucket backed up at `1h0m0s` comes back at `1h0m0s`
+(measured). The restored server then enforces it exactly as a production
+server would, on data it has just been handed.
+
+The points in a backup were inside their bucket's window when
+`influx backup` ran; an artifact holding points already outside it cannot
+even be written, because the write path rejects them outright (`422 …
+dropped 1 points outside retention policy of duration 1h0m0s`). Time then
+passes — or the operator shortens the bucket — and by the drill the same
+points are outside.
+
+Measured on the baseline image, restoring a backup of a one-hour bucket
+holding seven points spread over three hours, beside a control bucket with
+infinite retention:
+
+| | at the restore | one check later |
+| --- | --- | --- |
+| `metrics` (retention 1h) | 7 points | **3 points** |
+| `audit` (retention ∞) | 1 point | 1 point |
+| buckets the census sees | 5 | 5 |
+
+The census is why this matters here. The adapter's own completeness
+verdict compares the buckets the instance holds against the ones the
+manifest names, and a bucket that lost every point it had is still a
+bucket — so nothing reports the loss and the drill goes green having
+proved less than the backup holds.
+
+Worse, whether it happens at all is a matter of timing: the enforcer runs
+on a ticker whose default is thirty minutes, so a short drill escapes and
+a long one does not. The same backup, drilled twice, could give two
+answers.
+
+So the sandbox instance starts with the enforcer's first tick moved past
+any drill:
+
+```
+influxd … --storage-retention-check-interval 876000h
+```
+
+Retention itself is untouched: `influx bucket list` inside a drill reports
+the operator's own periods, so a check reading a bucket's configuration
+sees the truth. Only the enforcement is suspended, and only in the
+sandbox.
+
+Zero is not the way to say "never", and is worth naming because it is the
+obvious guess: the flag parser accepts `0` and the server then dies with
+`panic: non-positive interval for NewTicker` without ever opening a port.
+
 ## When the backup was taken
 
 `influx backup` names every file of a set with the UTC instant it wrote
