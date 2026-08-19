@@ -111,6 +111,51 @@ Two honesty notes, both deliberate:
   schema comes verbatim from the backup; keyspace-level replication
   settings are not part of what this drill proves.
 
+## Time-to-live: what a drill can and cannot prove
+
+Cassandra does not delete expired data in the background the way other
+engines do. A cell with a TTL carries its own expiry and **reads filter it
+out** the instant that passes; compaction reclaims the space later, but
+the data is invisible before then. So a snapshot's rows are provable only
+while they are inside their TTL.
+
+Measured on the baseline image — 100 rows per table, snapshot taken with
+every row live, restored after a 60-second TTL had passed:
+
+| table | in the snapshot | in the drill |
+| --- | --- | --- |
+| `orders` (no TTL) | 100 | 100 |
+| `sessions` (`default_time_to_live = 60`) | 100 | **0** |
+| `mixed` (half written `USING TTL 60`) | 100 | **50** |
+
+**The snapshot is not damaged.** `sstabledump` of its own sstable lists
+all 100 partitions, each row carrying `"ttl" : 60, "expired" : true`.
+Everything the backup promised is in it; the engine will not serve it.
+
+**And there is nothing to switch off.** Of the 358 `cassandra.*` system
+properties the 4.1 jar names, the only ones touching expiry are the 2038
+overflow policy, the hint TTL, and `never_purge_tombstones` — which stops
+compaction from reclaiming expired data but does not make a single read
+return it. `cassandra.clock` accepts a replacement clock implementation,
+and moving a sandbox's clock to make old data look fresh is the one thing
+an evidence product must never do. So where the MongoDB, TimescaleDB,
+ClickHouse and InfluxDB adapters suspend the policy for the drill, this
+one cannot.
+
+What it does instead is refuse to call a table proven when it reads
+nothing: **a restored table that returns no rows fails the drill if the
+artifact's own sstables declare a time-to-live.** Both halves are
+required, and the measurements say why — a table nobody ever wrote
+contributes no sstable at all to a snapshot (`manifest.json` and
+`schema.cql` only), and a table whose every row was deleted contributes
+tombstones with `TTL max: 0`. Neither is refused; both are legitimate.
+
+The residual is real and worth stating plainly: a table that lost only
+*some* rows to expiry still reads rows, so the drill proceeds and proves
+what remains. Nothing here can make a drill prove data the engine will not
+serve. **Drill snapshots younger than their tables' time-to-live** — for a
+short-TTL table that is the only arrangement that proves anything.
+
 ## Checks: CQL, with the built-ins working
 
 The declared runner absorbs cqlsh's decorated output — header, dash
@@ -185,4 +230,5 @@ error.
 | the backup's schema does not parse on this engine | `invalid_request`, naming both sides |
 | sstableloader fails | `restore_failed` |
 | reading a restored table fails | `source_corrupt`, carrying the engine's refusal |
+| a restored table reads no rows while its snapshot declares a TTL | `restore_failed`, naming the table and the TTL |
 | the node never became ready | `engine_not_ready`, or `restore_failed` with the node's own log line |

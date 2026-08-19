@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "cassandra"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.2.0"
 
 	// workDirName is created under the provider's scratch directory.
 	workDirName = "probavi-cassandra"
@@ -139,7 +139,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if perr != nil {
 		return nil, perr
 	}
-	probeSeconds, perr := probeTables(ctx, c, tables)
+	probeSeconds, perr := probeTables(ctx, c, dataRoot, tables)
 	if perr != nil {
 		return nil, perr
 	}
@@ -528,10 +528,10 @@ func mapSchemaFailure(ref tableRef, stderr []byte) *protoError {
 // probeTables reads one row of every restored table. The loader streams
 // corrupted data without a word, and the damage surfaces only at first
 // read (measured) — so the drill reads before it reports.
-func probeTables(ctx context.Context, c *core, tables []tableRef) (float64, *protoError) {
+func probeTables(ctx context.Context, c *core, dataRoot string, tables []tableRef) (float64, *protoError) {
 	total := 0.0
 	for _, ref := range tables {
-		val, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"cqlsh", "--no-color", "-e",
+		val, stdout, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"cqlsh", "--no-color", "-e",
 			"SELECT * FROM " + ref.String() + " LIMIT 1;"}})
 		if perr != nil {
 			return 0, perr
@@ -543,6 +543,19 @@ func probeTables(ctx context.Context, c *core, tables []tableRef) (float64, *pro
 				ref, firstLine(stderr))
 		}
 		total += val.DurationSeconds
+		if !strings.Contains(string(stdout), emptyResultFooter) {
+			continue
+		}
+		// A table that reads nothing is only news when the artifact says
+		// it held rows that expire — see retention.go.
+		ttl, seconds, perr := declaredTTL(ctx, c, path.Join(dataRoot, ref.keyspace, ref.table))
+		if perr != nil {
+			return 0, perr
+		}
+		total += seconds
+		if ttl > 0 {
+			return 0, refusedExpiredTable(ref, ttl)
+		}
 	}
 	return total, nil
 }

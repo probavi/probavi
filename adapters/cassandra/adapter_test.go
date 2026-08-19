@@ -154,15 +154,26 @@ type simulated struct {
 	schema   any
 	load     any
 	probe    any
+	ttl      any
 	discover any
 	unpack   any
 }
 
+// populatedRead and emptyRead are cqlsh's own output for a table that
+// holds a row and one that does not — byte for byte on both verified
+// versions (measured). The footer is what the drill reads the answer from.
+const (
+	populatedRead = " id | v\n----+---\n  1 | x\n\n(1 rows)\n"
+	emptyRead     = " id | v\n----+---\n\n\n(0 rows)\n"
+)
+
 func defaultSimulated() simulated {
 	return simulated{
-		schema:   execValue{ExitCode: 0, DurationSeconds: 0.1},
-		load:     execValue{ExitCode: 0, DurationSeconds: 0.5},
-		probe:    execValue{ExitCode: 0, DurationSeconds: 0.05},
+		schema: execValue{ExitCode: 0, DurationSeconds: 0.1},
+		load:   execValue{ExitCode: 0, DurationSeconds: 0.5},
+		probe: execValue{ExitCode: 0, DurationSeconds: 0.05,
+			StdoutB64: base64.StdEncoding.EncodeToString([]byte(populatedRead))},
+		ttl:      outExec("0\n"),
 		discover: outExec(""),
 		unpack:   okExec(),
 	}
@@ -215,6 +226,8 @@ func classifyShellExec(script string, sim simulated) (string, any) {
 		return "discover", sim.discover
 	case strings.Contains(script, "cassandra -R"):
 		return "start", execValue{ExitCode: 0, DurationSeconds: 0.2}
+	case script == ttlProbeScript:
+		return "ttl", sim.ttl
 	}
 	return "", nil
 }
