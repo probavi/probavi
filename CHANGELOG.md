@@ -29,8 +29,6 @@ always called out explicitly.
   reaching the core as if it were a value. Both READMEs' check examples
   now run as written.
 
-### Fixed
-
 - **An etcd drill no longer lets the backup's leases expire under it**
   (`adapters/etcd` 0.2.0). A key attached to a lease exists only while
   somebody renews it, and on restore the lessor re-arms every lease with
