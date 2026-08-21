@@ -44,6 +44,8 @@
 /adapters/*/influxdb
 /adapters/*/victoriametrics
 /adapters/*/elasticsearch
+/oracle
+/adapters/*/oracle
 
 # Test and coverage artifacts
 *.test

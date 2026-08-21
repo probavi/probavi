@@ -512,6 +512,35 @@
       "docs": "adapters/opensearch/README.md"
     },
     {
+      "id": "oracle",
+      "name": "Oracle Database",
+      "status": "experimental",
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "oracle",
+        "name": "oracle"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "23.26.3.0",
+          "image": "container-registry.oracle.com/database/free:23.26.3.0"
+        }
+      ],
+      "sources": [
+        {
+          "id": "oracle_datapump",
+          "name": "One Data Pump dump file (expdp output), imported into the image's pluggable database",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/oracle/README.md"
+    },
+    {
       "id": "postgres",
       "name": "PostgreSQL",
       "status": "experimental",

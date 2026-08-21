@@ -61,6 +61,7 @@ process, so the core alone cannot run a drill:
 | `probavi-adapter-influxdb` | you drill InfluxDB |
 | `probavi-adapter-victoriametrics` | you drill VictoriaMetrics |
 | `probavi-adapter-elasticsearch` | you drill Elasticsearch |
+| `probavi-adapter-oracle` | you drill Oracle Database |
 | `probavi-adapter-mssql` | you drill SQL Server |
 
 **Verifying an evidence log needs only `probavi`.** `probavi evidence
@@ -147,7 +148,7 @@ $ makepkg -si
 ### Gentoo
 
 Each release attaches `probavi-<version>.ebuild`. Adapters are USE flags
-(`postgres`, `mysql`, `mariadb`, `mongodb`, `mssql`, `clickhouse`, `etcd`, `redis`, `valkey`, `sqlite`, `duckdb`, `prometheus`, `cassandra`, `opensearch`, `influxdb`, `victoriametrics`, `elasticsearch`) rather than separate packages,
+(`postgres`, `mysql`, `mariadb`, `mongodb`, `mssql`, `clickhouse`, `etcd`, `redis`, `valkey`, `sqlite`, `duckdb`, `prometheus`, `cassandra`, `opensearch`, `influxdb`, `victoriametrics`, `elasticsearch`, `oracle`) rather than separate packages,
 since the tree builds from source anyway. Drop it into a local overlay:
 
 ```console
