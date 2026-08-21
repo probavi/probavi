@@ -1,0 +1,24 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. The official elasticsearch images idle under `command: sleep infinity` with no wrapper (their entrypoint passes non-elasticsearch commands through, measured); the adapter starts a loopback single node itself — dev mode, mmap off, lifecycle suspended — so no sysctl or privilege ever enters the sandbox parameters. The baseline is the 8.x line's final minor, the older of the two maintained series (maintained until 2027-01-15 by the vendor's published schedule). See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "elasticsearch",
+  "name": "Elasticsearch",
+  "status": "experimental",
+  "engine_name": "elasticsearch",
+  "conformance_verified": true,
+  "docs": "adapters/elasticsearch/README.md",
+  "verified": [
+    {
+      "engine_version": "8.19.20",
+      "image": "elasticsearch:8.19.20",
+      "baseline": true
+    },
+    {
+      "engine_version": "9.5.2",
+      "image": "elasticsearch:9.5.2"
+    }
+  ],
+  "sources": {
+    "elasticsearch_repo_zip": "One zip archive of an fs snapshot repository, the repository at the root or under one wrapping directory",
+    "elasticsearch_repo": "One fs snapshot repository directory; the snapshot whose own metadata claims the newest instant is restored"
+  }
+}
