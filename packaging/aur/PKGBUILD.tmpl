@@ -18,7 +18,8 @@ pkgname=('probavi' 'probavi-adapter-postgres' 'probavi-adapter-mysql'
          'probavi-adapter-duckdb' 'probavi-adapter-prometheus'
          'probavi-adapter-cassandra' 'probavi-adapter-opensearch'
          'probavi-adapter-influxdb'
-         'probavi-adapter-victoriametrics')
+         'probavi-adapter-victoriametrics'
+         'probavi-adapter-elasticsearch')
 pkgver=${PKGVER}
 pkgrel=1
 # The git tag, which differs from pkgver for a pre-release: makepkg
@@ -94,4 +95,5 @@ package_probavi-adapter-cassandra()  { _package_adapter cassandra; }
 package_probavi-adapter-opensearch() { _package_adapter opensearch; }
 package_probavi-adapter-influxdb() { _package_adapter influxdb; }
 package_probavi-adapter-victoriametrics() { _package_adapter victoriametrics; }
+package_probavi-adapter-elasticsearch() { _package_adapter elasticsearch; }
 package_probavi-adapter-mssql()    { _package_adapter mssql; }

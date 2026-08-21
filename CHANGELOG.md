@@ -11,6 +11,44 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **An Elasticsearch adapter** (`adapters/elasticsearch` 0.1.0), the
+  seventeenth engine. It restores fs snapshot repositories as a
+  directory (`elasticsearch_repo`) or a zip archive
+  (`elasticsearch_repo_zip`) — zip rather than tar because the official
+  9.x image is UBI-based and ships no tar, gzip, python3 or jq at all
+  (measured; `unzip` it has, on both lines). The newest snapshot by its
+  own claimed instant is restored with `*` — regular indices and data
+  streams with their `.ds-` backing indices, the cluster state left in
+  the artifact — and the verdict is read from the shard counts and the
+  cluster health, never the HTTP status: damaged blobs return 200 with
+  every shard failed (measured), and a directory that is no repository
+  registers silently and lists nothing, which is why the repository's
+  own `index-N` is read host-side first. The data-lifecycle rule from
+  #166 was designed in before the first line of code, and the engine
+  needed it twice over: a restored index keeps its `index.lifecycle.name`
+  while a fresh node ships 47 built-in ILM policies for it to name, and a
+  data stream's retention travels inside its own metadata — measured
+  with polling accelerated, a backup older than its retention lost a
+  generation eight seconds after a restore that reported 4/4 shards
+  successful. ILM is stopped through its own switch and verified
+  STOPPED; the data stream lifecycle has no switch, so its poll interval
+  is pinned to a hundred years as a launch setting and read back.
+  Suspended, never rewritten: the retention still reads `1d` in the
+  drill, and an integration test proves the pin from both sides against
+  an unpinned control node. Two more engine facts shaped the adapter.
+  Under `--network none` the 8.x line dies at startup resolving its own
+  hostname where 9.x tolerates it, and the image cannot edit `/etc/hosts`
+  as uid 1000 — so the JDK is pointed at a hosts file of the adapter's
+  own. And the writing version is an integer index version (8537000,
+  9111000), not a release string, so the pairing pre-check compares the
+  integers the repository and `_nodes` state. A bonus: the dialect takes
+  SQL-standard quoted identifiers and answers `max()` of a date as RFC
+  3339, so the core's generating built-in checks apply — the first
+  non-relational engine in the catalog where they do. Zero core changes,
+  conformance 15/15, verified against Elasticsearch 8.19.20 and 9.5.2.
+
 ### Fixed
 
 - **Custom checks work again on the Prometheus and VictoriaMetrics

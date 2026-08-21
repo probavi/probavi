@@ -156,6 +156,44 @@
       "docs": "adapters/duckdb/README.md"
     },
     {
+      "id": "elasticsearch",
+      "name": "Elasticsearch",
+      "status": "experimental",
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "elasticsearch",
+        "name": "elasticsearch"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "8.19.20",
+          "image": "elasticsearch:8.19.20"
+        },
+        {
+          "engine_version": "9.5.2",
+          "image": "elasticsearch:9.5.2"
+        }
+      ],
+      "sources": [
+        {
+          "id": "elasticsearch_repo",
+          "name": "One fs snapshot repository directory; the snapshot whose own metadata claims the newest instant is restored",
+          "pitr": false
+        },
+        {
+          "id": "elasticsearch_repo_zip",
+          "name": "One zip archive of an fs snapshot repository, the repository at the root or under one wrapping directory",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/elasticsearch/README.md"
+    },
+    {
       "id": "etcd",
       "name": "etcd",
       "status": "experimental",
