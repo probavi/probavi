@@ -51,6 +51,22 @@ always called out explicitly.
 
 ### Fixed
 
+- **An OpenSearch drill no longer judges a sound restore by one instant**
+  (`adapters/opensearch` 0.2.0). The health gate read `_cluster/health`
+  once, right after the restore call returned — and that call returns
+  when its own bookkeeping completes, while the shards' started events
+  land asynchronously after it. On a slower host the gap is wide enough
+  to read, and a primary still initializing from a snapshot is reported
+  *yellow*, not red, so the gate refused a restore that was seconds from
+  green. The sibling Elasticsearch adapter, which shares this code
+  path's lineage, hit exactly that on a hosted runner before it shipped;
+  this adapter had only the timing to thank. The gate now waits through
+  the engine's own primitive, `wait_for_status=green` with a bounded
+  timeout, and reads the verdict from the body: a wait that expires
+  answers HTTP 408 with the current status (measured on 2.19), so that
+  curl runs without `-f` — with it the body would be discarded and the
+  gate would fall silent exactly when it matters.
+
 - **Custom checks work again on the Prometheus and VictoriaMetrics
   adapters** (`adapters/prometheus` 0.4.0, `adapters/victoriametrics`
   0.2.0). Both declared `promtool query instant` as their check runner,

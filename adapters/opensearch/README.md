@@ -56,7 +56,12 @@ Measured behaviors this adapter refuses to paper over:
   the shard counts, never from the HTTP status;
 - after the restore the cluster must be **green**: replicas are forced
   to zero on the single node, so anything below green means restored
-  data is not fully served.
+  data is not fully served. The gate waits for green through the
+  engine's own `wait_for_status` rather than reading one instant — the
+  restore call returns before the shards' started events land, and a
+  primary still initializing from a snapshot reads *yellow*; a wait that
+  expires answers HTTP 408 with the current status in the body
+  (measured), which is the verdict.
 
 The API calls run `curl` without `-f` deliberately: an HTTP error's
 body is where the engine states its reason in its own words, and `-f`
