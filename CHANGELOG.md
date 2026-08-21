@@ -11,6 +11,8 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-08-21
+
 ### Added
 
 - **An Elasticsearch adapter** (`adapters/elasticsearch` 0.1.0), the
@@ -2545,7 +2547,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/probavi/probavi/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/probavi/probavi/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/probavi/probavi/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/probavi/probavi/compare/v0.13.0...v0.14.0
