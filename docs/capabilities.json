@@ -477,7 +477,7 @@
       "id": "opensearch",
       "name": "OpenSearch",
       "status": "experimental",
-      "adapter_version": "0.1.0",
+      "adapter_version": "0.2.0",
       "engine": {
         "id": "opensearch",
         "name": "opensearch"
