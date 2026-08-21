@@ -531,15 +531,18 @@ func seedFixture(t *testing.T, ctx context.Context, provider *docker.Provider, i
 }
 
 // copyIntoSandbox places a host tree inside a sandbox the test drives
-// by hand (the control node), readable by the engine's user.
+// by hand (the control node), readable by the engine's user. docker cp
+// keeps the host's ownership, which is whatever uid runs the test — so
+// the permissions are opened as root, the one user the image's uid 1000
+// cannot stand in for.
 func copyIntoSandbox(t *testing.T, ctx context.Context, sbx *docker.Sandbox, src, dest string) {
 	t.Helper()
 	if out, err := exec.CommandContext(ctx, "docker", "cp", src, sbx.ID()+":"+dest).CombinedOutput(); err != nil {
 		t.Fatalf("copy fixture in: %v: %s", err, out)
 	}
-	res, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"chmod", "-R", "a+rX", dest}})
-	if err != nil || res.ExitCode != 0 {
-		t.Fatalf("chmod fixture: %v (exit %d: %s)", err, res.ExitCode, res.Stderr)
+	if out, err := exec.CommandContext(ctx, "docker", "exec", "-u", "0", sbx.ID(),
+		"chmod", "-R", "a+rX", dest).CombinedOutput(); err != nil {
+		t.Fatalf("open fixture permissions: %v: %s", err, out)
 	}
 }
 
