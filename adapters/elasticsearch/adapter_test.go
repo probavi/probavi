@@ -742,6 +742,48 @@ func TestClusterBelowGreenIsTheVerdict(t *testing.T) {
 	}
 }
 
+// TestHealthGateWaitsForGreen pins the settle: the gate asks the engine
+// to wait for green rather than reading one instant — a primary still
+// initializing from a snapshot reads yellow, and the restore call
+// returns before the shards' started events land (measured on a slower
+// host) — and a wait that expires is judged by the body it carries,
+// which is why that curl runs without -f (the expiry answers 408,
+// measured).
+func TestHealthGateWaitsForGreen(t *testing.T) {
+	repo := writeRepo(t, t.TempDir())
+	var healthArgv []string
+	line, _, _ := driveOp(t, "provision", provisionPayload(t, "elasticsearch_repo", repo, nil),
+		func(call verbCall) (any, *protoError) {
+			if call.Verb == "put_file" {
+				return putFileValue{}, nil
+			}
+			argv := argvOf(t, call)
+			label, v := classifyExec(argv, defaultSimulated())
+			if label == "" {
+				t.Fatalf("unexpected exec: %v", argv)
+			}
+			if label == "health" {
+				healthArgv = argv
+				return outExec(`{"status":"yellow","timed_out":true}`), nil
+			}
+			return v, nil
+		})
+	f := parseFinal(t, line)
+	if f.OK || f.Error.Code != "source_corrupt" || !strings.Contains(f.Error.Message, "yellow") ||
+		!strings.Contains(f.Error.Message, healthSettleTimeout.String()) {
+		t.Errorf("final = %+v, want source_corrupt naming the state and the wait", f)
+	}
+	joined := strings.Join(healthArgv, " ")
+	if !strings.Contains(joined, "wait_for_status=green") || !strings.Contains(joined, "timeout=60s") {
+		t.Errorf("health argv = %v, want the engine's own wait for green", healthArgv)
+	}
+	for _, a := range healthArgv {
+		if a == "-sf" || a == "-f" {
+			t.Errorf("health argv = %v: -f would discard the 408 body the verdict is read from", healthArgv)
+		}
+	}
+}
+
 // TestStartFailureCarriesTheNodesOwnLine pins the fatal-line watch: a
 // node that dies during startup is reported with its own last error
 // line, not a bare timeout.

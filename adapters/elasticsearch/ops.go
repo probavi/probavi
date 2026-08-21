@@ -720,13 +720,30 @@ func runRestore(ctx context.Context, c *core, chosen apiSnapshot) (float64, *pro
 	return val.DurationSeconds, nil
 }
 
+// healthSettleTimeout bounds how long the health gate lets the engine
+// finish starting the restored shards.
+const healthSettleTimeout = 60 * time.Second
+
 // checkHealth requires the restored cluster green: replicas are zero, so
-// anything less means restored data is not fully served. The gate fires
-// on positive evidence only — an answer that is not the health API's
-// shape is skipped.
+// anything less means restored data is not fully served.
+//
+// It waits for green through the engine's own primitive rather than
+// reading one instant: the restore call returns when its bookkeeping is
+// complete, and the shards' started events land asynchronously after it
+// — on a slower host the gap is wide enough to read, and a primary still
+// initializing from a snapshot is reported *yellow*, not red (measured
+// on a hosted runner, where a single-instant read failed a sound restore
+// that this machine passed). A wait that expires answers HTTP 408 with
+// the current status in the body (measured), so curl runs without -f
+// here and the verdict is the body's: the gate fires on positive
+// evidence only — an answer that is not the health API's shape is
+// skipped.
 func checkHealth(ctx context.Context, c *core) (float64, *protoError) {
-	val, stdout, _, perr := c.exec(ctx, execArgs{Argv: []string{"curl", "-sf",
-		serverURL + "/_cluster/health"}})
+	val, stdout, _, perr := c.exec(ctx, execArgs{
+		Argv: []string{"curl", "-s", fmt.Sprintf("%s/_cluster/health?wait_for_status=green&timeout=%ds",
+			serverURL, int(healthSettleTimeout.Seconds()))},
+		TimeoutSeconds: (healthSettleTimeout + 30*time.Second).Seconds(),
+	})
 	if perr != nil {
 		return 0, perr
 	}
@@ -734,15 +751,20 @@ func checkHealth(ctx context.Context, c *core) (float64, *protoError) {
 		return val.DurationSeconds, nil
 	}
 	health := struct {
-		Status string `json:"status"`
+		Status   string `json:"status"`
+		TimedOut bool   `json:"timed_out"`
 	}{}
 	if err := json.Unmarshal(stdout, &health); err != nil || health.Status == "" {
 		return val.DurationSeconds, nil
 	}
 	if health.Status != "green" {
+		waited := ""
+		if health.TimedOut {
+			waited = fmt.Sprintf(" %s after it", healthSettleTimeout)
+		}
 		return 0, protoErr("source_corrupt", false,
-			"the cluster is %s after the restore — with zero replicas anything below green means "+
-				"restored data is not fully served", health.Status)
+			"the cluster is %s%s the restore — with zero replicas anything below green means "+
+				"restored data is not fully served", health.Status, waited)
 	}
 	return val.DurationSeconds, nil
 }
