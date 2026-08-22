@@ -11,6 +11,8 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-08-22
+
 ### Added
 
 - **An Oracle Database adapter** (`adapters/oracle` 0.1.0), the
@@ -57,6 +59,16 @@ always called out explicitly.
   10 GB on disk. Zero core changes; conformance 15/15. RMAN backups,
   full-database dumps with remapping, multi-file dump sets and encrypted
   dumps are listed under the README's "deliberately not here".
+
+### Fixed
+
+- **The engine-version matrix enforced a limit no file declared.** Its
+  restore jobs state `timeout-minutes: 30`, but `go test` stops a package
+  at its own default of ten minutes, so the declared clock never applied.
+  The Oracle suite, which pulls a 10 GB image before its first container
+  starts, ran 574 s on one hosted runner and was killed mid-test on the
+  next. The jobs now pass an explicit 25-minute `-timeout`, leaving the
+  workflow's own limit as the only gate.
 
 ## [0.17.0] - 2026-08-21
 
@@ -2594,7 +2606,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/probavi/probavi/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/probavi/probavi/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/probavi/probavi/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/probavi/probavi/compare/v0.14.0...v0.15.0
