@@ -119,6 +119,13 @@ jobs:
         # The suite refuses an image the manifest does not list, so a typo
         # here fails loudly instead of reporting a green run for a version
         # this repository never claimed.
+        # The explicit -timeout makes the job's timeout-minutes above the
+        # only clock: without it `go test` stops a package at its own
+        # default of ten minutes, and a suite that pulls a large image
+        # before its first container starts (oracle: 10 GB, measured at
+        # 574 s end to end on one runner and past 600 s on the next) dies
+        # at a limit no file declares. Five minutes short of the job limit
+        # so the runner, not the test binary, reports the overrun.
         env:
           PROBAVI_IT_IMAGE: ${{ matrix.target.image }}
-        run: go test -race -tags integration ./adapters/${{ matrix.target.adapter }}/...
+        run: go test -race -tags integration -timeout 25m ./adapters/${{ matrix.target.adapter }}/...
