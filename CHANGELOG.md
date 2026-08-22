@@ -11,6 +11,53 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **An Oracle Database adapter** (`adapters/oracle` 0.1.0), the
+  eighteenth engine and the top of the DB-Engines ranking. It imports
+  one Data Pump dump file (`oracle_datapump`, the output of an `expdp`
+  schema, table or tablespace export) into the pluggable database of the
+  official `container-registry.oracle.com/database/free` image, which
+  pulls anonymously and idles under `command: sleep infinity`; the
+  adapter starts the image's prebuilt instance itself from a parameter
+  file that references the spfile and never rewrites it. Three measured
+  facts shaped it. (1) The instance refuses a loopback-only host at its
+  IPC layer (`ORA-00600 [ksipc: no private ips avail for use]`, unchanged
+  by any parameter), so this is the first adapter that cannot run under
+  the docker provider's `--network none`: the sandbox joins an internal
+  Docker network, and zero ingress is restored on the other side — the
+  listener is never started and the dispatchers are off, so no TCP
+  socket listens at all (measured, and read back by the integration
+  suite after every restore). (2) A `DBMS_SCHEDULER` job travels in a
+  dump enabled and runs the moment it lands: a purge job deleted every
+  imported row before the first read while `impdp` reported five rows
+  imported and success (measured) — the data-lifecycle rule of issue
+  #166 in its purest form. The pins are `job_queue_processes=0` and
+  `aq_tm_processes=0` at launch, read back through the engine; the job
+  stays `ENABLED` with zero runs, suspended and never rewritten, proven
+  from both sides by an integration test with an unpinned control
+  instance. (3) A dump damaged mid-file passes the header check and hangs
+  the import client forever on a job whose state reads `UNDEFINED`
+  (measured, over ten minutes), so the import runs under a watchdog that
+  polls `DBA_DATAPUMP_JOBS` and turns the hang into `source_corrupt`.
+  The dump's header is read through the engine's own
+  `DBMS_DATAPUMP.GET_DUMPFILE_INFO` — file type, writing version,
+  encryption flags, the export's wall clock (no zone, so
+  `source.params.backup_timezone` applies) — never by parsing the bytes
+  on the host; `impdp`'s exit codes are the verdict, and an import that
+  completed with errors is `restore_failed`, never green. The check
+  runner is SQL*Plus over the bequeath adapter in the restored pluggable
+  database, CSV markup with a tab delimiter, the session's NLS formats
+  set so the core's `freshness` parses, `NLS_LANG` set so non-ASCII data
+  survives; the core's generating built-in checks apply (identifiers
+  named as the dictionary stores them). Verified against
+  `database/free:23.26.3.0`; the `-lite` variant is refused because it
+  cannot run Data Pump (measured). The memory floor is 3 GiB (at 2 GiB
+  the instance mounts and is killed while opening), and the image is
+  10 GB on disk. Zero core changes; conformance 15/15. RMAN backups,
+  full-database dumps with remapping, multi-file dump sets and encrypted
+  dumps are listed under the README's "deliberately not here".
+
 ## [0.17.0] - 2026-08-21
 
 ### Added
