@@ -1,0 +1,19 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the image listed under verified — the baseline on every run — so neither can drift. The image is Oracle's own, pulled anonymously from its registry (measured: no login, no licence key), and idles under `command: sleep infinity` (no entrypoint); the adapter starts the prebuilt instance itself — no listener, no dispatchers, scheduler and queue time manager off — so nothing listens on the internal network the instance insists on. The `-lite` variant is not listed because it cannot run Data Pump (no impdp, XML component removed; measured). Oracle Database Free is a single rolling line: the vendor publishes one current version and states it receives no patches, so the list is that version, rechecked whenever the list is touched (docs/engine-versions.md §1). See docs/capabilities.md.",
+  "id": "oracle",
+  "name": "Oracle Database",
+  "status": "experimental",
+  "engine_name": "oracle",
+  "conformance_verified": true,
+  "docs": "adapters/oracle/README.md",
+  "verified": [
+    {
+      "engine_version": "23.26.3.0",
+      "image": "container-registry.oracle.com/database/free:23.26.3.0",
+      "baseline": true
+    }
+  ],
+  "sources": {
+    "oracle_datapump": "One Data Pump dump file (expdp output), imported into the image's pluggable database"
+  }
+}
