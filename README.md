@@ -293,7 +293,7 @@ A drill writes its evidence log on the host that ran it. Getting it anywhere els
 
 `probavi push` sends **the whole file, unchanged**, as `application/x-ndjson`, with a bearer token read from `PROBAVI_PUSH_TOKEN` (`--secret-env` adds the same HMAC signature a webhook carries, so one receiver verifies both). Sending everything every time is what makes it idempotent and self-healing — whatever an earlier push missed, the next one repairs — so there is no cursor file and no state to lose, and a failed push (exit 2, distinct from a usage error) never changes what a drill proved. It never modifies or deletes the log: a push is a copy, and no flag offers otherwise.
 
-The bytes on the wire are the log itself, so the receiver runs the same verification anyone else would, against the same public key. Probavi ships no receiver, endorses none, and has no default destination — a push goes exactly where you point it. The request, the path rules, and the delivery semantics are specified in [`docs/evidence-push.md`](docs/evidence-push.md) (`probavi-push/1`).
+The bytes on the wire are the log itself, so the receiver runs the same verification anyone else would, against the same public key. Probavi ships no receiver, endorses none, and has no default destination — a push goes exactly where you point it. The request, the path rules, and the delivery semantics are specified in [`docs/evidence-push.md`](docs/evidence-push.md) (`probavi-evidence-push/1`).
 
 ## DR game-days
 

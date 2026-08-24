@@ -48,7 +48,8 @@ the things they describe; on any disagreement, those documents win.
 
 The `schema` field carries `probavi-capabilities/N`, versioned
 independently of the binary — exactly as `probavi-adapter/N`,
-`probavi-evidence/N`, `probavi-notification/N`, and `probavi-push/N` are.
+`probavi-evidence/N`, `probavi-notification/N`, and
+`probavi-evidence-push/N` are.
 
 - Within a version, fields may be **added**, and entries may appear or
   disappear. That is not a breaking change: capabilities change, and

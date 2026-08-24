@@ -14,7 +14,7 @@ always called out explicitly.
 ### Added
 
 - **`probavi push`: an evidence log can leave the host that wrote it over
-  one outbound HTTPS request** (protocol `probavi-push/1`, spec
+  one outbound HTTPS request** (protocol `probavi-evidence-push/1`, spec
   `docs/evidence-push.md`). The two usual answers to "get the log
   somewhere else" — a filesystem both sides can reach, or an object store
   with credentials on every host — are exactly what a machine behind NAT,

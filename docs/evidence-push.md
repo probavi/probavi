@@ -1,7 +1,7 @@
 # Probavi evidence push — sending an evidence log to a URL
 
-**Protocol version: `probavi-push/1`** (versioned independently of the
-Probavi binary, like the adapter protocol, the evidence schema, and the
+**Protocol version: `probavi-evidence-push/1`** (versioned independently
+of the Probavi binary, like the adapter protocol, the evidence schema, and the
 notification payload). This document is normative for `probavi push`: the
 request it makes, the guarantees it gives the operator, and what a receiver
 may rely on.
@@ -110,7 +110,7 @@ Content-Type: application/x-ndjson
 Content-Length: <exact byte count of the body>
 Authorization: Bearer <token>                (unless --allow-unauthenticated)
 User-Agent: probavi/<version>
-X-Probavi-Push-Version: probavi-push/1
+X-Probavi-Evidence-Push-Version: probavi-evidence-push/1
 X-Probavi-Signature-256: sha256=<hex>        (only when --secret-env is set)
 
 <the evidence log, verbatim>
@@ -120,10 +120,11 @@ X-Probavi-Signature-256: sha256=<hex>        (only when --secret-env is set)
   document states, not one a method is asked to imply.
 - **Body.** The log file's bytes (§3). `Content-Length` is always present;
   the body is never chunked and never compressed by the sender.
-- **`X-Probavi-Push-Version`** carries this document's version, so a
-  receiver can tell `probavi-push/1` from a future version without
-  inspecting the body. Receivers should tolerate unknown *versions*, not
-  unknown headers within a version.
+- **`X-Probavi-Evidence-Push-Version`** carries this document's version, so
+  a receiver can tell `probavi-evidence-push/1` from a future version
+  without inspecting the body. Header name and value say the same word on
+  purpose — one thing gets one name — and receivers should tolerate unknown
+  *versions*, not unknown headers within a version.
 
 ## 5. The destination path
 
@@ -143,11 +144,18 @@ URL's path component:
   identify the same log every time: nothing in it may be derived from the
   clock, the sequence number, or the run. A receiver that is handed a new
   path per push cannot maintain a history — it accumulates copies.
-- **Grammar.** One or more segments separated by `/`; each segment is 1–64
-  characters from `A–Z a–z 0–9 . _ -`; no empty, `.`, or `..` segment; no
-  leading or trailing `/`; at most 128 characters in total. The set is
-  deliberately narrow: it needs no percent-encoding, cannot escape the
-  destination's path prefix, and cannot smuggle a query or fragment.
+- **Grammar.** One to eight segments separated by `/`; each segment is 1–64
+  characters from `A–Z a–z 0–9 . _ -` and **may not begin with a dot**; no
+  empty segment, no leading or trailing `/`; at most 128 characters in
+  total. The set is deliberately narrow: it needs no percent-encoding,
+  cannot escape the destination's path prefix, and cannot smuggle a query
+  or fragment. Two of the limits are there for the receiver as much as for
+  the sender: the leading-dot ban rules out `..` and `.` without a separate
+  rule and keeps hidden names free, because a receiver may write an
+  incoming body to a dot-prefixed temporary file before renaming it into
+  place; and the segment count matters because 128 characters would
+  otherwise allow sixty single-character segments, which a stricter
+  receiver refuses outright.
 - A default derived from the log's base name that does not satisfy the
   grammar (an accented or spaced filename) is a usage error naming
   `--path`, never a silent transliteration.
@@ -155,7 +163,11 @@ URL's path component:
 Hierarchy is allowed and is the way one host sends several logs, or several
 hosts send to one receiver: `--path db01/orders.jsonl`. What a receiver
 does with the shape — accept it, reject it, map it to a name — is its own
-policy (§7).
+policy (§7); a receiver may, for instance, accept only file names matching
+`*.jsonl`, and the default path (the log's base name) usually satisfies
+that on its own. The sender enforces nothing beyond the grammar above: what
+a destination accepts is the destination's answer to give, and hard-coding
+one receiver's rules here would be endorsing it.
 
 ## 6. Authenticity
 
@@ -281,7 +293,7 @@ successful one carries everything.
 
 ## 10. Versioning
 
-`probavi-push/1` covers the request of §4, the path rules of §5, the
+`probavi-evidence-push/1` covers the request of §4, the path rules of §5, the
 authentication of §6, and the delivery semantics of §7. Additive,
 receiver-visible changes (a new header, a new accepted status class) bump
 the version; so does any change to what the body contains. Receivers should

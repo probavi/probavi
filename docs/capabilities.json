@@ -30,7 +30,7 @@
       "schema": "docs/schemas/notification/payload.json"
     },
     "evidence_push": {
-      "version": "probavi-push/1",
+      "version": "probavi-evidence-push/1",
       "spec": "docs/evidence-push.md",
       "schema": "docs/schemas/evidence/record.json"
     }

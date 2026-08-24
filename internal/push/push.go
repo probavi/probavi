@@ -6,7 +6,7 @@
 // The delivery loop deliberately mirrors internal/notify rather than
 // sharing code with it. The two carry different bodies, answer a refusal
 // differently (a receiver's reason is printed here, discarded there), and
-// are versioned independently — probavi-push/N against
+// are versioned independently — probavi-evidence-push/N against
 // probavi-notification/N — so they must be free to diverge on a spec
 // change. What must not diverge silently is the retry budget, which
 // docs/evidence-push.md §7 declares identical to the notification rules; a
@@ -37,7 +37,11 @@ import (
 // published by the capabilities manifest. It is versioned independently of
 // the binary, exactly like probavi-adapter/N, probavi-evidence/N, and
 // probavi-notification/N.
-const SchemaID = "probavi-push/1"
+//
+// One word for one thing: this identifier is what the spec is named after
+// and what a receiver echoes, so the header, the document, and the answer
+// all say probavi-evidence-push.
+const SchemaID = "probavi-evidence-push/1"
 
 // Request constants (docs/evidence-push.md §4).
 const (
@@ -47,8 +51,10 @@ const (
 	// newline-delimited JSON, sent verbatim.
 	ContentType = "application/x-ndjson"
 	// HeaderVersion carries SchemaID, so a receiver can tell this protocol
-	// version from a future one without inspecting the body.
-	HeaderVersion = "X-Probavi-Push-Version"
+	// version from a future one without inspecting the body. Its name
+	// carries the protocol's own word, not a shorter one: two names for one
+	// thing is the drift this project's vocabulary rules out.
+	HeaderVersion = "X-Probavi-Evidence-Push-Version"
 	// HeaderSignature carries the optional HMAC-SHA256 of the body,
 	// GitHub-style as "sha256=<hex>" — the same header and scheme a
 	// notification uses, so one receiver verifies both with one function.
@@ -84,11 +90,19 @@ const (
 	maxReason = 500
 	// maxPath caps the total length of a destination path.
 	maxPath = 128
+	// maxSegments caps how deep a destination path goes. The length cap
+	// alone would allow sixty single-character segments, which a stricter
+	// receiver refuses.
+	maxSegments = 8
 )
 
 // pathSegment is one segment of a destination path (§5): narrow enough to
-// need no percent-encoding and to carry no query, fragment, or traversal.
-var pathSegment = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+// need no percent-encoding and to carry no query or fragment, and never
+// starting with a dot — which rules out traversal (".."), the current
+// directory ("."), and hidden names, the last because a receiver that
+// writes the body to a dot-prefixed temporary file before renaming it into
+// place has those names taken.
+var pathSegment = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$`)
 
 // Refusal is a receiver's non-2xx answer together with the reason it gave.
 // The reason is sanitized (printable characters only, whitespace
@@ -190,9 +204,13 @@ func ValidatePath(p string) error {
 	if len(p) > maxPath {
 		return fmt.Errorf("destination path is %d characters, more than the %d allowed", len(p), maxPath)
 	}
-	for _, seg := range strings.Split(p, "/") {
-		if seg == "." || seg == ".." || !pathSegment.MatchString(seg) {
-			return fmt.Errorf("path segment %q is not 1-64 characters of A-Z a-z 0-9 . _ -", seg)
+	segments := strings.Split(p, "/")
+	if len(segments) > maxSegments {
+		return fmt.Errorf("destination path has %d segments, more than the %d allowed", len(segments), maxSegments)
+	}
+	for _, seg := range segments {
+		if !pathSegment.MatchString(seg) {
+			return fmt.Errorf("path segment %q is not 1-64 characters of A-Z a-z 0-9 . _ - starting with anything but a dot", seg)
 		}
 	}
 	return nil

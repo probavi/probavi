@@ -116,6 +116,19 @@ func TestDeliveryConstantsMatchTheNotificationRules(t *testing.T) {
 	}
 }
 
+// TestProtocolVocabulary pins the two strings a receiver reads, because
+// both are wire contract and because one thing gets one word: the header
+// name, the identifier it carries, and the specification's title all say
+// evidence push.
+func TestProtocolVocabulary(t *testing.T) {
+	if SchemaID != "probavi-evidence-push/1" {
+		t.Errorf("SchemaID = %q, want %q", SchemaID, "probavi-evidence-push/1")
+	}
+	if HeaderVersion != "X-Probavi-Evidence-Push-Version" {
+		t.Errorf("HeaderVersion = %q, want %q", HeaderVersion, "X-Probavi-Evidence-Push-Version")
+	}
+}
+
 // TestPushSendsTheWholeLogUnchanged is the core guarantee: the bytes on
 // the wire are the log file, with the length and media type that describe
 // them.
@@ -236,6 +249,10 @@ func TestValidatePath(t *testing.T) {
 		{"base name", "prod.jsonl", true},
 		{"hierarchy", "db01/orders.jsonl", true},
 		{"dashes and underscores", "host-01_orders.jsonl", true},
+		{"eight segments", "a/b/c/d/e/f/g/prod.jsonl", true},
+		{"nine segments", "a/b/c/d/e/f/g/h/prod.jsonl", false},
+		{"hidden name", ".prod.jsonl", false},
+		{"hidden name deeper in", "db01/.prod.jsonl", false},
 		{"empty", "", false},
 		{"leading slash", "/prod.jsonl", false},
 		{"trailing slash", "prod.jsonl/", false},
