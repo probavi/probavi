@@ -51,6 +51,7 @@ func handlers() map[string]handler {
 	return map[string]handler{
 		cli.CmdRun:                runDrill,
 		cli.CmdGameDay:            runGameDay,
+		cli.CmdPush:               runPush,
 		cli.CmdEvidenceVerify:     runEvidenceVerify,
 		cli.CmdEvidenceKeygen:     runEvidenceKeygen,
 		cli.CmdAdapterProbe:       runAdapterProbe,

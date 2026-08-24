@@ -30,7 +30,7 @@ engine adapters      sandbox providers      ← both are PLUGGABLE axes
 evidence store (append-only, hash-chained, ed25519-signed)
                │
                ▼
-metrics / notifications / reports / audit export
+metrics / notifications / push / reports / audit export
 ```
 
 ### 2.1 The adapter contract (the most important decision)
@@ -57,7 +57,7 @@ metrics / notifications / reports / audit export
 
 ### 2.4 Explicit non-goals (enforce actively)
 
-No backup engine. No built-in scheduler (cron/systemd-timer + lock file + timeout is the way). No daemon on database hosts. No UI before Phase 3 of ROADMAP.md. No secrets management beyond reading credentials from env/file for a drill.
+No backup engine. No built-in scheduler (cron/systemd-timer + lock file + timeout is the way). No daemon on database hosts. No UI before Phase 3 of ROADMAP.md. No secrets management beyond reading credentials from env/file for a drill or a push.
 
 ## 3. Development standards (mandatory)
 

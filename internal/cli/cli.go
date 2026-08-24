@@ -37,6 +37,7 @@ const (
 const (
 	CmdRun                = "run"
 	CmdGameDay            = "gameday"
+	CmdPush               = "push"
 	CmdEvidenceVerify     = "evidence verify"
 	CmdEvidenceKeygen     = "evidence keygen"
 	CmdAdapterProbe       = "adapter probe"
@@ -126,6 +127,28 @@ func Commands() []Command {
 				{Code: ExitEvidenceLost, Meaning: "a member's evidence record could not be written"},
 			},
 			Docs: "docs/gameday.md",
+		},
+		{
+			ID:      CmdPush,
+			Words:   []string{"push"},
+			Status:  "experimental",
+			Summary: "Send an evidence log to a URL: the whole file, unchanged, as application/x-ndjson. A copy — the log is never modified.",
+			Flags: []Flag{
+				{Name: "--log", Required: true, Doc: "Path to the evidence log to send; opened read-only."},
+				{Name: "--to", Doc: "Destination as a literal absolute http(s) URL; exactly one of --to or --to-env."},
+				{Name: "--to-env", Doc: "Environment variable holding the destination URL; use this when the URL carries a token."},
+				{Name: "--path", Doc: "Path the log is sent under, appended to the destination URL; defaults to the log file's base name."},
+				{Name: "--token-env", Doc: "Environment variable holding the bearer token; defaults to PROBAVI_PUSH_TOKEN."},
+				{Name: "--allow-unauthenticated", Doc: "Send no Authorization header; mutually exclusive with --token-env."},
+				{Name: "--secret-env", Doc: "Environment variable holding the HMAC secret for body signing; absent means unsigned."},
+			},
+			Stdout: "one-line JSON push result",
+			ExitCodes: []ExitCode{
+				{Code: ExitPass, Meaning: "the log was accepted"},
+				{Code: ExitError, Meaning: "delivery failure: attempts exhausted or the receiver refused"},
+				{Code: ExitUsage, Meaning: "usage, configuration, or I/O error"},
+			},
+			Docs: "docs/evidence-push.md",
 		},
 		{
 			ID:      CmdEvidenceVerify,

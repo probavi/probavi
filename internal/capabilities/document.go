@@ -29,12 +29,13 @@ type Project struct {
 	Repository string `json:"repository"`
 }
 
-// Contracts states the versions of the three independently versioned
+// Contracts states the versions of the four independently versioned
 // contracts this build speaks.
 type Contracts struct {
 	AdapterProtocol     Contract         `json:"adapter_protocol"`
 	EvidenceSchema      EvidenceContract `json:"evidence_schema"`
 	NotificationPayload Contract         `json:"notification_payload"`
+	EvidencePush        Contract         `json:"evidence_push"`
 }
 
 // Contract is one versioned contract with its normative document.

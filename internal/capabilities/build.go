@@ -12,6 +12,7 @@ import (
 	"github.com/probavi/probavi/internal/evidence"
 	"github.com/probavi/probavi/internal/i18n"
 	"github.com/probavi/probavi/internal/notify"
+	"github.com/probavi/probavi/internal/push"
 	"github.com/probavi/probavi/internal/sandbox"
 	"github.com/probavi/probavi/internal/sandbox/registry"
 )
@@ -106,6 +107,14 @@ func buildContracts(root string) (Contracts, error) {
 			Spec:    "docs/notifications.md",
 			Schema:  "docs/schemas/notification/payload.json",
 		},
+		// A push has no payload schema of its own: the bytes on the wire are
+		// the evidence log, so the record schema is the body schema, one
+		// record per line (docs/evidence-push.md §3).
+		EvidencePush: Contract{
+			Version: push.SchemaID,
+			Spec:    "docs/evidence-push.md",
+			Schema:  "docs/schemas/evidence/record.json",
+		},
 	}
 	refs := []struct{ what, path string }{
 		{"adapter protocol spec", c.AdapterProtocol.Spec},
@@ -115,6 +124,8 @@ func buildContracts(root string) (Contracts, error) {
 		{"independent evidence verifier", c.EvidenceSchema.IndependentVerifier + "/"},
 		{"notification spec", c.NotificationPayload.Spec},
 		{"notification payload schema", c.NotificationPayload.Schema},
+		{"evidence push spec", c.EvidencePush.Spec},
+		{"evidence push body schema", c.EvidencePush.Schema},
 	}
 	for _, r := range refs {
 		if err := requireFile(root, r.path, r.what); err != nil {

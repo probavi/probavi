@@ -28,6 +28,11 @@
       "version": "probavi-notification/1",
       "spec": "docs/notifications.md",
       "schema": "docs/schemas/notification/payload.json"
+    },
+    "evidence_push": {
+      "version": "probavi-evidence-push/1",
+      "spec": "docs/evidence-push.md",
+      "schema": "docs/schemas/evidence/record.json"
     }
   },
   "adapters": [
@@ -1222,6 +1227,73 @@
           }
         ],
         "docs": "docs/gameday.md"
+      },
+      {
+        "id": "push",
+        "name": "probavi push",
+        "status": "experimental",
+        "summary": "Send an evidence log to a URL: the whole file, unchanged, as application/x-ndjson. A copy — the log is never modified.",
+        "flags": [
+          {
+            "id": "--log",
+            "required": true,
+            "repeatable": false,
+            "doc": "Path to the evidence log to send; opened read-only."
+          },
+          {
+            "id": "--to",
+            "required": false,
+            "repeatable": false,
+            "doc": "Destination as a literal absolute http(s) URL; exactly one of --to or --to-env."
+          },
+          {
+            "id": "--to-env",
+            "required": false,
+            "repeatable": false,
+            "doc": "Environment variable holding the destination URL; use this when the URL carries a token."
+          },
+          {
+            "id": "--path",
+            "required": false,
+            "repeatable": false,
+            "doc": "Path the log is sent under, appended to the destination URL; defaults to the log file's base name."
+          },
+          {
+            "id": "--token-env",
+            "required": false,
+            "repeatable": false,
+            "doc": "Environment variable holding the bearer token; defaults to PROBAVI_PUSH_TOKEN."
+          },
+          {
+            "id": "--allow-unauthenticated",
+            "required": false,
+            "repeatable": false,
+            "doc": "Send no Authorization header; mutually exclusive with --token-env."
+          },
+          {
+            "id": "--secret-env",
+            "required": false,
+            "repeatable": false,
+            "doc": "Environment variable holding the HMAC secret for body signing; absent means unsigned."
+          }
+        ],
+        "positional": null,
+        "stdout": "one-line JSON push result",
+        "exit_codes": [
+          {
+            "code": 0,
+            "meaning": "the log was accepted"
+          },
+          {
+            "code": 2,
+            "meaning": "delivery failure: attempts exhausted or the receiver refused"
+          },
+          {
+            "code": 3,
+            "meaning": "usage, configuration, or I/O error"
+          }
+        ],
+        "docs": "docs/evidence-push.md"
       },
       {
         "id": "evidence verify",
