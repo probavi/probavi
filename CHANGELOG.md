@@ -55,6 +55,25 @@ always called out explicitly.
   are the log, so whoever receives it runs the same verification anyone
   else would, against a public key the receiver never holds.
 
+### Fixed
+
+- **The docker provider's orphan-sweep integration test assumed it was the
+  only sweeper on the machine.** It planted a dead-owner container labelled
+  with this host's id and asserted that its own `SweepOrphans` removed it —
+  but a sweep is host-scoped, not process-scoped, every probavi process on
+  one machine derives the same host id from the hostname, and every drill
+  sweeps at startup. The drills `cmd/probavi`'s integration tests run
+  against the same daemon therefore reap the planted orphan whenever the
+  two packages overlap, leaving the test's own sweep with nothing to find
+  (`sweep did not remove the orphan … (removed: [])`). It turned red on
+  main while the identical tree had passed twice on its branch. Reproduced
+  locally by running the test beside a loop that sweeps with the machine's
+  real host id — same failure, every time — and fixed by scoping the test
+  to a host id nothing else can derive, which keeps every assertion it
+  makes; three consecutive runs pass with that loop still hammering the
+  daemon. The product behaviour is untouched and was never wrong: an
+  orphan belongs to whoever finds it.
+
 ## [0.18.0] - 2026-08-22
 
 ### Added
