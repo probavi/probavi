@@ -18,6 +18,19 @@ const (
 	msgGameDayConfigRequired = "probavi gameday: --config is required\n"
 	msgGameDayEncodeSummary  = "probavi gameday: encode summary: %v\n"
 
+	msgPushLogRequired        = "probavi push: --log is required\n"
+	msgPushDestinationNotBoth = "probavi push: exactly one of --to or --to-env must be given, not both\n"
+	msgPushDestinationNeither = "probavi push: exactly one of --to or --to-env must be given (a token-bearing URL belongs in --to-env)\n"
+	msgPushTokenAndAnon       = "probavi push: --allow-unauthenticated and --token-env cannot both be given\n" //nolint:gosec // G101 false positive: a diagnostic about the --token-env flag, not a credential
+	msgPushEnvUnset           = "probavi push: environment variable %s is unset or empty\n"
+	msgPushPathInvalid        = "probavi push: --path %q is not usable: %v\n"
+	msgPushPathDerived        = "probavi push: the log's base name %q is not usable as a destination path: %v — pass --path with an explicit one\n"
+	// An empty log is a truthful state, and pushing it is not an error —
+	// but it exits 0 exactly as a log of proven drills does, so the
+	// difference is stated, as `evidence verify` states it.
+	msgPushEmptyLog     = "probavi push: the log holds no records — the receiver is being told the log exists, nothing more\n"
+	msgPushEncodeResult = "probavi push: encode result: %v\n"
+
 	msgVerifyFlagsRequired = "probavi evidence verify: --log and at least one --key are required\n"
 	msgVerifyEncodeResult  = "probavi evidence verify: encode result: %v\n"
 	// An intact log with nothing in it is the one verdict a reader can
@@ -58,6 +71,17 @@ Commands:
       2 errors/cancellation left members unproven, 3 usage or setup
       error, 5 a member's evidence record could not be written.
 
+  push --log <evidence.jsonl> (--to <url> | --to-env <VAR>) [--path <path>]
+      Send an evidence log to a URL: the whole file, unchanged, as
+      application/x-ndjson, with a bearer token read from
+      PROBAVI_PUSH_TOKEN (--token-env names another variable,
+      --allow-unauthenticated sends none; --secret-env adds an HMAC
+      signature). A push is a copy — the log is never modified — and keeps
+      no state: whatever an earlier push missed, the next one repairs.
+      Run it from its own timer (docs/evidence-push.md).
+      Exit codes: 0 the log was accepted, 2 delivery failure, 3 usage,
+      configuration or I/O error.
+
   evidence verify --log <file> --key <pubkey> [--key <pubkey> ...]
       Verify an evidence log offline against one or more public keys.
       Prints a one-line JSON result on stdout.
@@ -95,6 +119,15 @@ var allMessages = []string{
 	msgRunEncodeSummary,
 	msgGameDayConfigRequired,
 	msgGameDayEncodeSummary,
+	msgPushLogRequired,
+	msgPushDestinationNotBoth,
+	msgPushDestinationNeither,
+	msgPushTokenAndAnon,
+	msgPushEnvUnset,
+	msgPushPathInvalid,
+	msgPushPathDerived,
+	msgPushEmptyLog,
+	msgPushEncodeResult,
 	msgVerifyFlagsRequired,
 	msgVerifyEncodeResult,
 	msgVerifyNoRecords,

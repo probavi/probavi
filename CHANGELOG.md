@@ -11,6 +11,50 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **`probavi push`: an evidence log can leave the host that wrote it over
+  one outbound HTTPS request** (protocol `probavi-push/1`, spec
+  `docs/evidence-push.md`). The two usual answers to "get the log
+  somewhere else" — a filesystem both sides can reach, or an object store
+  with credentials on every host — are exactly what a machine behind NAT,
+  in a DMZ, at another site, or in an organisation that will not run a
+  shared filesystem does not have; one outbound request is what it does
+  have. Evidence that cannot leave the machine that produced it is
+  evidence nobody outside that machine can check, so moving it is
+  something the core does freely, for anyone, on the reasoning that keeps
+  `evidence verify` here. The command sends **the whole file, unchanged**,
+  as `application/x-ndjson` with `Content-Length`, POSTed to
+  `<--to>/<--path>` — the path defaults to the log's base name and is
+  stable across runs, because a receiver handed a new path per push
+  accumulates copies instead of a history. Authentication is a bearer
+  token read from `PROBAVI_PUSH_TOKEN` (`--token-env` names another
+  variable), and `--secret-env` adds the same `X-Probavi-Signature-256`
+  HMAC a notification carries, so a receiver already verifying webhooks
+  verifies pushes with the code it has. Sending everything every time is
+  what removes the state: no cursor file, no "last pushed" marker, and
+  whatever an earlier push missed the next one repairs — at 1–2 KB per
+  record, a daily drill for a year is under a megabyte. A push is a copy:
+  the log is opened read-only, is never modified or deleted, and no flag
+  offers otherwise. Delivery follows the notification rules unchanged
+  (three attempts, 10 s each, 1 s/2 s backoff, redirects never followed,
+  2xx is success), with a test pinning those constants to
+  `internal/notify`'s so two things the docs call identical cannot drift
+  apart; a refusal that names a reason — out of licence, log too large,
+  path not accepted — is printed as it arrives, bounded and stripped of
+  control characters, because the receiver is untrusted and that line is
+  what an operator reads in a cron job's mail. Exit codes keep the
+  established shape: 0 accepted, 2 delivery failure, 3 usage,
+  configuration or I/O error — a delivery failure is deliberately distinct
+  from anything a drill reports, and the recommended arrangement is a
+  timer of its own. Sending without a token requires
+  `--allow-unauthenticated`, spelled out in full: were the token merely
+  optional, one mistyped variable name would be enough to send evidence
+  unauthenticated to a public address. No receiver is defined, endorsed,
+  or required, and there is no default destination; the bytes on the wire
+  are the log, so whoever receives it runs the same verification anyone
+  else would, against a public key the receiver never holds.
+
 ## [0.18.0] - 2026-08-22
 
 ### Added

@@ -8,8 +8,8 @@ without a build step.
 
 This document is normative for the file's contract. The specifications it
 points at (`adapter-protocol.md`, `evidence-schema.md`, `notifications.md`,
-`i18n.md`, `sandbox-bare-host.md`) remain normative for the things they
-describe; on any disagreement, those documents win.
+`evidence-push.md`, `i18n.md`, `sandbox-bare-host.md`) remain normative for
+the things they describe; on any disagreement, those documents win.
 
 ---
 
@@ -48,7 +48,7 @@ describe; on any disagreement, those documents win.
 
 The `schema` field carries `probavi-capabilities/N`, versioned
 independently of the binary — exactly as `probavi-adapter/N`,
-`probavi-evidence/N`, and `probavi-notification/N` are.
+`probavi-evidence/N`, `probavi-notification/N`, and `probavi-push/N` are.
 
 - Within a version, fields may be **added**, and entries may appear or
   disappear. That is not a breaking change: capabilities change, and
@@ -76,7 +76,7 @@ value as unreadable rather than guessing.
 - **Paths** (`docs`, `spec`, `schema`) are repository-relative; a trailing
   slash marks a directory. The generator fails if any of them is missing,
   so they are never dead links.
-- **`contracts`** carries the three independently versioned contracts.
+- **`contracts`** carries the four independently versioned contracts.
   `evidence_schema.readable_versions` is every version the verifier
   accepts, which is broader than the one version it writes.
 - **`checks[].kind`** is `builtin` (selected with the `builtin` key in
@@ -99,7 +99,7 @@ that also drives the behavior, so the two cannot disagree:
 | `cli` | `internal/cli`, the table `cmd/probavi` dispatches from |
 | `notifications` | `internal/notify` constants and `config.NotifyOutcomes()` |
 | `locales` | the embedded catalogs in `internal/i18n/locales/`, plus the canonical source language |
-| `contracts` | the frozen version constants of `internal/adapter`, `internal/evidence`, `internal/notify` |
+| `contracts` | the frozen version constants of `internal/adapter`, `internal/evidence`, `internal/notify`, `internal/push` |
 | `project`, `non_goals` | declared in `internal/capabilities` — a maturity judgement and a set of things no code implements are the only facts here that no registry can hold |
 
 The generator refuses to produce a file when these disagree: an adapter

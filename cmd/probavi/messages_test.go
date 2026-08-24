@@ -113,6 +113,9 @@ func TestHungarianCLIOutput(t *testing.T) {
 	if _, _, stderr = runHu("gameday"); !strings.Contains(stderr, "a --config megadása kötelező") {
 		t.Errorf("hu gameday without config: %s", stderr)
 	}
+	if _, _, stderr = runHu("push"); !strings.Contains(stderr, "a --log megadása kötelező") {
+		t.Errorf("hu push without log: %s", stderr)
+	}
 
 	code, stdout, _ := runHu("version")
 	if code != 0 || !strings.Contains(stdout, "adapterprotokoll:") || !strings.Contains(stdout, "bizonyítékséma:") {

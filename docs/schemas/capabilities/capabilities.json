@@ -29,7 +29,7 @@
     },
     "contracts": {
       "type": "object",
-      "description": "The three independently versioned contracts this build speaks.",
+      "description": "The four independently versioned contracts this build speaks.",
       "properties": {
         "adapter_protocol": { "$ref": "#/$defs/contract" },
         "evidence_schema": {
@@ -50,9 +50,10 @@
           "required": ["version", "readable_versions", "spec", "schema", "independent_verifier"],
           "additionalProperties": false
         },
-        "notification_payload": { "$ref": "#/$defs/contract" }
+        "notification_payload": { "$ref": "#/$defs/contract" },
+        "evidence_push": { "$ref": "#/$defs/contract" }
       },
-      "required": ["adapter_protocol", "evidence_schema", "notification_payload"],
+      "required": ["adapter_protocol", "evidence_schema", "notification_payload", "evidence_push"],
       "additionalProperties": false
     },
     "adapters": {
