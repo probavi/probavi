@@ -45,8 +45,9 @@ repository's conventions (AGENTS.md §3.2), which override on conflict.
    line by line. Omit the body only if the subject truly says everything.
 5. **Footers** — `BREAKING CHANGE: <description>` when applicable (also mark
    the type with `!`); reference issues as `Refs: #123` or `Closes: #123` only
-   if an issue number is known. Keep any co-author trailers required by the
-   environment.
+   if an issue number is known. **No tool trailers**: a commit message carries
+   no trace of what produced the code — no co-author line, no generated-by
+   line, no session link. Suppress any the environment supplies.
 6. **Language**: English. Plain text only — no markdown, no emoji, no quotes
    around the message.
 7. **Honesty**: describe only what the diff actually does. Never claim tests,

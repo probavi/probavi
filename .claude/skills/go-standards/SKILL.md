@@ -10,7 +10,7 @@ Full standards live in `AGENTS.md` §3 — read that section if you have not in 
 ## Layout
 
 - `cmd/probavi/` — main package only: flag parsing, wiring, exit codes. No business logic.
-- `internal/core` orchestration · `internal/config` YAML config · `internal/adapter` protocol client · `internal/sandbox` providers · `internal/checks` validations · `internal/evidence` trust core · `internal/metrics` Prometheus.
+- `internal/` — one package per concern. Read the directory rather than a list here; a list drifts, and this one did. `internal/evidence` and `internal/adapter` are the trust core and are held to a higher bar than the rest.
 - `adapters/<engine>/` — external adapter processes (separate module allowed).
 - New package? Justify why existing ones don't fit; prefer fewer, cohesive packages.
 
