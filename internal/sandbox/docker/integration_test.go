@@ -4,6 +4,8 @@ package docker
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -106,12 +108,35 @@ func TestDockerLifecycle(t *testing.T) {
 	destroyed = true
 }
 
+// uniqueHostID returns a host id in the same shape as sandbox.HostID() that
+// no other process on this machine can derive, so a host-scoped sweep in
+// one test cannot collide with a concurrent drill's.
+func uniqueHostID(t *testing.T) string {
+	t.Helper()
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatalf("random host id: %v", err)
+	}
+	return hex.EncodeToString(b)
+}
+
 // TestSweepOrphansReal verifies the sweep removes dead-owner containers and
 // spares live-owner ones, against a real daemon.
 func TestSweepOrphansReal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	p := New(nil)
+	// Scope this test to a host id nothing else shares. A sweep is
+	// host-scoped, not process-scoped — that is the product behaviour, and
+	// it is correct: an orphan belongs to whoever finds it. But every
+	// probavi process on one machine derives the same host id from the
+	// hostname, and every drill sweeps at startup (internal/core), so a
+	// drill running in another test package against this same daemon reaps
+	// the orphan planted below and leaves this sweep with nothing to find.
+	// That is what turned this test red on main while the identical code
+	// passed twice on its branch. A unique id keeps every assertion below
+	// and removes the race.
+	p.hostID = uniqueHostID(t)
 
 	// A live sandbox owned by this test process.
 	live, err := p.Create(ctx, map[string]string{"image": testImage})
