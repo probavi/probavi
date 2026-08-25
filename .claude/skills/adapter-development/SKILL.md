@@ -25,7 +25,7 @@ description: Rules and workflow for creating or modifying Probavi engine adapter
 1. Implement `probe` first and make `probavi adapter probe` show correct capabilities.
 2. Implement `provision` against the simplest source kind; get one manual end-to-end drill passing.
 3. Add `healthcheck` + `teardown`, then the failure paths (missing source, corrupt backup, sandbox death mid-restore).
-4. Run the conformance suite (`probavi adapter conformance <cmd>`) — a new adapter is done only when conformance passes. *(The suite is a Phase 2 deliverable and does not exist yet; until it lands, the protocol doc's MUSTs and the postgres adapter's test suite are the reference.)*
+4. Run the conformance suite (`probavi adapter conformance <cmd>`) — a new adapter is done only when conformance passes.
 5. Golden-file tests for every request/response pair you implement; table-driven tests for source discovery logic.
 
 ## Definition of done

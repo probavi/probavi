@@ -57,7 +57,9 @@ metrics / notifications / push / reports / audit export
 
 ### 2.4 Explicit non-goals (enforce actively)
 
-No backup engine. No built-in scheduler (cron/systemd-timer + lock file + timeout is the way). No daemon on database hosts. No UI before Phase 3 of ROADMAP.md. No secrets management beyond reading credentials from env/file for a drill or a push.
+No backup engine. No built-in scheduler (cron/systemd-timer + lock file + timeout is the way). No daemon on database hosts. No web interface. No secrets management beyond reading credentials from env/file for the duration of one drill or one push. No telemetry and no phone-home. No more than one new engine per release cycle.
+
+The list is closed, and none of it is qualified with "yet", "unless proven unavoidable" or "before Phase 3": a non-goal with an escape clause is a roadmap item. `ROADMAP.md` carries the same list. `docs/capabilities.json` carries the six that describe the software; the engine rate limit is a release-cadence rule rather than a capability, so it has no entry there.
 
 ## 3. Development standards (mandatory)
 
@@ -116,7 +118,7 @@ Purpose: Probavi's reports should let users demonstrate recovery-testing practic
 - **EU NIS2 (Directive 2022/2555)** — relevant theme: cybersecurity risk-management measures covering business continuity, backup management and disaster recovery. Probavi evidences the "backup management and disaster recovery" practice with dated, signed drill records.
 - **NIST** — relevant anchors: SP 800-34 (contingency planning: plans must be *tested and exercised*); SP 800-53 control families CP-4 (contingency plan testing), CP-9 (system backup — including testing backups for reliability and integrity), CP-10 (system recovery and reconstitution); CSF 2.0 Recover function. Probavi's automated drills are a direct mechanization of "test backups for reliability and integrity" and produce the documentation these controls expect.
 
-Implementation rule: the Phase 3 audit-report exporter gets a `mappings/` data file per framework (framework → which Probavi evidence fields demonstrate it), reviewed by a human, versioned, and clearly dated — never hardcoded strings in Go.
+The audit-report exporter that consumes these mappings is a commercial feature built outside this repository (§6), so its implementation rules are not this file's business.
 
 ## 5. How to work in this repo (agent operating instructions)
 
@@ -129,7 +131,7 @@ Implementation rule: the Phase 3 audit-report exporter gets a `mappings/` data f
 7. Language: all code, comments, docs, commits in English. English is the canonical source language of the project; localization of user-facing CLI output is underway (`docs/i18n.md` is normative, language roadmap in ROADMAP.md Phase 4) and must never change the language of code, specs, logs, or evidence records.
 8. **`docs/capabilities.json` is generated — never hand-edit it.** It is the machine-readable statement of what Probavi can do today, and downstream surfaces consume it as their only permitted source of capability claims (the website reads this repository as a submodule and may not claim anything absent from it). Regenerate with `go generate ./...` **in the same PR** as any change to adapters, sandbox providers, built-in checks, CLI commands or exit codes, notification transports, locale catalogs, or a contract version; CI fails on any diff. It records only what ships and works here: no planned entries (those belong in ROADMAP.md), nothing from the commercial layer, and "verified against" is never widened into "supports". Declare a new capability in the registry that also drives the code — `config.CheckKinds()`, the sandbox `Descriptor`s, `internal/cli`, an adapter's `adapter.json` — never in the generator. Consumer contract: `docs/capabilities.md`.
 
-9. **This repository is the canon.** Architecture decisions live in `AGENTS.md`, normative specs in `docs/`, and the machine-readable capability statement in `docs/capabilities.json` — those are the originals, not copies of something kept elsewhere. Downstream surfaces (the website, packaging, the commercial layer) read from here; a decision recorded only in a chat, an issue comment, or a private repository has not been recorded. When work settles a question this file or `docs/` answers, update it in the same pull request.
+9. **This repository is the source of record for architecture and specification.** Architecture decisions live in `AGENTS.md`, normative specs in `docs/`, and the machine-readable capability statement in `docs/capabilities.json` — those are the originals, not copies of something kept elsewhere. Downstream surfaces (the website, packaging, the commercial layer) read from here; a decision recorded only in a chat, an issue comment, or a private repository has not been recorded. When work settles a question this file or `docs/` answers, update it in the same pull request.
 
 10. **Nothing non-public may enter this repository.** Material from the private repositories that hold the commercial layer and its working context stays there — code, prose, screenshots, customer names, unreleased plans. This is not only a licensing boundary: everything here is public the moment it is pushed, and it is what an auditor may read alongside the evidence format. If a task appears to need non-public knowledge to finish, stop and ask the maintainer rather than reconstructing it from memory.
 
