@@ -172,6 +172,6 @@ Work planned in this repository:
 
 No backup engine. No built-in scheduler (cron/systemd-timer + lock file + timeout is the way). No daemon on database hosts. No web interface. No secrets management beyond reading credentials from env/file for the duration of one drill or one push. No telemetry and no phone-home. No more than one new engine per release cycle.
 
-The list is closed, and none of it is qualified with "yet", "unless proven unavoidable" or "before Phase 3": a non-goal with an escape clause is a roadmap item. `ROADMAP.md` carries the same list. `docs/capabilities.json` carries the six that describe the software; the engine rate limit is a release-cadence rule rather than a capability, so it has no entry there.
+The list is closed, and none of it is qualified with "yet", "unless proven unavoidable" or "before Phase 3": a non-goal with an escape clause is a roadmap item. `AGENTS.md` §2.4 carries the same list. `docs/capabilities.json` carries the six that describe the software; the engine rate limit is a release-cadence rule rather than a capability, so it has no entry there.
 
 Every "no" protects the quality of the core.
