@@ -3,6 +3,7 @@
   "id": "oracle",
   "name": "Oracle Database",
   "status": "experimental",
+  "since": "0.18.0",
   "engine_name": "oracle",
   "conformance_verified": true,
   "docs": "adapters/oracle/README.md",

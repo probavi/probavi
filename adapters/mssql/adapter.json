@@ -3,6 +3,7 @@
   "id": "mssql",
   "name": "SQL Server",
   "status": "experimental",
+  "since": "0.2.0",
   "engine_name": "Microsoft SQL Server",
   "conformance_verified": true,
   "docs": "adapters/mssql/README.md",

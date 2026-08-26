@@ -12,8 +12,9 @@ import (
 // it is the only thing in the repository that cannot be out of date.
 type manifest struct {
 	Adapters []struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
+		ID    string  `json:"id"`
+		Name  string  `json:"name"`
+		Since *string `json:"since"`
 	} `json:"adapters"`
 	SandboxProviders []struct {
 		ID   string `json:"id"`

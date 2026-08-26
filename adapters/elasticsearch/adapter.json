@@ -3,6 +3,7 @@
   "id": "elasticsearch",
   "name": "Elasticsearch",
   "status": "experimental",
+  "since": "0.17.0",
   "engine_name": "elasticsearch",
   "conformance_verified": true,
   "docs": "adapters/elasticsearch/README.md",

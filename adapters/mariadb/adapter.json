@@ -3,6 +3,7 @@
   "id": "mariadb",
   "name": "MariaDB",
   "status": "experimental",
+  "since": "0.7.0",
   "engine_name": "MariaDB",
   "conformance_verified": true,
   "docs": "adapters/mariadb/README.md",

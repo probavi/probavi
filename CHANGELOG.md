@@ -13,6 +13,40 @@ always called out explicitly.
 
 ### Added
 
+- **`adapters[].since` in the capabilities manifest**, and a README engine
+  table generated from it. The README's Status section named every engine,
+  its source kinds and its release state inside one prose sentence — the
+  last public claim in this repository that was written by hand rather
+  than generated, which is the drift `docs/capabilities.json` exists to
+  prevent. It is now one row per adapter, written into a marked block by
+  `go generate ./...` and covered by the CI gate that already fails on a
+  dirty tree after generation. The table is generated **from the manifest**
+  rather than from the code, so this repository's own README is a consumer
+  of that file on the same terms as any other: it cannot name an engine, a
+  version, a release or a source kind the manifest does not carry.
+
+  Three columns already existed. The fourth is new: `since` is the release
+  an adapter first shipped in, or `null` while it has not been released.
+  This is an added field within `probavi-capabilities/1`, not a new
+  version — `docs/capabilities.md` §2 permits additions — and consumers
+  that ignore it are unaffected. It dates the **adapter**, never the
+  engine: MariaDB reads 0.7.0, the release from which a MariaDB drill
+  records `engine: mariadb`, and the earlier `mysqldump` coverage through
+  the mysql adapter is recorded in `adapters/mariadb/README.md`. Every
+  value is held to `CHANGELOG.md` by a gate in `internal/docs`: a release
+  that never happened, a release whose entry does not mention the adapter,
+  a release later than the one the adapter first appeared in, and a `null`
+  that a release has left behind are each a build failure. The last of
+  those is the point — the release that turns `[Unreleased]` into a
+  version fails until the field is filled in, so an adapter cannot quietly
+  ship without a date.
+
+  A rank column was considered and dropped rather than shipped
+  unverifiably: DB-Engines rank values, read 2026-08-26, carry a copyright
+  notice and no statement permitting republication. The fourth column is
+  the source kinds instead — the values `source.kind` takes in a drill
+  config, which is what that table is read for.
+
 - **A Neo4j adapter** (`adapters/neo4j` 0.1.0), the nineteenth engine and
   the next by rank in the DB-Engines lens this catalog is worked through
   (ROADMAP.md, Phase 2). It restores one

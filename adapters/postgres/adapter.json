@@ -3,6 +3,7 @@
   "id": "postgres",
   "name": "PostgreSQL",
   "status": "experimental",
+  "since": "0.1.0",
   "engine_name": "PostgreSQL",
   "conformance_verified": true,
   "docs": "adapters/postgres/README.md",

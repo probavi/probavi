@@ -3,6 +3,7 @@
   "id": "cassandra",
   "name": "Apache Cassandra",
   "status": "experimental",
+  "since": "0.13.0",
   "engine_name": "cassandra",
   "conformance_verified": true,
   "docs": "adapters/cassandra/README.md",

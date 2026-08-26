@@ -3,18 +3,19 @@
   "id": "victoriametrics",
   "name": "VictoriaMetrics",
   "status": "experimental",
+  "since": "0.16.0",
   "engine_name": "victoriametrics",
   "conformance_verified": true,
   "docs": "adapters/victoriametrics/README.md",
   "verified": [
     {
+      "engine_version": "1.120",
+      "image": "victoriametrics/victoria-metrics:v1.120.0"
+    },
+    {
       "engine_version": "1.150",
       "image": "victoriametrics/victoria-metrics:v1.150.0",
       "baseline": true
-    },
-    {
-      "engine_version": "1.120",
-      "image": "victoriametrics/victoria-metrics:v1.120.0"
     }
   ],
   "sources": {
