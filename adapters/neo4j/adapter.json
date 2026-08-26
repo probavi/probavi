@@ -1,0 +1,20 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine version CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the image listed under verified — the baseline on every run — so neither can drift. The image is the official Community one and idles under `command: sleep infinity`; the adapter loads the dump into the unmounted database and starts the server itself, because a dump cannot be loaded into a database a server has mounted and the initial password only takes effect before the first start (both measured). Only the 5.26 LTS line is listed: Neo4j's calendar-versioned line supports exactly one release at a time, so an entry naming one would be end-of-life within weeks — docs/engine-versions.md §1 rule 2, with the reasoning in the adapter README. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "neo4j",
+  "name": "Neo4j",
+  "status": "experimental",
+  "engine_name": "neo4j",
+  "conformance_verified": true,
+  "docs": "adapters/neo4j/README.md",
+  "verified": [
+    {
+      "engine_version": "5.26",
+      "image": "neo4j:5.26-community",
+      "baseline": true
+    }
+  ],
+  "sources": {
+    "neo4j_dump": "One `neo4j-admin database dump` archive, under any file name",
+    "neo4j_dump_dir": "A directory of dump archives; the newest file is restored (an archive carries no timestamp of its own)"
+  }
+}

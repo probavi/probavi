@@ -46,6 +46,8 @@
 /adapters/*/elasticsearch
 /oracle
 /adapters/*/oracle
+/neo4j
+/adapters/*/neo4j
 
 # Test and coverage artifacts
 *.test
