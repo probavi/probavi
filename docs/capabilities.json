@@ -479,6 +479,40 @@
       "docs": "adapters/mysql/README.md"
     },
     {
+      "id": "neo4j",
+      "name": "Neo4j",
+      "status": "experimental",
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "neo4j",
+        "name": "neo4j"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "5.26",
+          "image": "neo4j:5.26-community"
+        }
+      ],
+      "sources": [
+        {
+          "id": "neo4j_dump",
+          "name": "One `neo4j-admin database dump` archive, under any file name",
+          "pitr": false
+        },
+        {
+          "id": "neo4j_dump_dir",
+          "name": "A directory of dump archives; the newest file is restored (an archive carries no timestamp of its own)",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/neo4j/README.md"
+    },
+    {
       "id": "opensearch",
       "name": "OpenSearch",
       "status": "experimental",

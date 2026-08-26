@@ -13,6 +13,47 @@ always called out explicitly.
 
 ### Added
 
+- **A Neo4j adapter** (`adapters/neo4j` 0.1.0), the nineteenth engine and
+  the next by rank in the DB-Engines lens this catalog is worked through
+  (ROADMAP.md, Phase 2). It restores one
+  `neo4j-admin database dump` archive (`neo4j_dump`) or the newest of a
+  directory of them (`neo4j_dump_dir`) into the official
+  `neo4j:5.26-community` image, and checks are Cypher through
+  `cypher-shell`. The sandbox idles under `command: sleep infinity` and
+  the adapter starts the engine itself, because a dump loads only into a
+  database no server has mounted ("The database is in use. Stop database
+  'neo4j' and try again.") and the initial password only takes effect
+  before the first start — both measured. Three more measurements shaped
+  it. (1) Neo4j will not boot in a host that cannot resolve its own name,
+  which is precisely a `--network none` container: the JVM dies with
+  "Configuration is invalid. See log for more info." and writes nothing to
+  any log, and `server.default_advertised_address=localhost` does not help.
+  The adapter adds `127.0.0.1 <hostname>` to the sandbox's `/etc/hosts`
+  only when the name does not already resolve, so zero ingress survives
+  intact and a bare host is never touched. (2) A dump loaded under a name
+  Community Edition cannot mount lands on disk and is silently never
+  served: the load reports success, the server starts, `SHOW DATABASES`
+  never lists it, and every check then runs against the empty default
+  database. The adapter therefore refuses to call a restore successful
+  until the engine itself reports the restored database `online`, and the
+  refusal names what the server does serve; a database that is mounted but
+  stopped fails the same way, while only states a database leaves on its
+  own are waited out. (3) `cypher-shell` has no undecorated mode — even
+  `--format plain` prints a header, quotes strings and joins columns with
+  `", "` — so the declared `sql_runner` absorbs the dialect, dropping the
+  header and splitting rows outside the quoting, and runs checks with
+  `--access-mode read`: a check may read what the drill restored and may
+  not change it. Neo4j Community is the rare engine with no data lifecycle
+  to suspend — no TTL, no expiry, no scheduled deletion — so the
+  integration suite guards that instead, failing the day the image grows a
+  setting or a plugin that could take rows away mid-drill. `created_at` is
+  always null: the engine's own reader for the artifact reports the
+  database, the format and the file and byte counts, and no timestamp, and
+  a config declaring `backup_timezone` is refused rather than ignored.
+  Only the 5.26 LTS line is listed as verified — Neo4j supports exactly
+  one calendar release at a time, so naming one would be a claim with a
+  shelf life of weeks. Zero core changes, conformance 15/15.
+
 - **`probavi push`: an evidence log can leave the host that wrote it over
   one outbound HTTPS request** (protocol `probavi-evidence-push/1`, spec
   `docs/evidence-push.md`). The two usual answers to "get the log
