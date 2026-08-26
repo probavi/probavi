@@ -40,6 +40,7 @@
       "id": "cassandra",
       "name": "Apache Cassandra",
       "status": "experimental",
+      "since": "0.13.0",
       "adapter_version": "0.2.0",
       "engine": {
         "id": "cassandra",
@@ -83,6 +84,7 @@
       "id": "clickhouse",
       "name": "ClickHouse",
       "status": "experimental",
+      "since": "0.7.0",
       "adapter_version": "0.2.0",
       "engine": {
         "id": "clickhouse",
@@ -121,6 +123,7 @@
       "id": "duckdb",
       "name": "DuckDB",
       "status": "experimental",
+      "since": "0.11.0",
       "adapter_version": "0.1.0",
       "engine": {
         "id": "duckdb",
@@ -164,6 +167,7 @@
       "id": "elasticsearch",
       "name": "Elasticsearch",
       "status": "experimental",
+      "since": "0.17.0",
       "adapter_version": "0.1.0",
       "engine": {
         "id": "elasticsearch",
@@ -202,6 +206,7 @@
       "id": "etcd",
       "name": "etcd",
       "status": "experimental",
+      "since": "0.7.0",
       "adapter_version": "0.2.0",
       "engine": {
         "id": "etcd",
@@ -240,6 +245,7 @@
       "id": "influxdb",
       "name": "InfluxDB",
       "status": "experimental",
+      "since": "0.15.0",
       "adapter_version": "0.2.0",
       "engine": {
         "id": "influxdb",
@@ -287,6 +293,7 @@
       "id": "mariadb",
       "name": "MariaDB",
       "status": "experimental",
+      "since": "0.7.0",
       "adapter_version": "0.3.0",
       "engine": {
         "id": "mariadb",
@@ -338,6 +345,7 @@
       "id": "mongodb",
       "name": "MongoDB",
       "status": "experimental",
+      "since": "0.2.0",
       "adapter_version": "0.5.0",
       "engine": {
         "id": "mongodb",
@@ -382,6 +390,7 @@
       "id": "mssql",
       "name": "SQL Server",
       "status": "experimental",
+      "since": "0.2.0",
       "adapter_version": "0.8.0",
       "engine": {
         "id": "sqlserver",
@@ -434,6 +443,7 @@
       "id": "mysql",
       "name": "MySQL",
       "status": "experimental",
+      "since": "0.1.0",
       "adapter_version": "0.12.0",
       "engine": {
         "id": "mysql",
@@ -482,6 +492,7 @@
       "id": "neo4j",
       "name": "Neo4j",
       "status": "experimental",
+      "since": null,
       "adapter_version": "0.1.0",
       "engine": {
         "id": "neo4j",
@@ -516,6 +527,7 @@
       "id": "opensearch",
       "name": "OpenSearch",
       "status": "experimental",
+      "since": "0.14.0",
       "adapter_version": "0.2.0",
       "engine": {
         "id": "opensearch",
@@ -554,6 +566,7 @@
       "id": "oracle",
       "name": "Oracle Database",
       "status": "experimental",
+      "since": "0.18.0",
       "adapter_version": "0.1.0",
       "engine": {
         "id": "oracle",
@@ -583,6 +596,7 @@
       "id": "postgres",
       "name": "PostgreSQL",
       "status": "experimental",
+      "since": "0.1.0",
       "adapter_version": "0.12.0",
       "engine": {
         "id": "postgresql",
@@ -657,6 +671,7 @@
       "id": "prometheus",
       "name": "Prometheus",
       "status": "experimental",
+      "since": "0.12.0",
       "adapter_version": "0.4.0",
       "engine": {
         "id": "prometheus",
@@ -700,6 +715,7 @@
       "id": "redis",
       "name": "Redis",
       "status": "experimental",
+      "since": "0.8.0",
       "adapter_version": "0.4.0",
       "engine": {
         "id": "redis",
@@ -751,6 +767,7 @@
       "id": "sqlite",
       "name": "SQLite",
       "status": "experimental",
+      "since": "0.10.0",
       "adapter_version": "0.1.0",
       "engine": {
         "id": "sqlite",
@@ -811,6 +828,7 @@
       "id": "valkey",
       "name": "Valkey",
       "status": "experimental",
+      "since": "0.9.0",
       "adapter_version": "0.3.0",
       "engine": {
         "id": "valkey",
@@ -866,6 +884,7 @@
       "id": "victoriametrics",
       "name": "VictoriaMetrics",
       "status": "experimental",
+      "since": "0.16.0",
       "adapter_version": "0.2.0",
       "engine": {
         "id": "victoriametrics",
@@ -876,12 +895,12 @@
       ],
       "verified": [
         {
-          "engine_version": "1.150",
-          "image": "victoriametrics/victoria-metrics:v1.150.0"
-        },
-        {
           "engine_version": "1.120",
           "image": "victoriametrics/victoria-metrics:v1.120.0"
+        },
+        {
+          "engine_version": "1.150",
+          "image": "victoriametrics/victoria-metrics:v1.150.0"
         }
       ],
       "sources": [

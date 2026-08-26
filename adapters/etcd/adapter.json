@@ -3,6 +3,7 @@
   "id": "etcd",
   "name": "etcd",
   "status": "experimental",
+  "since": "0.7.0",
   "engine_name": "etcd",
   "conformance_verified": true,
   "docs": "adapters/etcd/README.md",

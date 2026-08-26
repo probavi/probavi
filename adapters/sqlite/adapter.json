@@ -3,6 +3,7 @@
   "id": "sqlite",
   "name": "SQLite",
   "status": "experimental",
+  "since": "0.10.0",
   "engine_name": "sqlite",
   "conformance_verified": true,
   "docs": "adapters/sqlite/README.md",

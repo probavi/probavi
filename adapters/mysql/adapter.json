@@ -3,6 +3,7 @@
   "id": "mysql",
   "name": "MySQL",
   "status": "experimental",
+  "since": "0.1.0",
   "engine_name": "MySQL",
   "conformance_verified": true,
   "docs": "adapters/mysql/README.md",

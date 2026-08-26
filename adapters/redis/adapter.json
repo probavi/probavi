@@ -3,6 +3,7 @@
   "id": "redis",
   "name": "Redis",
   "status": "experimental",
+  "since": "0.8.0",
   "engine_name": "redis",
   "conformance_verified": true,
   "docs": "adapters/redis/README.md",

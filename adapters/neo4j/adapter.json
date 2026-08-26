@@ -3,6 +3,7 @@
   "id": "neo4j",
   "name": "Neo4j",
   "status": "experimental",
+  "since": null,
   "engine_name": "neo4j",
   "conformance_verified": true,
   "docs": "adapters/neo4j/README.md",

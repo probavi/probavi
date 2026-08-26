@@ -36,7 +36,58 @@ The output is not a green checkmark. It is an auditable, cryptographically verif
 
 ## Status
 
-**Pre-alpha, working end to end for PostgreSQL, MySQL, MariaDB, MongoDB, SQL Server, ClickHouse, etcd, Redis, Valkey, SQLite, DuckDB, Prometheus, Apache Cassandra, OpenSearch, InfluxDB, VictoriaMetrics, Elasticsearch, and Oracle Database.** `probavi run` restores real backups — logical dumps (`pg_dump` custom-format or plain SQL, `mysqldump`, `mariadb-dump`, `mongodump` archives; plain or gzip-compressed), native SQL Server `.bak` files, ClickHouse backup archives, `etcdctl` snapshots, Redis and Valkey RDB snapshots, SQLite and DuckDB database files with their text-dump and export forms, Prometheus TSDB snapshots and Cassandra `nodetool` snapshots (as collected trees or tar archives), OpenSearch `fs` snapshot repositories, InfluxDB `influx backup` outputs and VictoriaMetrics `vmbackup` outputs (all as directories or tar archives), Elasticsearch `fs` snapshot repositories (as directories or zip archives), Oracle Data Pump dump files (`expdp` output), and physical backups (pgBackRest, Percona XtraBackup, `mariadb-backup`) — into a disposable sandbox (Docker container, Kubernetes Job, or a bare host over SSH), validates them, and appends a signed evidence record; `probavi evidence verify` proves the log offline, and `probavi push` copies a log — unchanged, over one outbound HTTPS request — to wherever you keep it, so it can be verified off the host that produced it. Point-in-time recovery drills ("prove we can restore to 24 hours ago") work on pgBackRest sources, and the record carries the exact instant proven. The adapter protocol (v0) and evidence schema (v2) specs in `docs/` are normative and frozen, with machine-readable JSON Schemas in [docs/schemas/](docs/schemas/); third parties can build adapters in any language from [docs/adapter-development.md](docs/adapter-development.md) and validate them with `probavi adapter conformance` — no container runtime needed. What exactly ships, in machine-readable form, is [docs/capabilities.json](docs/capabilities.json): generated from the code that implements each capability, regenerated and diff-checked by CI, and the source anything republishing Probavi's capabilities should read instead of this paragraph ([contract](docs/capabilities.md)). Released as **v0.18.0**: reproducible binaries for Linux and macOS (amd64/arm64), the core and each adapter as its own archive, with checksums on the [releases page](https://github.com/probavi/probavi/releases) — pre-1.0, minor versions may break, every change is in [CHANGELOG.md](CHANGELOG.md). See [ROADMAP.md](ROADMAP.md) and [AGENTS.md](AGENTS.md).
+**Pre-alpha, and working end to end for every engine in the table below.** `probavi run`
+restores a real backup into a disposable sandbox (Docker container, Kubernetes Job, or a bare host
+over SSH), validates it, and appends a signed evidence record; `probavi evidence verify` proves the
+log offline, and `probavi push` copies a log — unchanged, over one outbound HTTPS request — to
+wherever you keep it, so it can be verified off the host that produced it. Point-in-time recovery
+drills ("prove we can restore to 24 hours ago") work on pgBackRest sources, and the record carries
+the exact instant proven.
+
+<!-- capabilities:engines:start -->
+| Engine | Verified against | In every release since | Source kinds |
+| --- | --- | --- | --- |
+| [Apache Cassandra](adapters/cassandra/README.md) | 4.1, 5.0 | 0.13.0 | `cassandra_snapshot`, `cassandra_snapshot_dir`, `cassandra_snapshot_tar` |
+| [ClickHouse](adapters/clickhouse/README.md) | 26.3, 26.7 | 0.7.0 | `clickhouse_backup`, `clickhouse_backup_dir` |
+| [DuckDB](adapters/duckdb/README.md) | 1.4, 1.5 | 0.11.0 | `duckdb_db`, `duckdb_db_dir`, `duckdb_export` |
+| [Elasticsearch](adapters/elasticsearch/README.md) | 8.19.20, 9.5.2 | 0.17.0 | `elasticsearch_repo`, `elasticsearch_repo_zip` |
+| [etcd](adapters/etcd/README.md) | 3.5, 3.6 | 0.7.0 | `etcd_snapshot`, `etcd_snapshot_dir` |
+| [InfluxDB](adapters/influxdb/README.md) | 2.7, 2.8, 2.9 | 0.15.0 | `influx_backup`, `influx_backup_dir`, `influx_backup_tar` |
+| [MariaDB](adapters/mariadb/README.md) | 10.11, 11.4, 11.8, 12.3 | 0.7.0 | `mariadb_backup`, `mariadb_dump`, `mariadb_dump_dir` |
+| [MongoDB](adapters/mongodb/README.md) | 7.0 | 0.2.0 | `mongodump`, `mongodump_dir`, `mongodump_with_oplog`, `mongodump_with_users` |
+| [SQL Server](adapters/mssql/README.md) | 2019, 2022, 2025 | 0.2.0 | `bak`, `bak_chain`, `bak_dir`, `bak_with_logins` |
+| [MySQL](adapters/mysql/README.md) | mysql 8.4, percona-server 8.4.10 | 0.1.0 | `mysqldump`, `mysqldump_dir`, `mysqldump_with_users`, `xtrabackup` |
+| [Neo4j](adapters/neo4j/README.md) | 5.26 | unreleased | `neo4j_dump`, `neo4j_dump_dir` |
+| [OpenSearch](adapters/opensearch/README.md) | 2.19.6, 3.8.0 | 0.14.0 | `opensearch_repo`, `opensearch_repo_tar` |
+| [Oracle Database](adapters/oracle/README.md) | 23.26.3.0 | 0.18.0 | `oracle_datapump` |
+| [PostgreSQL](adapters/postgres/README.md) | 14, 15, 16, 17, pgvector 0.8.6-pg17, timescaledb 2.29.1-pg17 | 0.1.0 | `pgbackrest`, `pgdump`, `pgdump_dir`, `pgdump_with_globals`, `timescaledb_dump`, `timescaledb_dump_dir` |
+| [Prometheus](adapters/prometheus/README.md) | 3.5, 3.13 | 0.12.0 | `prometheus_snapshot`, `prometheus_snapshot_dir`, `prometheus_snapshot_tar` |
+| [Redis](adapters/redis/README.md) | 7.2, 7.4, 8.2, 8.10 | 0.8.0 | `redis_aof`, `redis_rdb`, `redis_rdb_dir` |
+| [SQLite](adapters/sqlite/README.md) | 3.46, 3.49, 3.50, 3.51, 3.53 | 0.10.0 | `sqlite_db`, `sqlite_db_dir`, `sqlite_dump`, `sqlite_dump_dir` |
+| [Valkey](adapters/valkey/README.md) | 7.2, 8.0, 8.1, 9.0, 9.1 | 0.9.0 | `valkey_aof`, `valkey_rdb`, `valkey_rdb_dir` |
+| [VictoriaMetrics](adapters/victoriametrics/README.md) | 1.120, 1.150 | 0.16.0 | `victoriametrics_backup`, `victoriametrics_backup_dir`, `victoriametrics_backup_tar` |
+<!-- capabilities:engines:end -->
+
+The table is generated from [docs/capabilities.json](docs/capabilities.json) by
+`go generate ./...`, and CI fails on any difference — it cannot claim more than the manifest does,
+which is the same rule every other consumer of that file follows ([contract](docs/capabilities.md)).
+Read the columns as they are written. **Verified against** is what this repository's integration
+suite actually restores from, and is never a supported-version range; where an adapter's versions
+come from more than one image, each is named by the image it came from. **In every release since**
+dates the adapter, not the engine — MariaDB dumps were restorable through the mysql adapter from
+0.1.0, but only from 0.7.0 does a MariaDB drill record `engine: mariadb`. **Source kinds** are the
+values `source.kind` takes in a drill config; what each one accepts is in the linked adapter's
+README. Which engines are here, and which come next, is a question [ROADMAP.md](ROADMAP.md)
+answers.
+
+The adapter protocol (v0) and evidence schema (v2) specs in `docs/` are normative and frozen, with
+machine-readable JSON Schemas in [docs/schemas/](docs/schemas/); third parties can build adapters in
+any language from [docs/adapter-development.md](docs/adapter-development.md) and validate them with
+`probavi adapter conformance` — no container runtime needed. Released as **v0.18.0**: reproducible
+binaries for Linux and macOS (amd64/arm64), the core and each adapter as its own archive, with
+checksums on the [releases page](https://github.com/probavi/probavi/releases) — pre-1.0, minor
+versions may break, every change is in [CHANGELOG.md](CHANGELOG.md). See [ROADMAP.md](ROADMAP.md)
+and [AGENTS.md](AGENTS.md).
 
 ## Shape
 

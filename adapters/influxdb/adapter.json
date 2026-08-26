@@ -3,6 +3,7 @@
   "id": "influxdb",
   "name": "InfluxDB",
   "status": "experimental",
+  "since": "0.15.0",
   "engine_name": "influxdb",
   "conformance_verified": true,
   "docs": "adapters/influxdb/README.md",

@@ -3,6 +3,7 @@
   "id": "mongodb",
   "name": "MongoDB",
   "status": "experimental",
+  "since": "0.2.0",
   "engine_name": "MongoDB",
   "conformance_verified": true,
   "docs": "adapters/mongodb/README.md",

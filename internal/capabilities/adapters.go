@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -38,6 +39,13 @@ type AdapterManifest struct {
 	Name string `json:"name"`
 	// Status is one of the capabilities maturity values.
 	Status string `json:"status"`
+	// Since is the release this repository first shipped the adapter in,
+	// and null while it has not been released yet. It dates the adapter
+	// rather than the engine: an engine already restorable through a
+	// different adapter keeps the later release here, and the adapter's
+	// README records the earlier coverage. internal/docs holds the value
+	// to CHANGELOG.md.
+	Since Release `json:"since"`
 	// EngineName is the engine's display name; its id comes from the probe.
 	EngineName string `json:"engine_name"`
 	// ConformanceVerified records that CI drives this adapter through the
@@ -67,6 +75,37 @@ func LoadAdapterManifest(dir string) (*AdapterManifest, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return m, nil
+}
+
+// Release is the value of a manifest's since field. An absent key and an
+// explicit null both leave no version behind, and they do not mean the
+// same thing: one says the adapter has not been released, the other says
+// nobody wrote it down. Only the first is a statement, so the key's
+// presence is recorded rather than inferred (docs/capabilities.md §1.5).
+type Release struct {
+	// Stated reports that the manifest carried the key at all.
+	Stated bool
+	// Value is the release, or empty for an explicit null.
+	Value string
+}
+
+// UnmarshalJSON records that the key was present, whatever it held.
+func (r *Release) UnmarshalJSON(raw []byte) error {
+	r.Stated = true
+	if string(raw) == "null" {
+		return nil
+	}
+	return json.Unmarshal(raw, &r.Value)
+}
+
+// Published renders the field for docs/capabilities.json, where an absent
+// value is null and never an omitted key.
+func (r Release) Published() *string {
+	if r.Value == "" {
+		return nil
+	}
+	v := r.Value
+	return &v
 }
 
 // ManifestTarget is one engine version in an adapter's manifest. It is the
@@ -211,6 +250,7 @@ func buildAdapter(root, dir string) (Adapter, error) {
 		ID:                  m.ID,
 		Name:                m.Name,
 		Status:              m.Status,
+		Since:               m.Since.Published(),
 		AdapterVersion:      golden.Payload.AdapterVersion,
 		Engine:              Engine{ID: golden.Payload.Engine.Name, Name: m.EngineName},
 		ProtocolVersions:    golden.Payload.ProtocolVersions,
@@ -245,9 +285,20 @@ func checkAdapterIdentity(dirName string, m *AdapterManifest, golden *probeGolde
 		return fmt.Errorf("adapter %s: manifest declares no engine_name", dirName)
 	case !validStatus(m.Status):
 		return fmt.Errorf("adapter %s: status %q is not one of %s", dirName, m.Status, strings.Join(Statuses(), ", "))
+	case !m.Since.Stated:
+		return fmt.Errorf("adapter %s: no since field — state the release this adapter first shipped in, "+
+			"or null while it has not been released", dirName)
+	case m.Since.Value != "" && !releasePattern.MatchString(m.Since.Value):
+		return fmt.Errorf("adapter %s: since %q is not a release of this repository (x.y.z); "+
+			"an adapter that has not been released yet states null", dirName, m.Since.Value)
 	}
 	return nil
 }
+
+// releasePattern matches a release of this repository. The value is only
+// checked for shape here — whether it is the *right* release is a question
+// about CHANGELOG.md, which internal/docs answers.
+var releasePattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 
 // buildSources joins the probe's source kinds to the manifest's display
 // names. A kind the adapter declares but the manifest does not name — and

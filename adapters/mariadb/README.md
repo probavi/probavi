@@ -21,6 +21,15 @@ Just as important: an evidence record names the engine its drill proved.
 A MariaDB restore recorded as `engine: mysql` would be a claim an auditor
 could fault, and the record is the product.
 
+## When MariaDB drills started
+
+`docs/capabilities.json` records this adapter's `since` as **0.7.0**, and
+that is the release from which a MariaDB restore is evidenced as a MariaDB
+restore. MariaDB dumps were restorable before it — the mysql adapter has
+accepted `mysqldump` SQL since 0.1.0 — but those drills recorded
+`engine: mysql`, which is the claim the split exists to correct. The field
+dates the adapter, never the engine (`docs/capabilities.md` §3).
+
 ## What it restores
 
 | `source.kind` | What `source.path` points at |

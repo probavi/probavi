@@ -60,6 +60,7 @@ type Adapter struct {
 	ID                  string           `json:"id"`
 	Name                string           `json:"name"`
 	Status              string           `json:"status"`
+	Since               *string          `json:"since"`
 	AdapterVersion      string           `json:"adapter_version"`
 	Engine              Engine           `json:"engine"`
 	ProtocolVersions    []string         `json:"protocol_versions"`

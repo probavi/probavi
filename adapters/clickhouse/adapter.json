@@ -3,6 +3,7 @@
   "id": "clickhouse",
   "name": "ClickHouse",
   "status": "experimental",
+  "since": "0.7.0",
   "engine_name": "ClickHouse",
   "conformance_verified": true,
   "docs": "adapters/clickhouse/README.md",

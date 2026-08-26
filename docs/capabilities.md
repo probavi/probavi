@@ -68,6 +68,13 @@ value as unreadable rather than guessing.
   `stable`. While the project is pre-alpha everything is `experimental`;
   `beta` and `stable` exist so the vocabulary is defined before it is
   earned.
+- **`adapters[].since`** is the release in which this repository first
+  shipped that adapter, or `null` while it has not been released yet. It
+  dates the **adapter**, not the engine: where an engine was already
+  restorable through a different adapter, the earlier coverage is recorded
+  in the adapter's README and the field still carries the later release.
+  Render it as *"in every release since 0.7.0"* — never as *"supported
+  since"*, which is the same widening `verified` is protected from.
 - **`non_goals`** is normative in the negative. Those statements must
   never be contradicted, softened, or presented as roadmap items.
 - **Ordering** is stable. Adapters are discovered on the filesystem and
@@ -94,7 +101,7 @@ that also drives the behavior, so the two cannot disagree:
 | Section | Source of truth |
 | --- | --- |
 | `adapters[]` identity, versions, source kinds, `pitr` | each adapter's `testdata/probe_response.golden`, written from the live probe by its own test |
-| `adapters[]` display names, maturity, `verified`, `conformance_verified` | `adapters/<id>/adapter.json`; the integration suite restores from the image it lists, and the conformance suite iterates the adapters that declare it |
+| `adapters[]` display names, maturity, `since`, `verified`, `conformance_verified` | `adapters/<id>/adapter.json`; the integration suite restores from the image it lists, the conformance suite iterates the adapters that declare it, and `since` is held to `CHANGELOG.md` by a gate in `internal/docs` |
 | `sandbox_providers[]` | the `Descriptor` in each provider package — the same value the provider resolves drill-config parameters through |
 | `checks[]` | `config.CheckKinds()`, the vocabulary gate config validation resolves every check against |
 | `cli` | `internal/cli`, the table `cmd/probavi` dispatches from |
@@ -132,8 +139,15 @@ one side alone.
 ## 6. Regenerating
 
 ```sh
-go generate ./...        # rewrites docs/capabilities.json
+go generate ./...        # rewrites docs/capabilities.json and the README engine table
 ```
+
+The same command rewrites the engine table in `README.md`, between its
+`<!-- capabilities:engines:start -->` and `<!-- capabilities:engines:end -->`
+markers. That table is generated **from this file**, not from the code: the
+repository's own README is a consumer of the manifest on the same terms as
+any other, and so cannot state an engine, a version, a release or a source
+kind the manifest does not carry.
 
 Run it in the same change as any new adapter, sandbox provider, built-in
 check, CLI command or exit code, notification transport, locale catalog,

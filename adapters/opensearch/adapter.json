@@ -3,6 +3,7 @@
   "id": "opensearch",
   "name": "OpenSearch",
   "status": "experimental",
+  "since": "0.14.0",
   "engine_name": "opensearch",
   "conformance_verified": true,
   "docs": "adapters/opensearch/README.md",

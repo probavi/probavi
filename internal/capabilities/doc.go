@@ -20,6 +20,10 @@ package capabilities
 
 //go:generate go run ../tools/capabilities -root ../.. -out ../../docs/capabilities.json
 
+// The README's engine table is generated from the manifest the directive
+// above writes, so the two run in this order, in this file, on purpose.
+//go:generate go run ../tools/enginetable -root ../..
+
 const (
 	// SchemaID is this document's format identifier. It is versioned
 	// independently of the binary, exactly like probavi-adapter/N,

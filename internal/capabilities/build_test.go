@@ -50,6 +50,7 @@ func validManifest() map[string]any {
 		"id":                   "demo",
 		"name":                 "Demo",
 		"status":               "experimental",
+		"since":                "0.4.0",
 		"engine_name":          "Demo Engine",
 		"conformance_verified": true,
 		"docs":                 "docs/capabilities.md",
@@ -161,6 +162,18 @@ func TestBuildRejectsInconsistentAdapters(t *testing.T) {
 			name:    "unknown maturity value",
 			mutate:  func(_ *testing.T, a *fixtureAdapter) { a.manifest["status"] = "production-ready" },
 			wantErr: "is not one of",
+		},
+		{
+			// An omitted key decodes to the same nil an explicit null
+			// does, and only one of the two is a statement.
+			name:    "no since field at all",
+			mutate:  func(_ *testing.T, a *fixtureAdapter) { delete(a.manifest, "since") },
+			wantErr: "no since field",
+		},
+		{
+			name:    "since that is not a release",
+			mutate:  func(_ *testing.T, a *fixtureAdapter) { a.manifest["since"] = "0.4" },
+			wantErr: "is not a release of this repository",
 		},
 		{
 			name:    "no display name",
@@ -293,6 +306,35 @@ func TestBuildAcceptsAConsistentAdapter(t *testing.T) {
 	}
 	if len(a.Sources) != 1 || a.Sources[0].Name != "One demo dump file" || a.PITR {
 		t.Errorf("sources did not join probe and manifest: %+v", a.Sources)
+	}
+	if a.Since == nil || *a.Since != "0.4.0" {
+		t.Errorf("since = %v, want the release the manifest states", a.Since)
+	}
+}
+
+// TestBuildPublishesAnUnreleasedAdapterAsNull is the other half of the
+// since field: an adapter that is in the tree but not in any release says
+// so, and says it as a value rather than by leaving the key out
+// (docs/capabilities.md §1.5).
+func TestBuildPublishesAnUnreleasedAdapterAsNull(t *testing.T) {
+	m := validManifest()
+	m["since"] = nil
+	root := fixtureRoot(t, map[string]fixtureAdapter{
+		"demo": {manifest: m, probe: validProbe()},
+	})
+	doc, err := capabilities.Build(root)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if doc.Adapters[0].Since != nil {
+		t.Errorf("since = %v, want null", *doc.Adapters[0].Since)
+	}
+	rendered, err := capabilities.Render(doc)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(string(rendered), `"since": null`) {
+		t.Error("rendered document omits the since key instead of writing null")
 	}
 }
 
