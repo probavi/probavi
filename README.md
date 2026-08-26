@@ -57,7 +57,7 @@ the exact instant proven.
 | [MongoDB](adapters/mongodb/README.md) | 7.0 | 0.2.0 | `mongodump`, `mongodump_dir`, `mongodump_with_oplog`, `mongodump_with_users` |
 | [SQL Server](adapters/mssql/README.md) | 2019, 2022, 2025 | 0.2.0 | `bak`, `bak_chain`, `bak_dir`, `bak_with_logins` |
 | [MySQL](adapters/mysql/README.md) | mysql 8.4, percona-server 8.4.10 | 0.1.0 | `mysqldump`, `mysqldump_dir`, `mysqldump_with_users`, `xtrabackup` |
-| [Neo4j](adapters/neo4j/README.md) | 5.26 | unreleased | `neo4j_dump`, `neo4j_dump_dir` |
+| [Neo4j](adapters/neo4j/README.md) | 5.26 | 0.19.0 | `neo4j_dump`, `neo4j_dump_dir` |
 | [OpenSearch](adapters/opensearch/README.md) | 2.19.6, 3.8.0 | 0.14.0 | `opensearch_repo`, `opensearch_repo_tar` |
 | [Oracle Database](adapters/oracle/README.md) | 23.26.3.0 | 0.18.0 | `oracle_datapump` |
 | [PostgreSQL](adapters/postgres/README.md) | 14, 15, 16, 17, pgvector 0.8.6-pg17, timescaledb 2.29.1-pg17 | 0.1.0 | `pgbackrest`, `pgdump`, `pgdump_dir`, `pgdump_with_globals`, `timescaledb_dump`, `timescaledb_dump_dir` |
@@ -83,7 +83,7 @@ answers.
 The adapter protocol (v0) and evidence schema (v2) specs in `docs/` are normative and frozen, with
 machine-readable JSON Schemas in [docs/schemas/](docs/schemas/); third parties can build adapters in
 any language from [docs/adapter-development.md](docs/adapter-development.md) and validate them with
-`probavi adapter conformance` — no container runtime needed. Released as **v0.18.0**: reproducible
+`probavi adapter conformance` — no container runtime needed. Released as **v0.19.0**: reproducible
 binaries for Linux and macOS (amd64/arm64), the core and each adapter as its own archive, with
 checksums on the [releases page](https://github.com/probavi/probavi/releases) — pre-1.0, minor
 versions may break, every change is in [CHANGELOG.md](CHANGELOG.md). See [ROADMAP.md](ROADMAP.md)
@@ -133,7 +133,7 @@ Exit codes are the cron/CI contract: `0` backup proven restorable, `1` recoverab
 Every release publishes **one archive per binary** for Linux and macOS (amd64/arm64), with a `SHA256SUMS` covering all of them, on the [releases page](https://github.com/probavi/probavi/releases). `probavi` is the orchestrator: it resolves `probavi-adapter-<engine>` on your `PATH`, so take the core **plus an adapter for each engine you drill**.
 
 ```console
-$ tag=v0.18.0 os=linux arch=amd64
+$ tag=v0.19.0 os=linux arch=amd64
 $ base="https://github.com/probavi/probavi/releases/download/${tag}"
 $ curl -fsSLO "${base}/probavi_${tag#v}_${os}_${arch}.tar.gz"
 $ curl -fsSLO "${base}/probavi-adapter-postgres_${tag#v}_${os}_${arch}.tar.gz"
@@ -148,7 +148,7 @@ Adapters ship for `postgres`, `mysql`, `mariadb`, `mongodb`, `mssql`, `clickhous
 
 Verifying an evidence log needs nothing else: `probavi evidence verify` reads a log and a public key, so an auditor installs the core alone.
 
-Distribution packages are attached to every release — `.deb`, `.rpm` and `.apk` for both architectures, plus a `PKGBUILD` and a Gentoo ebuild that build from source. One package per binary, so `sudo apt install ./probavi_0.18.0_amd64.deb ./probavi-adapter-postgres_0.18.0_amd64.deb` is a working install. There is no Probavi apt or yum repository, on purpose: hosting one means a second long-lived signing key to guard, in a project whose trust proposition is how it handles the first one. [docs/packaging.md](docs/packaging.md) has the per-distribution commands, the dependency rationale, and a first drill from a packaged install.
+Distribution packages are attached to every release — `.deb`, `.rpm` and `.apk` for both architectures, plus a `PKGBUILD` and a Gentoo ebuild that build from source. One package per binary, so `sudo apt install ./probavi_0.19.0_amd64.deb ./probavi-adapter-postgres_0.19.0_amd64.deb` is a working install. There is no Probavi apt or yum repository, on purpose: hosting one means a second long-lived signing key to guard, in a project whose trust proposition is how it handles the first one. [docs/packaging.md](docs/packaging.md) has the per-distribution commands, the dependency rationale, and a first drill from a packaged install.
 
 On macOS, take the `darwin` archives above — a directly downloaded file is quarantined, so clear it with `xattr -d com.apple.quarantine`. Each release also attaches ready-made Homebrew formulae that name no tap, so `brew tap-new` plus two `curl`s gives a `brew install` with no quarantine step ([docs/packaging.md](docs/packaging.md) §5). There is no hosted Probavi tap. Note also that macOS has no native container runtime: the docker sandbox provider needs Docker Desktop, colima, OrbStack or a remote `DOCKER_HOST`.
 
