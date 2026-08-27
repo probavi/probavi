@@ -776,6 +776,46 @@
       "docs": "adapters/redis/README.md"
     },
     {
+      "id": "solr",
+      "name": "Apache Solr",
+      "status": "experimental",
+      "since": null,
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "solr",
+        "name": "Apache Solr"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "10",
+          "image": "solr:10"
+        }
+      ],
+      "sources": [
+        {
+          "id": "solr_backup",
+          "name": "One Collections API backup directory (`action=BACKUP`), holding a single collection",
+          "pitr": false
+        },
+        {
+          "id": "solr_backup_dir",
+          "name": "A directory of backup directories; the newest is restored",
+          "pitr": false
+        },
+        {
+          "id": "solr_backup_tar",
+          "name": "A tar archive of one backup directory",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/solr/README.md"
+    },
+    {
       "id": "sqlite",
       "name": "SQLite",
       "status": "experimental",

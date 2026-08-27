@@ -48,6 +48,8 @@
 /adapters/*/oracle
 /neo4j
 /adapters/*/neo4j
+/solr
+/adapters/*/solr
 
 # Test and coverage artifacts
 *.test
