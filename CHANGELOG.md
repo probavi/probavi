@@ -11,6 +11,22 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The release notes deleted the file names they were quoting.** The
+  workflow escaped a backtick inside a double-quoted `echo` as `` \\` ``
+  rather than `` \` ``, so the shell read a literal backslash followed by
+  an *unescaped* backtick and opened a command substitution — swallowing
+  everything up to the next one. The published 0.18.0 notes therefore read
+  "\\, \\ and \\ for amd64 and arm64" where `.deb`, `.rpm` and `.apk`
+  belong, and "\\ (Arch) and \\ (Gentoo)" instead of `PKGBUILD` and the
+  ebuild — the words a reader of that section is there for. The 0.19.0 run
+  logged it plainly as `.deb\: command not found`. Ten escapes across
+  two lines are corrected, and a gate in `internal/docs` fails on the
+  sequence, because this is a defect nothing in the repository could see:
+  the notes are assembled on a runner and read on the releases page, and
+  neither is a place a test was looking.
+
 ## [0.19.0] - 2026-08-26
 
 ### Added

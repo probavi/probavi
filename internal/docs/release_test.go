@@ -37,6 +37,26 @@ func adapterDirs(t *testing.T) []string {
 	return dirs
 }
 
+// TestReleaseNotesEscapeBackticksOnce keeps a shell escape from deleting
+// the words it was meant to quote.
+//
+// The notes are assembled by a `run:` block, so a backtick inside a
+// double-quoted echo is escaped as \` — one backslash. Written as \\`
+// the shell reads a literal backslash followed by an *unescaped* backtick,
+// which opens a command substitution and swallows everything up to the
+// next one. v0.19.0's job log said ".deb\\: command not found", and the
+// published v0.18.0 notes read "\\, \\ and \\ for amd64 and arm64"
+// where the package extensions belong — the three words a reader of that
+// section is there for.
+func TestReleaseNotesEscapeBackticksOnce(t *testing.T) {
+	for i, line := range strings.Split(read(t, releaseWorkflow), "\n") {
+		if strings.Contains(line, "\\\\`") {
+			t.Errorf("%s:%d escapes a backtick as \\\\` — the shell opens a command substitution "+
+				"and eats the text: %s", releaseWorkflow, i+1, strings.TrimSpace(line))
+		}
+	}
+}
+
 // TestReleaseShipsExactlyTheDeclaredAdapters holds the set of binaries a
 // release publishes to the set of adapters docs/capabilities.json declares.
 //

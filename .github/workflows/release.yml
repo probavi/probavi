@@ -252,7 +252,7 @@ jobs:
             echo
             echo "## Linux packages"
             echo
-            echo "\\`.deb\\`, \\`.rpm\\` and \\`.apk\\` for amd64 and arm64, one per binary."
+            echo "\`.deb\`, \`.rpm\` and \`.apk\` for amd64 and arm64, one per binary."
             echo "There is no Probavi apt or yum repository on purpose: hosting one means"
             echo "a second long-lived signing key to guard, in a project whose trust"
             echo "proposition is key handling. Install the file directly, e.g."
@@ -261,7 +261,7 @@ jobs:
             echo "sudo apt install ./probavi_${VERSION}_amd64.deb ./probavi-adapter-postgres_${VERSION}_amd64.deb"
             echo '```'
             echo
-            echo "\\`PKGBUILD\\` (Arch) and \\`probavi-${VERSION}.ebuild\\` (Gentoo) build from"
+            echo "\`PKGBUILD\` (Arch) and \`probavi-${VERSION}.ebuild\` (Gentoo) build from"
             echo "source and are attached here too. See"
             echo "[docs/packaging.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/docs/packaging.md)."
             echo
