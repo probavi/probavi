@@ -101,8 +101,15 @@ func physicalHandler(t *testing.T, sequence *[]string) func(verbCall) (any, *pro
 		if args.Argv[0] == "sh" && strings.Contains(args.Argv[2], "pg_ctl") {
 			head = "sh: pg_ctl start"
 		}
+		if args.Argv[0] == "sh" && strings.Contains(args.Argv[2], "PGDATA") {
+			head = "sh: resolve PGDATA"
+		}
 		*sequence = append(*sequence, head)
 		switch {
+		case head == "sh: resolve PGDATA":
+			// What postgres:18 answers; the adapter must follow it rather
+			// than the path every image before 18 used.
+			return outExec("/var/lib/postgresql/18/docker"), nil
 		case args.Argv[0] == "pg_isready" && len(*sequence) <= 2:
 			return okExec(2), nil // idle: engine not running
 		case args.Argv[0] == "pg_isready":
@@ -169,6 +176,17 @@ func mustNotBeCalled(t *testing.T) func(verbCall) (any, *protoError) {
 }
 
 // alreadyRunning simulates pg_isready reporting a live engine.
+// sandboxPGData is what postgres:18 answers when the adapter asks where
+// the cluster belongs. Every handler that reaches the restore has to give
+// it, because the adapter refuses a directory it cannot read out of the
+// sandbox rather than falling back to the path 17 and earlier used.
+const sandboxPGData = "/var/lib/postgresql/18/docker"
+
+// isPGDataProbe reports whether this exec is the adapter asking.
+func isPGDataProbe(args execArgs) bool {
+	return len(args.Argv) > 2 && args.Argv[0] == "sh" && strings.Contains(args.Argv[2], "PGDATA")
+}
+
 func alreadyRunning(verbCall) (any, *protoError) { return okExec(0), nil }
 
 // noPgbackrest simulates an idle sandbox whose image lacks pgbackrest.
@@ -194,6 +212,8 @@ func restoreFails(t *testing.T) func(verbCall) (any, *protoError) {
 			t.Fatalf("args: %v", err)
 		}
 		switch {
+		case isPGDataProbe(args):
+			return outExec(sandboxPGData), nil
 		case args.Argv[0] == "pg_isready":
 			return okExec(2), nil
 		case len(args.Argv) > 2 && args.Argv[2] == "pgbackrest":
@@ -284,6 +304,8 @@ func startFailsBeforeTarget(t *testing.T) func(verbCall) (any, *protoError) {
 			t.Fatalf("args: %v", err)
 		}
 		switch {
+		case isPGDataProbe(args):
+			return outExec(sandboxPGData), nil
 		case args.Argv[0] == "pg_isready":
 			return okExec(2), nil // idle
 		case args.Argv[0] == "sh" && strings.Contains(args.Argv[2], "pg_ctl"):
@@ -291,6 +313,104 @@ func startFailsBeforeTarget(t *testing.T) func(verbCall) (any, *protoError) {
 		default:
 			return okExec(0), nil
 		}
+	}
+}
+
+// execScript returns the shell script an exec call carries, or "" for
+// anything that is not one.
+func execScript(t *testing.T, call verbCall) string {
+	t.Helper()
+	if call.Verb != "exec" {
+		return ""
+	}
+	args := execArgs{}
+	if err := json.Unmarshal(call.Args, &args); err != nil {
+		t.Fatalf("args: %v", err)
+	}
+	if len(args.Argv) > 2 {
+		return args.Argv[2]
+	}
+	return ""
+}
+
+// watchScripts wraps a handler, recording every script it is asked to run.
+func watchScripts(t *testing.T, inner func(verbCall) (any, *protoError), scripts *[]string) func(verbCall) (any, *protoError) {
+	return func(call verbCall) (any, *protoError) {
+		if script := execScript(t, call); script != "" {
+			*scripts = append(*scripts, script)
+		}
+		return inner(call)
+	}
+}
+
+// answerPGData wraps a handler, making the sandbox report dir as its data
+// directory.
+func answerPGData(t *testing.T, inner func(verbCall) (any, *protoError), dir string) func(verbCall) (any, *protoError) {
+	return func(call verbCall) (any, *protoError) {
+		if script := execScript(t, call); strings.Contains(script, "PGDATA") {
+			return outExec(dir), nil
+		}
+		return inner(call)
+	}
+}
+
+// The three tests below pin the fix for the trap PostgreSQL 18 set: the
+// official image moved PGDATA from /var/lib/postgresql/data to
+// /var/lib/postgresql/18/docker, and the old path does not fail loudly on
+// 18. pgbackrest restores into a directory the server will never read, the
+// server starts on a cluster the backup never touched, and the drill
+// reports a green that proves nothing — the one outcome this adapter must
+// never produce.
+
+func TestPhysicalRestoreUsesTheDirectoryTheSandboxNamed(t *testing.T) {
+	var scripts []string
+	line, _, _ := driveOp(t, "provision", pgbackrestPayload(writeRepoFixture(t), "demo"),
+		watchScripts(t, physicalHandler(t, new([]string)), &scripts))
+	if f := parseFinal(t, line); !f.OK {
+		t.Fatalf("final = %+v", f)
+	}
+	if !strings.Contains(strings.Join(scripts, "\n"), sandboxPGData) {
+		t.Errorf("no script mentions %s:\n%s", sandboxPGData, strings.Join(scripts, "\n"))
+	}
+	// The pre-18 path may survive only as the probe's own fallback.
+	for _, script := range scripts {
+		if strings.Contains(script, legacyPGDataDir) && !strings.Contains(script, "PGDATA") {
+			t.Errorf("a script still hardcodes the pre-18 directory: %s", script)
+		}
+	}
+}
+
+func TestPGDataProbeFallsBackToThePre18Path(t *testing.T) {
+	var scripts []string
+	driveOp(t, "provision", pgbackrestPayload(writeRepoFixture(t), "demo"),
+		watchScripts(t, physicalHandler(t, new([]string)), &scripts))
+	var probe string
+	for _, script := range scripts {
+		if strings.Contains(script, "PGDATA") {
+			probe = script
+		}
+	}
+	if !strings.Contains(probe, legacyPGDataDir) {
+		t.Errorf("probe = %q, want it to default to the pre-18 path for images that set no PGDATA", probe)
+	}
+}
+
+func TestPhysicalRestoreRefusesADataDirectoryItWillNotWriteTo(t *testing.T) {
+	repo := writeRepoFixture(t)
+	// An empty answer, a relative path, and two that would carry shell
+	// syntax into a script the adapter builds.
+	for _, answer := range []string{"", "relative/path", "/tmp/$(id)", "/tmp/a b"} {
+		t.Run(answer, func(t *testing.T) {
+			line, _, _ := driveOp(t, "provision", pgbackrestPayload(repo, "demo"),
+				answerPGData(t, physicalHandler(t, new([]string)), answer))
+			f := parseFinal(t, line)
+			if f.OK {
+				t.Fatalf("accepted PGDATA %q", answer)
+			}
+			if !strings.Contains(f.Error.Message, "PGDATA") {
+				t.Errorf("message = %q, want it to name the setting", f.Error.Message)
+			}
+		})
 	}
 }
 

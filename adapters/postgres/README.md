@@ -200,6 +200,26 @@ later. The check refuses only on positive evidence: an encrypted or
 otherwise unreadable manifest simply skips it, and the restore speaks for
 itself.
 
+## Where the cluster goes (`PGDATA`)
+
+A physical restore replaces the data directory, so the adapter has to know
+where it is. It asks the sandbox rather than assuming: `$PGDATA` if the
+image sets it, and `/var/lib/postgresql/data` if it does not.
+
+That is not defensive programming, it is a measured trap. The official
+image moved the directory in PostgreSQL 18 — `/var/lib/postgresql/data`
+through 17, `/var/lib/postgresql/18/docker` in 18 — and the old path does
+not fail loudly on 18: `pgbackrest` restores happily into a directory the
+server will never read, the server then starts on a cluster the backup
+never touched, and the drill reports a green that proves nothing. For a
+product whose output is evidence, that is the worst available outcome, so
+the adapter follows the image.
+
+The resolved path must be an absolute path of ordinary characters; the
+adapter refuses anything else rather than paste it into a shell. If your
+image sets `PGDATA` somewhere unusual, that is fine — it just has to be a
+plain path.
+
 ## Point-in-time recovery (pitr)
 
 The `pgbackrest` kind accepts the protocol's `pitr.target_time` (sent by the

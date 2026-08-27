@@ -11,7 +11,34 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **PostgreSQL 18 is verified** (`adapters/postgres` 0.13.0), supported by
+  its vendor until 2030-11-14. It is the first addition from the
+  2026-08-27 engine-version sweep, and it did not go in quietly.
+
 ### Fixed
+
+- **The postgres adapter restored physical backups into a directory
+  PostgreSQL 18 does not use.** The official image moved the cluster —
+  `PGDATA` is `/var/lib/postgresql/data` through 17 and
+  `/var/lib/postgresql/18/docker` in 18 (measured against both images) —
+  and the adapter held the pre-18 path in a constant.
+
+  What makes this worth the entry is the shape of the failure rather than
+  its size. It does not announce itself: `pgbackrest` restores into
+  whatever `pg1-path` names, the server then starts on a directory the
+  backup never touched, and the drill reports a green. A restore
+  verification tool that returns a false green is worse than one that
+  crashes, and this is the only such path the suite has caught.
+
+  The adapter now asks the sandbox — `$PGDATA` where the image sets it,
+  the pre-18 path where it does not — and refuses anything that is not a
+  plain absolute path rather than pasting it into a shell. It also creates
+  the directory, which on 18 does not exist in an idle container. The same
+  assumption was in the integration fixture, where it surfaced as
+  `chown: cannot access '/var/lib/postgresql/data'` and is what led to the
+  adapter bug behind it.
 
 - **Two engine versions had outlived their vendors' support, and nothing
   noticed.** `docs/engine-versions.md` §1 says a version past end-of-life
