@@ -54,6 +54,7 @@ func validManifest() map[string]any {
 		"engine_name":          "Demo Engine",
 		"conformance_verified": true,
 		"docs":                 "docs/capabilities.md",
+		"versions_checked":     "2026-08-27",
 		"verified": []any{
 			map[string]any{"engine_version": "16", "image": "demo:16", "baseline": true},
 		},
@@ -174,6 +175,28 @@ func TestBuildRejectsInconsistentAdapters(t *testing.T) {
 			name:    "since that is not a release",
 			mutate:  func(_ *testing.T, a *fixtureAdapter) { a.manifest["since"] = "0.4" },
 			wantErr: "is not a release of this repository",
+		},
+		{
+			name:    "no versions_checked",
+			mutate:  func(_ *testing.T, a *fixtureAdapter) { delete(a.manifest, "versions_checked") },
+			wantErr: "no versions_checked",
+		},
+		{
+			name:    "versions_checked that is not a date",
+			mutate:  func(_ *testing.T, a *fixtureAdapter) { a.manifest["versions_checked"] = "August 2026" },
+			wantErr: "is not a YYYY-MM-DD date",
+		},
+		{
+			// A vendor window nobody can parse is a window nothing can
+			// act on when it closes.
+			name: "supported_until that is not a date",
+			mutate: func(_ *testing.T, a *fixtureAdapter) {
+				a.manifest["verified"] = []any{
+					map[string]any{"engine_version": "16", "image": "demo:16", "baseline": true,
+						"supported_until": "next November"},
+				}
+			},
+			wantErr: "not a YYYY-MM-DD date",
 		},
 		{
 			name:    "no display name",

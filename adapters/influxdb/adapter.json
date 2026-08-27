@@ -7,19 +7,23 @@
   "engine_name": "InfluxDB",
   "conformance_verified": true,
   "docs": "adapters/influxdb/README.md",
+  "versions_checked": "2026-08-27",
   "verified": [
     {
       "engine_version": "2.7",
       "image": "influxdb:2.7.12",
+      "supported_until": null,
       "baseline": true
     },
     {
       "engine_version": "2.8",
-      "image": "influxdb:2.8.0"
+      "image": "influxdb:2.8.0",
+      "supported_until": null
     },
     {
       "engine_version": "2.9",
-      "image": "influxdb:2.9.1"
+      "image": "influxdb:2.9.1",
+      "supported_until": null
     }
   ],
   "sources": {

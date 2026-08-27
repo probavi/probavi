@@ -682,10 +682,6 @@
       ],
       "verified": [
         {
-          "engine_version": "3.5",
-          "image": "prom/prometheus:v3.5.5"
-        },
-        {
           "engine_version": "3.13",
           "image": "prom/prometheus:v3.13.2"
         }
@@ -894,10 +890,6 @@
         "probavi-adapter/0"
       ],
       "verified": [
-        {
-          "engine_version": "1.120",
-          "image": "victoriametrics/victoria-metrics:v1.120.0"
-        },
         {
           "engine_version": "1.150",
           "image": "victoriametrics/victoria-metrics:v1.150.0"

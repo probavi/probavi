@@ -7,27 +7,33 @@
   "engine_name": "Valkey",
   "conformance_verified": true,
   "docs": "adapters/valkey/README.md",
+  "versions_checked": "2026-08-27",
   "verified": [
     {
       "engine_version": "7.2",
       "image": "valkey/valkey:7.2.14",
+      "supported_until": null,
       "baseline": true
     },
     {
       "engine_version": "8.0",
-      "image": "valkey/valkey:8.0.10"
+      "image": "valkey/valkey:8.0.10",
+      "supported_until": null
     },
     {
       "engine_version": "8.1",
-      "image": "valkey/valkey:8.1.9"
+      "image": "valkey/valkey:8.1.9",
+      "supported_until": null
     },
     {
       "engine_version": "9.0",
-      "image": "valkey/valkey:9.0.5"
+      "image": "valkey/valkey:9.0.5",
+      "supported_until": null
     },
     {
       "engine_version": "9.1",
-      "image": "valkey/valkey:9.1.1"
+      "image": "valkey/valkey:9.1.1",
+      "supported_until": null
     }
   ],
   "sources": {

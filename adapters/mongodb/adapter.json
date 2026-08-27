@@ -7,10 +7,12 @@
   "engine_name": "MongoDB",
   "conformance_verified": true,
   "docs": "adapters/mongodb/README.md",
+  "versions_checked": "2026-08-27",
   "verified": [
     {
       "engine_version": "7.0",
       "image": "mongo:7.0",
+      "supported_until": "2027-08-31",
       "baseline": true
     }
   ],

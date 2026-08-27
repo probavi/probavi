@@ -7,15 +7,18 @@
   "engine_name": "DuckDB",
   "conformance_verified": true,
   "docs": "adapters/duckdb/README.md",
+  "versions_checked": "2026-08-27",
   "verified": [
     {
       "engine_version": "1.4",
       "image": "duckdb/duckdb:1.4.5",
+      "supported_until": null,
       "baseline": true
     },
     {
       "engine_version": "1.5",
-      "image": "duckdb/duckdb:1.5.5"
+      "image": "duckdb/duckdb:1.5.5",
+      "supported_until": null
     }
   ],
   "sources": {

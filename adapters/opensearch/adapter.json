@@ -7,15 +7,18 @@
   "engine_name": "OpenSearch",
   "conformance_verified": true,
   "docs": "adapters/opensearch/README.md",
+  "versions_checked": "2026-08-27",
   "verified": [
     {
       "engine_version": "2.19.6",
       "image": "opensearchproject/opensearch:2.19.6",
+      "supported_until": null,
       "baseline": true
     },
     {
       "engine_version": "3.8.0",
-      "image": "opensearchproject/opensearch:3.8.0"
+      "image": "opensearchproject/opensearch:3.8.0",
+      "supported_until": null
     }
   ],
   "sources": {

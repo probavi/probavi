@@ -7,14 +7,12 @@
   "engine_name": "VictoriaMetrics",
   "conformance_verified": true,
   "docs": "adapters/victoriametrics/README.md",
+  "versions_checked": "2026-08-27",
   "verified": [
-    {
-      "engine_version": "1.120",
-      "image": "victoriametrics/victoria-metrics:v1.120.0"
-    },
     {
       "engine_version": "1.150",
       "image": "victoriametrics/victoria-metrics:v1.150.0",
+      "supported_until": null,
       "baseline": true
     }
   ],

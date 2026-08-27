@@ -7,15 +7,18 @@
   "engine_name": "Apache Cassandra",
   "conformance_verified": true,
   "docs": "adapters/cassandra/README.md",
+  "versions_checked": "2026-08-27",
   "verified": [
     {
       "engine_version": "4.1",
       "image": "cassandra:4.1.12",
+      "supported_until": null,
       "baseline": true
     },
     {
       "engine_version": "5.0",
-      "image": "cassandra:5.0.9"
+      "image": "cassandra:5.0.9",
+      "supported_until": null
     }
   ],
   "sources": {

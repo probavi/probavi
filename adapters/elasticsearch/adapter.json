@@ -7,15 +7,18 @@
   "engine_name": "Elasticsearch",
   "conformance_verified": true,
   "docs": "adapters/elasticsearch/README.md",
+  "versions_checked": "2026-08-27",
   "verified": [
     {
       "engine_version": "8.19.20",
       "image": "elasticsearch:8.19.20",
+      "supported_until": "2027-07-15",
       "baseline": true
     },
     {
       "engine_version": "9.5.2",
-      "image": "elasticsearch:9.5.2"
+      "image": "elasticsearch:9.5.2",
+      "supported_until": "2027-10-15"
     }
   ],
   "sources": {

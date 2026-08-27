@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/probavi/probavi/internal/cli"
 	"github.com/probavi/probavi/internal/notify"
@@ -224,6 +225,7 @@ func TestEngineNameMustNotRepeatTheEngineID(t *testing.T) {
 		return &AdapterManifest{
 			ID: dir, Name: "Demo", Status: StatusExperimental,
 			EngineName: engineName, Since: Release{Stated: true, Value: "0.4.0"},
+			VersionsChecked: "2026-08-27",
 		}
 	}
 
@@ -246,6 +248,43 @@ func TestEngineNameMustNotRepeatTheEngineID(t *testing.T) {
 	}
 	if err := checkAdapterIdentity("etcd", manifest("etcd", "etcd"), probe("etcd", "etcd")); err != nil {
 		t.Errorf("rejected etcd's own name: %v", err)
+	}
+}
+
+// TestSupportWindowClosed pins the comparison the repository gate reads
+// the calendar with. The boundary is the interesting part: a vendor
+// states a date, and the last day of support is a day of support.
+func TestSupportWindowClosed(t *testing.T) {
+	day := func(s string) time.Time {
+		d, err := time.Parse("2006-01-02", s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	tests := map[string]struct {
+		until, today string
+		want         bool
+	}{
+		"well inside the window":    {"2027-11-11", "2026-08-27", false},
+		"the last day still counts": {"2026-08-27", "2026-08-27", false},
+		"the day after does not":    {"2026-08-26", "2026-08-27", true},
+		"long past":                 {"2020-01-01", "2026-08-27", true},
+		"no window never closes":    {"", "2099-01-01", false},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, err := SupportWindowClosed(tt.until, day(tt.today))
+			if err != nil {
+				t.Fatalf("SupportWindowClosed: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("SupportWindowClosed(%q, %s) = %v, want %v", tt.until, tt.today, got, tt.want)
+			}
+		})
+	}
+	if _, err := SupportWindowClosed("soon", day("2026-08-27")); err == nil {
+		t.Error("accepted a support window that is not a date")
 	}
 }
 

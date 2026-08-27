@@ -7,19 +7,23 @@
   "engine_name": "Microsoft SQL Server",
   "conformance_verified": true,
   "docs": "adapters/mssql/README.md",
+  "versions_checked": "2026-08-27",
   "verified": [
     {
       "engine_version": "2019",
-      "image": "mcr.microsoft.com/mssql/server:2019-latest"
+      "image": "mcr.microsoft.com/mssql/server:2019-latest",
+      "supported_until": "2030-01-09"
     },
     {
       "engine_version": "2022",
       "image": "mcr.microsoft.com/mssql/server:2022-latest",
+      "supported_until": "2033-01-12",
       "baseline": true
     },
     {
       "engine_version": "2025",
-      "image": "mcr.microsoft.com/mssql/server:2025-latest"
+      "image": "mcr.microsoft.com/mssql/server:2025-latest",
+      "supported_until": null
     }
   ],
   "sources": {

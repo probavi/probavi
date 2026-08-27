@@ -7,23 +7,28 @@
   "engine_name": "MariaDB",
   "conformance_verified": true,
   "docs": "adapters/mariadb/README.md",
+  "versions_checked": "2026-08-27",
   "verified": [
     {
       "engine_version": "10.11",
       "image": "mariadb:10.11",
+      "supported_until": "2028-02-16",
       "baseline": true
     },
     {
       "engine_version": "11.4",
-      "image": "mariadb:11.4"
+      "image": "mariadb:11.4",
+      "supported_until": "2029-05-29"
     },
     {
       "engine_version": "11.8",
-      "image": "mariadb:11.8"
+      "image": "mariadb:11.8",
+      "supported_until": "2028-06-04"
     },
     {
       "engine_version": "12.3",
-      "image": "mariadb:12.3"
+      "image": "mariadb:12.3",
+      "supported_until": "2029-06-12"
     }
   ],
   "sources": {
