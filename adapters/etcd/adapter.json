@@ -19,6 +19,11 @@
       "engine_version": "3.6",
       "image": "quay.io/coreos/etcd:v3.6.4",
       "supported_until": null
+    },
+    {
+      "engine_version": "3.7",
+      "image": "quay.io/coreos/etcd:v3.7.1",
+      "supported_until": null
     }
   ],
   "sources": {

@@ -13,6 +13,23 @@ always called out explicitly.
 
 ### Added
 
+- **etcd 3.7 is verified** (`quay.io/coreos/etcd:v3.7.1`), the last
+  addition from the 2026-08-27 engine-version sweep and the only one that
+  needed no fix: the suite passed against it first time, and against 3.5
+  and 3.6 unchanged. etcd publishes no end-of-life dates — its policy is
+  relative, "the current version and previous release" — so the entry
+  carries `null` and `versions_checked` dates the reading.
+
+  Adding it made two measured claims in the adapter's README stale, and
+  they are re-measured rather than reworded. Auto-compaction is off by
+  default in all three listed versions, read from each server's own
+  startup log. The lease flags, though, moved: 3.7 has dropped the
+  `--experimental-enable-lease-checkpoint` pair exactly as 3.6 announced,
+  and adds `FastLeaseKeepAlive` (BETA, on by default). Neither change
+  pins a lease, so the adapter's client-side refresh is still the only
+  mechanism available — but the README no longer says the checkpoint pair
+  is all there is.
+
 - **MongoDB 8.0 is verified** (`mongo:8.0`, supported by its vendor until
   2029-10-31), the third addition from the 2026-08-27 engine-version
   sweep and the one that closed the widest gap: 8.0 has been generally
