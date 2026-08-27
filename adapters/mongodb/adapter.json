@@ -14,6 +14,11 @@
       "image": "mongo:7.0",
       "supported_until": "2027-08-31",
       "baseline": true
+    },
+    {
+      "engine_version": "8.0",
+      "image": "mongo:8.0",
+      "supported_until": "2029-10-31"
     }
   ],
   "sources": {

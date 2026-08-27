@@ -54,7 +54,7 @@ the exact instant proven.
 | [etcd](adapters/etcd/README.md) | 3.5, 3.6 | 0.7.0 | `etcd_snapshot`, `etcd_snapshot_dir` |
 | [InfluxDB](adapters/influxdb/README.md) | 2.7, 2.8, 2.9 | 0.15.0 | `influx_backup`, `influx_backup_dir`, `influx_backup_tar` |
 | [MariaDB](adapters/mariadb/README.md) | 10.11, 11.4, 11.8, 12.3 | 0.7.0 | `mariadb_backup`, `mariadb_dump`, `mariadb_dump_dir` |
-| [MongoDB](adapters/mongodb/README.md) | 7.0 | 0.2.0 | `mongodump`, `mongodump_dir`, `mongodump_with_oplog`, `mongodump_with_users` |
+| [MongoDB](adapters/mongodb/README.md) | 7.0, 8.0 | 0.2.0 | `mongodump`, `mongodump_dir`, `mongodump_with_oplog`, `mongodump_with_users` |
 | [SQL Server](adapters/mssql/README.md) | 2019, 2022, 2025 | 0.2.0 | `bak`, `bak_chain`, `bak_dir`, `bak_with_logins` |
 | [MySQL](adapters/mysql/README.md) | 8.4, 9.7, percona-server 8.4.10 | 0.1.0 | `mysqldump`, `mysqldump_dir`, `mysqldump_with_users`, `xtrabackup` |
 | [Neo4j](adapters/neo4j/README.md) | 5.26 | 0.19.0 | `neo4j_dump`, `neo4j_dump_dir` |

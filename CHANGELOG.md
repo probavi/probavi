@@ -13,6 +13,32 @@ always called out explicitly.
 
 ### Added
 
+- **MongoDB 8.0 is verified** (`mongo:8.0`, supported by its vendor until
+  2029-10-31), the third addition from the 2026-08-27 engine-version
+  sweep and the one that closed the widest gap: 8.0 has been generally
+  available since October 2024, and this repository listed 7.0 alone.
+  The adapter needed no change — the 8.0 image ships the same tools 7.0
+  does, and the whole suite passes against both.
+
+  The oplog fixture needed one change, and it is a test-only one. It made
+  the dump/write race deterministic with the `waitInFindBeforeMakingBatch`
+  fail point, which MongoDB 8.0 does not register — the 8.0 server answers
+  `waitInFindBeforeMakingBatch not found`, and reading each `mongod`
+  binary's fail-point registrations confirms it is the one Find/Batch fail
+  point 7.0 has and 8.0 does not. The fixture now uses
+  `waitAfterCommandFinishesExecution`, which blocks until switched off the
+  same way and is registered in both.
+
+  `adapters/mongodb/README.md` gains what the sweep turned up beside it:
+  **`mongod` 8.0 refuses to start on Linux kernels 6.19 and newer**
+  (SERVER-121912), so a drill on a recent kernel host ends as
+  `engine_not_ready` with no explanation available to the adapter — the
+  engine writes its refusal to the container's own output, which the
+  protocol gives an adapter no way to read, and there is nothing left to
+  exec against once the engine has exited. Measured on kernel 7.1.9,
+  where 7.0 starts and 8.0 does not. This is why the 8.0 entry was proven
+  by CI rather than on a developer machine.
+
 - **MySQL 9.7 LTS is verified** (`adapters/mysql` 0.13.0), the second
   addition from the 2026-08-27 engine-version sweep and the second one to
   find a bug rather than just a version. Oracle publishes no support end
