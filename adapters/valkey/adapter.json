@@ -4,7 +4,7 @@
   "name": "Valkey",
   "status": "experimental",
   "since": "0.9.0",
-  "engine_name": "valkey",
+  "engine_name": "Valkey",
   "conformance_verified": true,
   "docs": "adapters/valkey/README.md",
   "verified": [

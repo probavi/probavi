@@ -4,7 +4,7 @@
   "name": "Oracle Database",
   "status": "experimental",
   "since": "0.18.0",
-  "engine_name": "oracle",
+  "engine_name": "Oracle Database",
   "conformance_verified": true,
   "docs": "adapters/oracle/README.md",
   "verified": [

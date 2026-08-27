@@ -283,6 +283,10 @@ func checkAdapterIdentity(dirName string, m *AdapterManifest, golden *probeGolde
 		return fmt.Errorf("adapter %s: manifest declares no name", dirName)
 	case m.EngineName == "":
 		return fmt.Errorf("adapter %s: manifest declares no engine_name", dirName)
+	case m.EngineName == golden.Payload.Engine.Name && !engineNamedLikeItsID[dirName]:
+		return fmt.Errorf("adapter %s: engine_name %q is the engine's id, which the probe already "+
+			"declares as engine.id — state the engine's display name, or add the adapter to "+
+			"engineNamedLikeItsID if its name really is spelled that way", dirName, m.EngineName)
 	case !validStatus(m.Status):
 		return fmt.Errorf("adapter %s: status %q is not one of %s", dirName, m.Status, strings.Join(Statuses(), ", "))
 	case !m.Since.Stated:
@@ -299,6 +303,21 @@ func checkAdapterIdentity(dirName string, m *AdapterManifest, golden *probeGolde
 // checked for shape here — whether it is the *right* release is a question
 // about CHANGELOG.md, which internal/docs answers.
 var releasePattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+
+// engineNamedLikeItsID lists the adapters whose engine really is spelled
+// the way its id is.
+//
+// The check above exists because thirteen manifests once carried the
+// probe's engine id in engine_name — each written by copying the manifest
+// next to it — and the field reaches docs/capabilities.json as
+// engine.name, where a consumer reads it as a display name. etcd is the
+// one true match: the project spells its own name in lowercase, so
+// capitalising it would be the same error in the other direction.
+//
+// The comparison is byte-for-byte on purpose. A display name that differs
+// from the id only in capitalisation — "PostgreSQL" against the probe's
+// "postgresql" — is a correct display name, not a copied id.
+var engineNamedLikeItsID = map[string]bool{"etcd": true}
 
 // buildSources joins the probe's source kinds to the manifest's display
 // names. A kind the adapter declares but the manifest does not name — and

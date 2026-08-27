@@ -68,6 +68,16 @@ value as unreadable rather than guessing.
   `stable`. While the project is pre-alpha everything is `experimental`;
   `beta` and `stable` exist so the vocabulary is defined before it is
   earned.
+- **`adapters[].engine`** carries two facts that are not interchangeable.
+  `engine.id` is what the adapter's probe declares — `postgresql`,
+  `sqlserver`, `etcd` — and is the value to match on. `engine.name` is the
+  engine's display name and is the value to show. A manifest whose
+  `engine_name` repeats the probe's id is a build failure, with one
+  exception for `etcd`, whose name really is spelled that way. Neither is
+  the adapter's own id: an evidence record identifies what performed a
+  restore by `adapter.name` (`postgres`, `mssql`), which this file
+  publishes as `adapters[].id`.
+
 - **`adapters[].since`** is the release in which this repository first
   shipped that adapter, or `null` while it has not been released yet. It
   dates the **adapter**, not the engine: where an engine was already

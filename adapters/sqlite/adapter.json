@@ -4,7 +4,7 @@
   "name": "SQLite",
   "status": "experimental",
   "since": "0.10.0",
-  "engine_name": "sqlite",
+  "engine_name": "SQLite",
   "conformance_verified": true,
   "docs": "adapters/sqlite/README.md",
   "verified": [

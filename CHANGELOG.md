@@ -13,6 +13,36 @@ always called out explicitly.
 
 ### Fixed
 
+- **Thirteen adapter manifests carried an engine id where a display name
+  belongs.** `engine_name` is documented as the engine's display name and
+  reaches `docs/capabilities.json` as `engine.name`, but `cassandra`,
+  `duckdb`, `elasticsearch`, `influxdb`, `neo4j`, `opensearch`, `oracle`,
+  `prometheus`, `redis`, `sqlite`, `valkey` and `victoriametrics` all
+  repeated the probe's lowercase id — each one written by copying the
+  manifest next to it. The values are corrected, and a build failure now
+  refuses a manifest whose `engine_name` equals the id its own probe
+  declares. `etcd` is the single exception, stated in code with its
+  reason: the project spells its own name in lowercase, so capitalising it
+  would be the same error in the other direction. The comparison is
+  byte-for-byte, because a display name that differs from the id only in
+  capitalisation — `PostgreSQL` against `postgresql` — is a correct
+  display name and not a copied id.
+
+  This is not a contract change and needs no new manifest version: the
+  field's meaning is unchanged, thirteen of its values were wrong. Nothing
+  in this repository rendered them, and the core README's engine table is
+  untouched because it reads `adapters[].name`.
+
+- **Two documents said an evidence record names an `engine`.** It does
+  not, and never has: a record identifies what performed a restore by
+  `adapter.name` — the adapter's id, `mariadb` or `mysql` — and carries no
+  engine field at all (`docs/evidence-schema.md` §3). The claim appeared
+  in the README's engine-table caption and twice in
+  `adapters/mariadb/README.md`, in each case making the right point about
+  a real distinction under a field name that does not exist. Corrected to
+  `adapter.name`. The changelog entries that first used the shorthand are
+  left as they were written; history is not rewritten to look better.
+
 - **The release notes deleted the file names they were quoting.** The
   workflow escaped a backtick inside a double-quoted `echo` as `` \\` ``
   rather than `` \` ``, so the shell read a literal backslash followed by

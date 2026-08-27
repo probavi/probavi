@@ -75,7 +75,7 @@ Read the columns as they are written. **Verified against** is what this reposito
 suite actually restores from, and is never a supported-version range; where an adapter's versions
 come from more than one image, each is named by the image it came from. **In every release since**
 dates the adapter, not the engine — MariaDB dumps were restorable through the mysql adapter from
-0.1.0, but only from 0.7.0 does a MariaDB drill record `engine: mariadb`. **Source kinds** are the
+0.1.0, but only from 0.7.0 does a MariaDB drill record `adapter.name: mariadb`. **Source kinds** are the
 values `source.kind` takes in a drill config; what each one accepts is in the linked adapter's
 README. Which engines are here, and which come next, is a question [ROADMAP.md](ROADMAP.md)
 answers.
