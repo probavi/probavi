@@ -39,6 +39,30 @@ readiness probes cannot be fooled by a server that is about to restart.
 Because no authentication exists in the sandbox, `connection.user` is
 reported empty and the declared `sql_runner` references no `{{user}}`.
 
+## MongoDB 8.0 and Linux kernels 6.19 and newer
+
+A drill against MongoDB 8.0 fails on a host running Linux 6.19 or newer,
+and the failure looks like nothing in particular: the sandbox comes up,
+the engine never answers, and the drill ends as `engine_not_ready`.
+
+The reason is upstream, not here. `mongod` 8.0 refuses to start on those
+kernels and says so before doing anything else:
+
+```
+MongoDB cannot start: Linux kernel versions 6.19 and newer has a known
+incompatibility with this version of MongoDB.
+See https://jira.mongodb.org/browse/SERVER-121912
+```
+
+The message goes to the container's own output, which an adapter cannot
+read — the protocol gives it `exec` and `put_file`, and there is nothing
+left in the sandbox to exec against once the engine has exited. So the
+adapter reports the readiness timeout truthfully and cannot explain it,
+which is why the explanation is here instead. Checked 2026-08-27 against
+`mongo:8.0` on kernel 7.1.9; MongoDB 7.0 starts on the same host.
+
+If your drill hosts run a recent kernel, this affects the 8.0 line only.
+
 ## The TTL monitor is disabled before the restore
 
 A drill proves what the backup holds, not what a running server would
