@@ -550,3 +550,22 @@ func TestCoreCallEdgeCases(t *testing.T) {
 		}
 	})
 }
+
+// TestRestoreScriptFeedsTheDumpOnStdin guards a regression that only one
+// of the listed engine versions can see.
+//
+// The plain restore used the client's own `source` command for years.
+// MySQL 9's client passes it to the server as SQL instead, which answers
+// ERROR 1064 near 'source /tmp/…' — measured against 8.4 and 9.7, where
+// 8.4 accepts both forms and 9.7 only the redirect. A revert would
+// therefore pass every unit test and the 8.4 baseline, and fail only in
+// the version matrix, so the form is pinned here where the reason is
+// written down.
+func TestRestoreScriptFeedsTheDumpOnStdin(t *testing.T) {
+	if strings.Contains(restoreScript, `-e "source`) {
+		t.Error("the plain restore uses the client's source command, which MySQL 9 rejects")
+	}
+	if !strings.Contains(restoreScript, `< "$1"`) {
+		t.Error("the plain restore no longer redirects the dump into the client on stdin")
+	}
+}

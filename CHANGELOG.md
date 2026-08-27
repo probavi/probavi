@@ -13,11 +13,31 @@ always called out explicitly.
 
 ### Added
 
+- **MySQL 9.7 LTS is verified** (`adapters/mysql` 0.13.0), the second
+  addition from the 2026-08-27 engine-version sweep and the second one to
+  find a bug rather than just a version. Oracle publishes no support end
+  date this repository can cite, so the entry carries `null` — the
+  platform page confirms 9.7 and 8.4 are the two current LTS lines, and
+  the lifetime-support document is not fetchable.
+
 - **PostgreSQL 18 is verified** (`adapters/postgres` 0.13.0), supported by
   its vendor until 2030-11-14. It is the first addition from the
   2026-08-27 engine-version sweep, and it did not go in quietly.
 
 ### Fixed
+
+- **The mysql adapter could not restore a stored-plain dump on MySQL 9.**
+  It fed the dump through the client's own `source` command, which worked
+  from 0.1.0 and stops working at 9: the 9.7 client passes
+  `source <file>` to the server as SQL, and the server answers
+  `ERROR 1064 … near 'source /tmp/probavi-restore.sql'`. Measured against
+  both — 8.4 accepts the old form and the new one, 9.7 only the new one.
+
+  The dump is now redirected into the client on stdin, which is what the
+  compressed path has always done; that is why only the stored-plain path
+  was affected. A revert would pass every unit test and the 8.4 baseline
+  and fail only in the version matrix, so the form is pinned by a test
+  with the measurement written next to it.
 
 - **The postgres adapter restored physical backups into a directory
   PostgreSQL 18 does not use.** The official image moved the cluster —
