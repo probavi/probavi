@@ -7,31 +7,38 @@
   "engine_name": "PostgreSQL",
   "conformance_verified": true,
   "docs": "adapters/postgres/README.md",
+  "versions_checked": "2026-08-27",
   "verified": [
     {
       "engine_version": "14",
-      "image": "postgres:14"
+      "image": "postgres:14",
+      "supported_until": "2026-11-12"
     },
     {
       "engine_version": "15",
-      "image": "postgres:15"
+      "image": "postgres:15",
+      "supported_until": "2027-11-11"
     },
     {
       "engine_version": "16",
       "image": "postgres:16",
+      "supported_until": "2028-11-09",
       "baseline": true
     },
     {
       "engine_version": "17",
-      "image": "postgres:17"
+      "image": "postgres:17",
+      "supported_until": "2029-11-08"
     },
     {
       "engine_version": "0.8.6-pg17",
-      "image": "pgvector/pgvector:0.8.6-pg17"
+      "image": "pgvector/pgvector:0.8.6-pg17",
+      "supported_until": null
     },
     {
       "engine_version": "2.29.1-pg17",
-      "image": "timescale/timescaledb:2.29.1-pg17"
+      "image": "timescale/timescaledb:2.29.1-pg17",
+      "supported_until": null
     }
   ],
   "sources": {

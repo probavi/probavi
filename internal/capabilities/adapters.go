@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // adapters.go reads the two per-adapter sources of truth and refuses to
@@ -58,6 +59,11 @@ type AdapterManifest struct {
 	// from. The suite reads Image from here, so a version listed but never
 	// exercised is not possible.
 	Verified []ManifestTarget `json:"verified"`
+	// VersionsChecked is the date a human last read the vendors' support
+	// windows for the entries below, as YYYY-MM-DD. It is what makes a
+	// null SupportedUntil a statement — "the vendor publishes no end date"
+	// — rather than "nobody looked" (docs/engine-versions.md §1).
+	VersionsChecked string `json:"versions_checked"`
 	// Sources maps every source kind the probe declares to its display
 	// name. Build fails on any mismatch in either direction.
 	Sources map[string]string `json:"sources"`
@@ -119,6 +125,18 @@ type ManifestTarget struct {
 	// exercised by the scheduled version matrix and before a release tag
 	// (docs/engine-versions.md §3).
 	Baseline bool `json:"baseline,omitempty"`
+	// SupportedUntil is the day the engine's vendor stops supporting this
+	// version, as YYYY-MM-DD, and null where the vendor publishes no such
+	// date — several do not, and SQLite states the opposite outright. Only
+	// a date the vendor itself publishes belongs here: an aggregator and a
+	// vendor disagreed about Redis 7.2 while this field was being filled
+	// in, and the vendor was right.
+	//
+	// It is a fact about someone else's product rather than a capability,
+	// so like Baseline it stays out of docs/capabilities.json. What it
+	// drives is TestNoVerifiedVersionIsPastItsSupport: the day a listed
+	// version falls out of support, the build says so.
+	SupportedUntil *string `json:"supported_until"`
 }
 
 // BaselineImage returns the image every integration run restores from.
@@ -289,6 +307,12 @@ func checkAdapterIdentity(dirName string, m *AdapterManifest, golden *probeGolde
 			"engineNamedLikeItsID if its name really is spelled that way", dirName, m.EngineName)
 	case !validStatus(m.Status):
 		return fmt.Errorf("adapter %s: status %q is not one of %s", dirName, m.Status, strings.Join(Statuses(), ", "))
+	case m.VersionsChecked == "":
+		return fmt.Errorf("adapter %s: no versions_checked — state the date the vendors' support "+
+			"windows below were last read (docs/engine-versions.md §1)", dirName)
+	case !datePattern.MatchString(m.VersionsChecked):
+		return fmt.Errorf("adapter %s: versions_checked %q is not a YYYY-MM-DD date",
+			dirName, m.VersionsChecked)
 	case !m.Since.Stated:
 		return fmt.Errorf("adapter %s: no since field — state the release this adapter first shipped in, "+
 			"or null while it has not been released", dirName)
@@ -302,6 +326,11 @@ func checkAdapterIdentity(dirName string, m *AdapterManifest, golden *probeGolde
 // releasePattern matches a release of this repository. The value is only
 // checked for shape here — whether it is the *right* release is a question
 // about CHANGELOG.md, which internal/docs answers.
+// datePattern matches a calendar date. Shape only: whether the date is
+// the right one is a question about a vendor's website, which no test can
+// answer — which is why versions_checked records when a human did.
+var datePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+
 var releasePattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 
 // engineNamedLikeItsID lists the adapters whose engine really is spelled
@@ -347,6 +376,26 @@ func buildSources(dirName string, m *AdapterManifest, golden *probeGolden) ([]So
 	return sources, anyPITR, nil
 }
 
+// SupportWindowClosed reports whether a vendor support window ending on
+// until has closed by day. An empty until — the vendor publishes no end
+// date — never closes.
+//
+// The comparison is by calendar day rather than instant: a vendor states
+// a date, not a moment, and the last day of support is a day of support.
+func SupportWindowClosed(until string, day time.Time) (bool, error) {
+	if until == "" {
+		return false, nil
+	}
+	end, err := time.Parse(dateLayout, until)
+	if err != nil {
+		return false, fmt.Errorf("parse support window %q: %w", until, err)
+	}
+	return day.UTC().Truncate(24 * time.Hour).After(end), nil
+}
+
+// dateLayout is how every date in a manifest is written.
+const dateLayout = "2006-01-02"
+
 // checkVerified pins the declared engine version to the image the
 // integration suite actually pulls: the version must appear in the image
 // reference, so a mislabelled version cannot reach the manifest.
@@ -360,6 +409,11 @@ func checkVerified(dirName string, m *AdapterManifest) error {
 	for _, v := range m.Verified {
 		if v.EngineVersion == "" || v.Image == "" {
 			return fmt.Errorf("adapter %s: verified entry needs both engine_version and image", dirName)
+		}
+		if v.SupportedUntil != nil && !datePattern.MatchString(*v.SupportedUntil) {
+			return fmt.Errorf("adapter %s: verified entry %s has supported_until %q, which is not a "+
+				"YYYY-MM-DD date; state null where the vendor publishes no end date",
+				dirName, v.EngineVersion, *v.SupportedUntil)
 		}
 		tag := v.Image
 		if i := strings.LastIndex(v.Image, ":"); i >= 0 {

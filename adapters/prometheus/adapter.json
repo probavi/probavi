@@ -1,5 +1,5 @@
 {
-  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. The official prom/prometheus images pin the server binary as their entrypoint and cannot idle as a drill sandbox (measured); the suite runs the two-line wrapper the adapter README documents, built FROM the listed image, so the server exercised is exactly the listed version's. The baseline is the 3.5 line, Prometheus's current LTS. See docs/capabilities.md and docs/engine-versions.md.",
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. The official prom/prometheus images pin the server binary as their entrypoint and cannot idle as a drill sandbox (measured); the suite runs the two-line wrapper the adapter README documents, built FROM the listed image, so the server exercised is exactly the listed version's. The baseline is the 3.13 line: Prometheus supports one LTS at a time, and 3.5's year ended on 2026-07-31, so it was removed rather than left standing as a claim about an unsupported release. See docs/capabilities.md and docs/engine-versions.md.",
   "id": "prometheus",
   "name": "Prometheus",
   "status": "experimental",
@@ -7,15 +7,13 @@
   "engine_name": "Prometheus",
   "conformance_verified": true,
   "docs": "adapters/prometheus/README.md",
+  "versions_checked": "2026-08-27",
   "verified": [
     {
-      "engine_version": "3.5",
-      "image": "prom/prometheus:v3.5.5",
-      "baseline": true
-    },
-    {
       "engine_version": "3.13",
-      "image": "prom/prometheus:v3.13.2"
+      "image": "prom/prometheus:v3.13.2",
+      "supported_until": "2027-07-31",
+      "baseline": true
     }
   ],
   "sources": {

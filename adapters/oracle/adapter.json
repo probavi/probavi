@@ -7,10 +7,12 @@
   "engine_name": "Oracle Database",
   "conformance_verified": true,
   "docs": "adapters/oracle/README.md",
+  "versions_checked": "2026-08-27",
   "verified": [
     {
       "engine_version": "23.26.3.0",
       "image": "container-registry.oracle.com/database/free:23.26.3.0",
+      "supported_until": null,
       "baseline": true
     }
   ],

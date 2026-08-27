@@ -7,15 +7,18 @@
   "engine_name": "ClickHouse",
   "conformance_verified": true,
   "docs": "adapters/clickhouse/README.md",
+  "versions_checked": "2026-08-27",
   "verified": [
     {
       "engine_version": "26.3",
       "image": "clickhouse:26.3",
+      "supported_until": null,
       "baseline": true
     },
     {
       "engine_version": "26.7",
-      "image": "clickhouse:26.7"
+      "image": "clickhouse:26.7",
+      "supported_until": null
     }
   ],
   "sources": {

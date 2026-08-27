@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/probavi/probavi/internal/adapter"
 	"github.com/probavi/probavi/internal/capabilities"
@@ -342,6 +343,54 @@ func assertSameOrder(t *testing.T, what string, got, want []string) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("%s[%d] = %q, want %q", what, i, got[i], want[i])
+		}
+	}
+}
+
+// TestNoVerifiedVersionIsPastItsSupport is the mechanism behind
+// engine-versions.md §1 rule 1, which until now was a rule with nobody to
+// enforce it: a version past end-of-life must not be listed, and the only
+// thing that noticed was a human remembering to look.
+//
+// It reads the calendar, so it can fail on a day nobody touched the
+// repository. That is the point. A claim that this project verifies
+// restores from an engine version its own vendor has stopped supporting
+// goes stale on a date, not on a commit, and the build is the only place
+// that sees every date at once. The fix is always the same: drop the
+// entry, or move to a version the vendor still supports.
+//
+// Versions whose vendor publishes no end date carry null and are skipped;
+// versions_checked in the same manifest records when a human last read
+// that vendor's page, which is what makes the null a statement.
+func TestNoVerifiedVersionIsPastItsSupport(t *testing.T) {
+	dirs, err := capabilities.AdapterDirs(repoRoot)
+	if err != nil {
+		t.Fatalf("list adapters: %v", err)
+	}
+	if len(dirs) == 0 {
+		t.Fatal("no adapters found — this gate would pass vacuously")
+	}
+	today := time.Now()
+	for _, dir := range dirs {
+		m, merr := capabilities.LoadAdapterManifest(dir)
+		if merr != nil {
+			t.Errorf("%s: %v", dir, merr)
+			continue
+		}
+		for _, v := range m.Verified {
+			if v.SupportedUntil == nil {
+				continue
+			}
+			closed, cerr := capabilities.SupportWindowClosed(*v.SupportedUntil, today)
+			if cerr != nil {
+				t.Errorf("%s %s: %v", m.ID, v.EngineVersion, cerr)
+				continue
+			}
+			if closed {
+				t.Errorf("%s claims %s, whose vendor support ended on %s — remove the entry or "+
+					"replace it with a supported version (docs/engine-versions.md §1)",
+					m.ID, v.EngineVersion, *v.SupportedUntil)
+			}
 		}
 	}
 }

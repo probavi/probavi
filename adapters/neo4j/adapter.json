@@ -7,10 +7,12 @@
   "engine_name": "Neo4j",
   "conformance_verified": true,
   "docs": "adapters/neo4j/README.md",
+  "versions_checked": "2026-08-26",
   "verified": [
     {
       "engine_version": "5.26",
       "image": "neo4j:5.26-community",
+      "supported_until": "2028-06-06",
       "baseline": true
     }
   ],

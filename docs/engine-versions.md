@@ -20,8 +20,24 @@ An engine version is listed when all three hold:
 
 1. **Its vendor still supports it.** A version past end-of-life is not
    something an operator should be running, and verifying it would suggest
-   otherwise. End-of-life dates are the vendor's, checked when the entry is
-   added and rechecked whenever the list is touched.
+   otherwise.
+
+   The date is recorded rather than remembered. Each entry carries
+   `supported_until`, the day the engine's vendor stops supporting that
+   version, and `TestNoVerifiedVersionIsPastItsSupport` fails the build the
+   day one of them closes — on a date, not on a commit, which is how a
+   claim like this goes stale. Until 2026-08-27 this rule had nobody to
+   enforce it, and two entries had quietly outlived their vendors' windows.
+
+   Only a date the **vendor itself publishes** belongs there. Several
+   publish none — their policy is relative ("the last three minor
+   releases"), or, in SQLite's case, the opposite of an end date — and
+   those entries carry `null`. A null is a statement, not a gap: the
+   manifest's `versions_checked` records the day a human last read that
+   vendor's page, which is what separates "the vendor publishes no end
+   date" from "nobody looked". Aggregators are not vendors: one reported
+   Redis 7.2 as unmaintained while Redis's own table gave it until
+   2029-12-01, and the vendor was right.
 2. **It is a long-term or major supported line**, not a rapid or
    innovation release. Those are superseded within months, and a manifest
    that chases them turns into version bookkeeping that tells a reader
@@ -188,8 +204,11 @@ A change to `verified` is a normal pull request with three obligations:
 1. Nothing to remember: editing a manifest triggers the matrix on the pull
    request itself. A version added without a green job is a claim, not a
    fact, and now it is a red check as well.
-2. State the vendor's support window for anything added, and the date it
-   was checked.
+2. Record the vendor's support window in `supported_until`, from the
+   vendor's own page, and move `versions_checked` to the day you read it.
+   Both are manifest-local: a third party's support calendar is a fact
+   about their product, not a capability of this one, so neither reaches
+   `docs/capabilities.json`.
 3. Regenerate `docs/capabilities.json` in the same commit — CI fails on
    drift, and the file is what downstream surfaces read.
 

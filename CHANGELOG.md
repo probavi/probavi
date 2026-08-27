@@ -13,6 +13,35 @@ always called out explicitly.
 
 ### Fixed
 
+- **Two engine versions had outlived their vendors' support, and nothing
+  noticed.** `docs/engine-versions.md` §1 says a version past end-of-life
+  must not be listed, and until now the only thing enforcing it was a
+  human remembering to look. A sweep of all nineteen engines against their
+  vendors' own pages on 2026-08-27 found Prometheus 3.5, whose LTS year
+  ended 2026-07-31 — and which was the baseline every pull request
+  restored from — and VictoriaMetrics 1.120, which is neither the current
+  release nor one of the two supported LTS lines. Both are removed and the
+  Prometheus baseline moves to 3.13, supported until 2027-07-31.
+
+  The rule now has a mechanism. Each `verified` entry carries
+  `supported_until`, and `TestNoVerifiedVersionIsPastItsSupport` fails the
+  build the day a window closes — on a date rather than on a commit, which
+  is how a claim like this goes stale in the first place. The next one to
+  fire is PostgreSQL 14 on 2026-11-12.
+
+  Only dates a **vendor publishes** are recorded. Eighteen of the
+  forty-nine entries have one; the rest carry `null` because their vendors
+  state a relative policy ("the last three minor releases") or, for
+  SQLite, the opposite of an end date — and the new `versions_checked`
+  field dates the reading, so a null says "the vendor publishes none"
+  rather than "nobody looked". The distinction is not academic: an
+  aggregator reported Redis 7.2 as unmaintained while Redis's own table
+  gives it until 2029-12-01, and a sweep trusting the aggregator would
+  have withdrawn a true claim. Both fields are manifest-local — a third
+  party's support calendar is a fact about their product, not a capability
+  of this one — so `docs/capabilities.json` changes only by the two
+  removed entries.
+
 - **Thirteen adapter manifests carried an engine id where a display name
   belongs.** `engine_name` is documented as the engine's display name and
   reaches `docs/capabilities.json` as `engine.name`, but `cassandra`,
