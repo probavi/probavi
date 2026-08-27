@@ -4,7 +4,7 @@
   "name": "Prometheus",
   "status": "experimental",
   "since": "0.12.0",
-  "engine_name": "prometheus",
+  "engine_name": "Prometheus",
   "conformance_verified": true,
   "docs": "adapters/prometheus/README.md",
   "verified": [

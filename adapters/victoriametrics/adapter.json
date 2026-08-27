@@ -4,7 +4,7 @@
   "name": "VictoriaMetrics",
   "status": "experimental",
   "since": "0.16.0",
-  "engine_name": "victoriametrics",
+  "engine_name": "VictoriaMetrics",
   "conformance_verified": true,
   "docs": "adapters/victoriametrics/README.md",
   "verified": [

@@ -4,7 +4,7 @@
   "name": "Redis",
   "status": "experimental",
   "since": "0.8.0",
-  "engine_name": "redis",
+  "engine_name": "Redis",
   "conformance_verified": true,
   "docs": "adapters/redis/README.md",
   "verified": [

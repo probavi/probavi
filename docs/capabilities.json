@@ -44,7 +44,7 @@
       "adapter_version": "0.2.0",
       "engine": {
         "id": "cassandra",
-        "name": "cassandra"
+        "name": "Apache Cassandra"
       },
       "protocol_versions": [
         "probavi-adapter/0"
@@ -127,7 +127,7 @@
       "adapter_version": "0.1.0",
       "engine": {
         "id": "duckdb",
-        "name": "duckdb"
+        "name": "DuckDB"
       },
       "protocol_versions": [
         "probavi-adapter/0"
@@ -171,7 +171,7 @@
       "adapter_version": "0.1.0",
       "engine": {
         "id": "elasticsearch",
-        "name": "elasticsearch"
+        "name": "Elasticsearch"
       },
       "protocol_versions": [
         "probavi-adapter/0"
@@ -249,7 +249,7 @@
       "adapter_version": "0.2.0",
       "engine": {
         "id": "influxdb",
-        "name": "influxdb"
+        "name": "InfluxDB"
       },
       "protocol_versions": [
         "probavi-adapter/0"
@@ -496,7 +496,7 @@
       "adapter_version": "0.1.0",
       "engine": {
         "id": "neo4j",
-        "name": "neo4j"
+        "name": "Neo4j"
       },
       "protocol_versions": [
         "probavi-adapter/0"
@@ -531,7 +531,7 @@
       "adapter_version": "0.2.0",
       "engine": {
         "id": "opensearch",
-        "name": "opensearch"
+        "name": "OpenSearch"
       },
       "protocol_versions": [
         "probavi-adapter/0"
@@ -570,7 +570,7 @@
       "adapter_version": "0.1.0",
       "engine": {
         "id": "oracle",
-        "name": "oracle"
+        "name": "Oracle Database"
       },
       "protocol_versions": [
         "probavi-adapter/0"
@@ -675,7 +675,7 @@
       "adapter_version": "0.4.0",
       "engine": {
         "id": "prometheus",
-        "name": "prometheus"
+        "name": "Prometheus"
       },
       "protocol_versions": [
         "probavi-adapter/0"
@@ -719,7 +719,7 @@
       "adapter_version": "0.4.0",
       "engine": {
         "id": "redis",
-        "name": "redis"
+        "name": "Redis"
       },
       "protocol_versions": [
         "probavi-adapter/0"
@@ -771,7 +771,7 @@
       "adapter_version": "0.1.0",
       "engine": {
         "id": "sqlite",
-        "name": "sqlite"
+        "name": "SQLite"
       },
       "protocol_versions": [
         "probavi-adapter/0"
@@ -832,7 +832,7 @@
       "adapter_version": "0.3.0",
       "engine": {
         "id": "valkey",
-        "name": "valkey"
+        "name": "Valkey"
       },
       "protocol_versions": [
         "probavi-adapter/0"
@@ -888,7 +888,7 @@
       "adapter_version": "0.2.0",
       "engine": {
         "id": "victoriametrics",
-        "name": "victoriametrics"
+        "name": "VictoriaMetrics"
       },
       "protocol_versions": [
         "probavi-adapter/0"

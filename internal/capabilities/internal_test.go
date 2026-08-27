@@ -209,6 +209,46 @@ func TestBuildLocalesRequiresItsSpec(t *testing.T) {
 
 // TestLoadProbeGoldenRejectsGarbage covers the parse path: a golden that
 // is not JSON must fail here rather than yield an empty adapter entry.
+// TestEngineNameMustNotRepeatTheEngineID covers both sides of the guard
+// that thirteen manifests once tripped: the field reaching
+// docs/capabilities.json as engine.name has to be a display name, and the
+// one engine whose name really is its id has to keep it.
+func TestEngineNameMustNotRepeatTheEngineID(t *testing.T) {
+	probe := func(dir, engine string) *probeGolden {
+		g := &probeGolden{}
+		g.Payload.Name = dir
+		g.Payload.Engine.Name = engine
+		return g
+	}
+	manifest := func(dir, engineName string) *AdapterManifest {
+		return &AdapterManifest{
+			ID: dir, Name: "Demo", Status: StatusExperimental,
+			EngineName: engineName, Since: Release{Stated: true, Value: "0.4.0"},
+		}
+	}
+
+	if err := checkAdapterIdentity("demo", manifest("demo", "demo"), probe("demo", "demo")); err == nil {
+		t.Error("accepted the probe's engine id as a display name")
+	} else if !strings.Contains(err.Error(), "is the engine's id") {
+		t.Errorf("err = %v, want it to say what is wrong with the value", err)
+	}
+
+	// Capitalisation is the ordinary case, not the bug: the probe declares
+	// "postgresql" and the engine is called PostgreSQL.
+	if err := checkAdapterIdentity("demo", manifest("demo", "Demo Engine"), probe("demo", "demo")); err != nil {
+		t.Errorf("rejected a display name: %v", err)
+	}
+
+	// etcd spells its own name in lowercase, so the value that is wrong
+	// everywhere else is right there.
+	if !engineNamedLikeItsID["etcd"] {
+		t.Fatal("etcd is no longer excepted — the guard below would reject its real name")
+	}
+	if err := checkAdapterIdentity("etcd", manifest("etcd", "etcd"), probe("etcd", "etcd")); err != nil {
+		t.Errorf("rejected etcd's own name: %v", err)
+	}
+}
+
 func TestLoadProbeGoldenRejectsGarbage(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "testdata"), 0o755); err != nil {

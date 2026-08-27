@@ -4,7 +4,7 @@
   "name": "DuckDB",
   "status": "experimental",
   "since": "0.11.0",
-  "engine_name": "duckdb",
+  "engine_name": "DuckDB",
   "conformance_verified": true,
   "docs": "adapters/duckdb/README.md",
   "verified": [

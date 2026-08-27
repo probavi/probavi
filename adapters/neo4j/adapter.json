@@ -4,7 +4,7 @@
   "name": "Neo4j",
   "status": "experimental",
   "since": "0.19.0",
-  "engine_name": "neo4j",
+  "engine_name": "Neo4j",
   "conformance_verified": true,
   "docs": "adapters/neo4j/README.md",
   "verified": [

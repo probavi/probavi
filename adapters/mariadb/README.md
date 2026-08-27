@@ -17,9 +17,9 @@ all** — `mysql`, `mysqldump` and `mysqld` are gone, only the
 adapter drives `mariadb`, `mariadb-dump`, `mariadb-backup` and `mariadbd`
 throughout, and works identically on 10.11 where both names exist.
 
-Just as important: an evidence record names the engine its drill proved.
-A MariaDB restore recorded as `engine: mysql` would be a claim an auditor
-could fault, and the record is the product.
+Just as important: an evidence record names the adapter its drill ran.
+A MariaDB restore recorded as `adapter.name: mysql` would be a claim an
+auditor could fault, and the record is the product.
 
 ## When MariaDB drills started
 
@@ -27,8 +27,8 @@ could fault, and the record is the product.
 that is the release from which a MariaDB restore is evidenced as a MariaDB
 restore. MariaDB dumps were restorable before it — the mysql adapter has
 accepted `mysqldump` SQL since 0.1.0 — but those drills recorded
-`engine: mysql`, which is the claim the split exists to correct. The field
-dates the adapter, never the engine (`docs/capabilities.md` §3).
+`adapter.name: mysql`, which is the claim the split exists to correct. The
+field dates the adapter, never the engine (`docs/capabilities.md` §3).
 
 ## What it restores
 
