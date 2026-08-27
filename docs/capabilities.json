@@ -597,7 +597,7 @@
       "name": "PostgreSQL",
       "status": "experimental",
       "since": "0.1.0",
-      "adapter_version": "0.12.0",
+      "adapter_version": "0.13.0",
       "engine": {
         "id": "postgresql",
         "name": "PostgreSQL"
@@ -621,6 +621,10 @@
         {
           "engine_version": "17",
           "image": "postgres:17"
+        },
+        {
+          "engine_version": "18",
+          "image": "postgres:18"
         },
         {
           "engine_version": "0.8.6-pg17",

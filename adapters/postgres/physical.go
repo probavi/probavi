@@ -16,7 +16,44 @@ import (
 // pgbackrest, and gosu. The adapter then owns the whole lifecycle:
 // transfer repo → write config → restore → open sandbox-local auth →
 // start the server → wait for recovery to finish.
-const pgdataDir = "/var/lib/postgresql/data"
+// legacyPGDataDir is where the official image kept the cluster before
+// PostgreSQL 18. It is the fallback for an image that sets no PGDATA,
+// never an assumption about one that does.
+const legacyPGDataDir = "/var/lib/postgresql/data"
+
+// pgDataPattern is what a resolved data directory must look like before
+// it is pasted into a shell script: an absolute path of ordinary
+// characters. The value comes from the sandbox's environment, which the
+// drill config can set, so it is not trusted by provenance.
+var pgDataPattern = regexp.MustCompile(`^/[A-Za-z0-9._/-]+$`)
+
+// resolvePGData asks the sandbox where the cluster belongs rather than
+// assuming it.
+//
+// The official image moved it: PGDATA is /var/lib/postgresql/data through
+// PostgreSQL 17 and /var/lib/postgresql/18/docker in 18 (measured against
+// both images). A hardcoded path does not fail loudly on 18 — pgbackrest
+// happily restores into a directory the server was never going to read,
+// and the drill then proves nothing about the backup, which is the one
+// outcome this adapter must never produce.
+func resolvePGData(ctx context.Context, c *core) (string, *protoError) {
+	val, stdout, stderr, perr := c.exec(ctx, execArgs{
+		Argv: []string{"sh", "-c", `printf %s "${PGDATA:-` + legacyPGDataDir + `}"`},
+	})
+	if perr != nil {
+		return "", perr
+	}
+	if val.ExitCode != 0 {
+		return "", protoErr("internal", false, "resolve PGDATA: %s", firstLine(stderr))
+	}
+	dir := strings.TrimSpace(string(stdout))
+	if !pgDataPattern.MatchString(dir) {
+		return "", protoErr("internal", false,
+			"the sandbox reports PGDATA as %q, which is not an absolute path this adapter will "+
+				"write to; set PGDATA to a plain absolute path or use an image that does", dir)
+	}
+	return dir, nil
+}
 
 // pgbackrestTimeFormat is the recovery-target form both pgbackrest
 // (--target) and postgresql (recovery_target_time) parse: an explicit UTC
@@ -69,7 +106,13 @@ func provisionPhysical(ctx context.Context, c *core, req *provisionRequest, src 
 		return nil, perr
 	}
 
-	if perr := prepareRestore(ctx, c, repoInSandbox, stanza); perr != nil {
+	pgdata, perr := resolvePGData(ctx, c)
+	if perr != nil {
+		return nil, perr
+	}
+	logger.Info("resolved the sandbox data directory", "pgdata", pgdata)
+
+	if perr := prepareRestore(ctx, c, repoInSandbox, stanza, pgdata); perr != nil {
 		return nil, perr
 	}
 
@@ -91,7 +134,7 @@ func provisionPhysical(ctx context.Context, c *core, req *provisionRequest, src 
 	}
 	logger.Info("pgbackrest restore complete", "seconds", restore.DurationSeconds)
 
-	readySeconds, perr := startEngine(ctx, c)
+	readySeconds, perr := startEngine(ctx, c, pgdata)
 	if perr != nil {
 		return nil, perr
 	}
@@ -187,14 +230,14 @@ func seriesOf(version string, n int) string {
 // hands the repo to the postgres user, and opens sandbox-local trust auth
 // for after the restore. All paths are adapter-controlled constants; the
 // stanza is pattern-validated.
-func prepareRestore(ctx context.Context, c *core, repo, stanza string) *protoError {
+func prepareRestore(ctx context.Context, c *core, repo, stanza, pgdata string) *protoError {
 	script := fmt.Sprintf(
 		`set -e
-mkdir -p /etc/pgbackrest
+mkdir -p /etc/pgbackrest %s
 printf '[global]\nrepo1-path=%s\n\n[%s]\npg1-path=%s\n' > /etc/pgbackrest/pgbackrest.conf
 rm -rf %s/* %s/.[!.]* 2>/dev/null || true
 chown -R postgres:postgres %s %s /etc/pgbackrest`,
-		repo, stanza, pgdataDir, pgdataDir, pgdataDir, repo, pgdataDir)
+		pgdata, repo, stanza, pgdata, pgdata, pgdata, repo, pgdata)
 	res, stderr, perr := execChecked(ctx, c, "sh", "-c", script)
 	if perr != nil {
 		return perr
@@ -210,11 +253,11 @@ chown -R postgres:postgres %s %s /etc/pgbackrest`,
 // sandbox has no network exposure, so trust is confined to the container),
 // starts the server, and waits until recovery finishes and queries are
 // accepted. Returns the measured wait in seconds.
-func startEngine(ctx context.Context, c *core) (float64, *protoError) {
+func startEngine(ctx context.Context, c *core, pgdata string) (float64, *protoError) {
 	script := fmt.Sprintf(
 		`set -e
 printf 'local all all trust\nhost all all 127.0.0.1/32 trust\nhost all all ::1/128 trust\n' > %s/pg_hba.conf
-chown postgres:postgres %s/pg_hba.conf`, pgdataDir, pgdataDir)
+chown postgres:postgres %s/pg_hba.conf`, pgdata, pgdata)
 	if res, stderr, perr := execChecked(ctx, c, "sh", "-c", script); perr != nil {
 		return 0, perr
 	} else if res.ExitCode != 0 {
@@ -226,7 +269,7 @@ chown postgres:postgres %s/pg_hba.conf`, pgdataDir, pgdataDir)
 	// target" is reported.
 	startScript := fmt.Sprintf(
 		`gosu postgres pg_ctl -D %s -w -t 600 -l /tmp/probavi-pg.log start || { tail -n 20 /tmp/probavi-pg.log >&2; exit 1; }`,
-		pgdataDir)
+		pgdata)
 	start, stderr, perr := execChecked(ctx, c, "sh", "-c", startScript)
 	if perr != nil {
 		return 0, perr

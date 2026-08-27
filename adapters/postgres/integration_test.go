@@ -509,12 +509,12 @@ func makeBackRestRepo(t *testing.T, ctx context.Context, image, dest string) str
 	// The sleeps bracket the captured instant so the two batches' commit
 	// timestamps land strictly on opposite sides of it.
 	seedScript := `set -e
-mkdir -p /tmp/repo /etc/pgbackrest
-printf '[global]\nrepo1-path=/tmp/repo\n\n[demo]\npg1-path=/var/lib/postgresql/data\n' > /etc/pgbackrest/pgbackrest.conf
-chown -R postgres:postgres /tmp/repo /etc/pgbackrest /var/lib/postgresql/data
-gosu postgres initdb -D /var/lib/postgresql/data
-printf "archive_mode=on\narchive_command='pgbackrest --stanza=demo archive-push %%p'\n" >> /var/lib/postgresql/data/postgresql.conf
-gosu postgres pg_ctl -D /var/lib/postgresql/data -w -l /tmp/pg.log start
+mkdir -p /tmp/repo /etc/pgbackrest "$PGDATA"
+printf '[global]\nrepo1-path=/tmp/repo\n\n[demo]\npg1-path=%s\n' "$PGDATA" > /etc/pgbackrest/pgbackrest.conf
+chown -R postgres:postgres /tmp/repo /etc/pgbackrest "$PGDATA"
+gosu postgres initdb -D "$PGDATA"
+printf "archive_mode=on\narchive_command='pgbackrest --stanza=demo archive-push %%p'\n" >> "$PGDATA"/postgresql.conf
+gosu postgres pg_ctl -D "$PGDATA" -w -l /tmp/pg.log start
 gosu postgres psql -v ON_ERROR_STOP=1 -c "CREATE TABLE orders (id bigserial PRIMARY KEY, total numeric(10,2)); INSERT INTO orders (total) SELECT (random()*100)::numeric(10,2) FROM generate_series(1,500);"
 gosu postgres pgbackrest --stanza=demo stanza-create
 gosu postgres pgbackrest --stanza=demo --type=full backup
@@ -523,7 +523,7 @@ gosu postgres psql -tA -c "SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\
 sleep 1
 gosu postgres psql -v ON_ERROR_STOP=1 -c "INSERT INTO orders (total) SELECT (random()*100)::numeric(10,2) FROM generate_series(1,200);"
 gosu postgres psql -v ON_ERROR_STOP=1 -c "SELECT pg_switch_wal();" > /dev/null
-gosu postgres pg_ctl -D /var/lib/postgresql/data -w stop`
+gosu postgres pg_ctl -D "$PGDATA" -w stop`
 	if out, err := exec.CommandContext(ctx, "docker", "exec", id, "sh", "-c", seedScript).CombinedOutput(); err != nil {
 		t.Fatalf("seed pgbackrest repo: %v: %s", err, out)
 	}
