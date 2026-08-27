@@ -1,0 +1,24 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. The official image starts Solr itself, in SolrCloud mode with an embedded ZooKeeper, so the sandbox needs no idle command; measured, along with the fact that Solr serves under `--network none` in about two seconds. Only the 10.x line is listed, and the reason is measured rather than editorial: solr:10 starts in SolrCloud mode with an embedded ZooKeeper, while solr:9.10 starts in `std` mode with no ZooKeeper, where the Collections API this adapter restores through answers 400. The adapter says so in its own words rather than letting that 400 confuse an operator. Solr publishes no end-of-life dates, so supported_until is null. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "solr",
+  "name": "Apache Solr",
+  "status": "experimental",
+  "since": null,
+  "engine_name": "Apache Solr",
+  "conformance_verified": true,
+  "docs": "adapters/solr/README.md",
+  "versions_checked": "2026-08-27",
+  "verified": [
+    {
+      "engine_version": "10",
+      "image": "solr:10",
+      "supported_until": null,
+      "baseline": true
+    }
+  ],
+  "sources": {
+    "solr_backup_tar": "A tar archive of one backup directory",
+    "solr_backup": "One Collections API backup directory (`action=BACKUP`), holding a single collection",
+    "solr_backup_dir": "A directory of backup directories; the newest is restored"
+  }
+}

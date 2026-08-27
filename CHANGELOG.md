@@ -13,6 +13,45 @@ always called out explicitly.
 
 ### Added
 
+- **An Apache Solr adapter** (`adapters/solr` 0.1.0), the twentieth engine
+  and the one the DB-Engines lens put next (ROADMAP.md, Phase 2). It
+  restores a Collections API backup — as a directory (`solr_backup`), the
+  newest of a directory of them (`solr_backup_dir`), or a tar archive of
+  one (`solr_backup_tar`) — into the official `solr:10` image, and checks
+  are Solr query strings. Zero core changes, conformance 15/15.
+
+  **The ROADMAP's premise did not survive contact with the image, and the
+  entry has been corrected.** It expected standalone cores through the
+  replication handler; `solr:10` starts in SolrCloud mode with an embedded
+  ZooKeeper, so the working path is the Collections API. The two current
+  lines do not even agree with each other: `solr:9.10` starts in `std`
+  mode with no ZooKeeper, where that API answers HTTP 400. Only 10.x is
+  listed under `verified`, and a drill against a standalone server is
+  refused with that reason rather than left to puzzle over a 400.
+
+  **One backup shape is refused outright, and it is the reason to read the
+  adapter's README before pointing a drill at Solr.** A backup carries its
+  collection's configset, so a collection using
+  `DocExpirationUpdateProcessorFactory` brings the document deleter with
+  it. Measured end to end: a backup taken while three documents were live
+  restores with status 0 and holds nothing seconds later. The restore
+  reports success and the collection empties itself — a green that proves
+  nothing, or a count check that blames an intact backup. Nothing can be
+  suspended without rewriting the operator's own configuration, which is
+  what the data-lifecycle rule forbids, so the drill is refused — before a
+  byte is transferred, for archives as well as directories, because the
+  configset is a file in the artifact.
+
+  Three smaller measurements shaped it. Solr serves under `--network none`
+  in about two seconds, so the sandbox needs no idle command and the
+  adapter starts nothing. A backup may only be read from inside
+  `SOLR_HOME`, so the adapter asks the sandbox where that is rather than
+  assuming — the lesson PostgreSQL 18 taught this catalog a day earlier.
+  And Solr's CSV writer emits documents and nothing else, so a counting
+  check answers with a header and no rows: the runner asks again for
+  `numFound`, which makes `q=*:*&rows=0` answer a number and a query
+  matching nothing answer `0` rather than nothing.
+
 - **etcd 3.7 is verified** (`quay.io/coreos/etcd:v3.7.1`), the last
   addition from the 2026-08-27 engine-version sweep and the only one that
   needed no fix: the suite passed against it first time, and against 3.5

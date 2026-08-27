@@ -63,6 +63,7 @@ the exact instant proven.
 | [PostgreSQL](adapters/postgres/README.md) | 14, 15, 16, 17, 18, pgvector 0.8.6-pg17, timescaledb 2.29.1-pg17 | 0.1.0 | `pgbackrest`, `pgdump`, `pgdump_dir`, `pgdump_with_globals`, `timescaledb_dump`, `timescaledb_dump_dir` |
 | [Prometheus](adapters/prometheus/README.md) | 3.13 | 0.12.0 | `prometheus_snapshot`, `prometheus_snapshot_dir`, `prometheus_snapshot_tar` |
 | [Redis](adapters/redis/README.md) | 7.2, 7.4, 8.2, 8.10 | 0.8.0 | `redis_aof`, `redis_rdb`, `redis_rdb_dir` |
+| [Apache Solr](adapters/solr/README.md) | 10 | unreleased | `solr_backup`, `solr_backup_dir`, `solr_backup_tar` |
 | [SQLite](adapters/sqlite/README.md) | 3.46, 3.49, 3.50, 3.51, 3.53 | 0.10.0 | `sqlite_db`, `sqlite_db_dir`, `sqlite_dump`, `sqlite_dump_dir` |
 | [Valkey](adapters/valkey/README.md) | 7.2, 8.0, 8.1, 9.0, 9.1 | 0.9.0 | `valkey_aof`, `valkey_rdb`, `valkey_rdb_dir` |
 | [VictoriaMetrics](adapters/victoriametrics/README.md) | 1.150 | 0.16.0 | `victoriametrics_backup`, `victoriametrics_backup_dir`, `victoriametrics_backup_tar` |
