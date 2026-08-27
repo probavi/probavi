@@ -51,7 +51,7 @@ the exact instant proven.
 | [ClickHouse](adapters/clickhouse/README.md) | 26.3, 26.7 | 0.7.0 | `clickhouse_backup`, `clickhouse_backup_dir` |
 | [DuckDB](adapters/duckdb/README.md) | 1.4, 1.5 | 0.11.0 | `duckdb_db`, `duckdb_db_dir`, `duckdb_export` |
 | [Elasticsearch](adapters/elasticsearch/README.md) | 8.19.20, 9.5.2 | 0.17.0 | `elasticsearch_repo`, `elasticsearch_repo_zip` |
-| [etcd](adapters/etcd/README.md) | 3.5, 3.6 | 0.7.0 | `etcd_snapshot`, `etcd_snapshot_dir` |
+| [etcd](adapters/etcd/README.md) | 3.5, 3.6, 3.7 | 0.7.0 | `etcd_snapshot`, `etcd_snapshot_dir` |
 | [InfluxDB](adapters/influxdb/README.md) | 2.7, 2.8, 2.9 | 0.15.0 | `influx_backup`, `influx_backup_dir`, `influx_backup_tar` |
 | [MariaDB](adapters/mariadb/README.md) | 10.11, 11.4, 11.8, 12.3 | 0.7.0 | `mariadb_backup`, `mariadb_dump`, `mariadb_dump_dir` |
 | [MongoDB](adapters/mongodb/README.md) | 7.0, 8.0 | 0.2.0 | `mongodump`, `mongodump_dir`, `mongodump_with_oplog`, `mongodump_with_users` |

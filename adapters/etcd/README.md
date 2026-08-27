@@ -80,8 +80,9 @@ in the help text of the flag that exists to prevent it
 auto-renewal of long lived leases"). So the countdown starts again when
 the sandbox starts, and then runs out *during the drill*.
 
-Measured on both verified versions, a snapshot of 100 plain keys beside
-100 attached to a twenty-second lease:
+Measured on 3.5 and 3.6, a snapshot of 100 plain keys beside 100 attached
+to a twenty-second lease — and `TestLeasedKeysSurviveTheDrill` runs
+against every listed version, 3.7 included:
 
 | seconds after the restore | plain keys | leased keys |
 | --- | --- | --- |
@@ -94,12 +95,21 @@ it runs — the same backup, drilled twice, answering differently for
 reasons that have nothing to do with the backup.
 
 **Auto-compaction, by contrast, is not the problem.** It is off by default
-in both versions (`"auto-compaction-retention":"0s"` in the server's own
-startup log) and removes superseded revisions rather than live keys, so a
-drill reading current values would not notice it either way.
+in all three listed versions (`"auto-compaction-retention":"0s"` in each
+server's own startup log) and removes superseded revisions rather than
+live keys, so a drill reading current values would not notice it either
+way.
 
-**There is no server-side pin.** The only lease-related flags either
-version offers are the checkpoint pair, and they make expiry *stricter*.
+**There is no server-side pin**, and the flags moved under us without
+changing that. 3.5 offers the `--experimental-enable-lease-checkpoint`
+pair; 3.6 keeps it, marks it deprecated and adds the same thing as
+feature gates; 3.7 has dropped the experimental pair exactly as 3.6 said
+it would, leaving `LeaseCheckpoint` and `LeaseCheckpointPersist` (both
+ALPHA, both off) plus a new `FastLeaseKeepAlive` (BETA, on by default).
+None of them pins a lease: the checkpoint pair makes expiry *stricter*,
+and `FastLeaseKeepAlive` changes how keep-alives are served rather than
+whether a lease can run out.
+
 So the drill uses the mechanism etcd's own clients use: it refreshes the
 snapshot's leases for as long as the sandbox lives. The leases stay
 exactly as the backup declared them — `lease timetolive` in a drill
