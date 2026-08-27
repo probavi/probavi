@@ -3,7 +3,7 @@
   "id": "solr",
   "name": "Apache Solr",
   "status": "experimental",
-  "since": null,
+  "since": "0.20.0",
   "engine_name": "Apache Solr",
   "conformance_verified": true,
   "docs": "adapters/solr/README.md",
