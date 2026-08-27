@@ -100,6 +100,24 @@ contents depend on how long the restore took.
   `source_corrupt`. A dump that stops early without erroring is caught
   separately — see the completeness rule below.
 
+## How the dump reaches the client
+
+The dump is redirected into the client on stdin, not handed to it through
+the client's own `source` command.
+
+That is a MySQL 9 constraint, measured rather than assumed: the 8.4 client
+accepts both forms, and the 9.7 client passes `source <file>` to the
+server as SQL, which answers
+
+```
+ERROR 1064 (42000) at line 1: You have an error in your SQL syntax … near 'source /tmp/probavi-restore.sql'
+```
+
+The compressed path has always piped into the client, so only the
+stored-plain path was affected. A revert would pass every unit test and
+the 8.4 baseline and fail only in the version matrix, which is why the
+form is pinned by a test as well.
+
 ## Compressed dumps
 
 A dump stored gzip-compressed — what `mysqldump … | gzip -c > db.sql.gz`

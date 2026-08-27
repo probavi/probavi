@@ -56,7 +56,7 @@ the exact instant proven.
 | [MariaDB](adapters/mariadb/README.md) | 10.11, 11.4, 11.8, 12.3 | 0.7.0 | `mariadb_backup`, `mariadb_dump`, `mariadb_dump_dir` |
 | [MongoDB](adapters/mongodb/README.md) | 7.0 | 0.2.0 | `mongodump`, `mongodump_dir`, `mongodump_with_oplog`, `mongodump_with_users` |
 | [SQL Server](adapters/mssql/README.md) | 2019, 2022, 2025 | 0.2.0 | `bak`, `bak_chain`, `bak_dir`, `bak_with_logins` |
-| [MySQL](adapters/mysql/README.md) | mysql 8.4, percona-server 8.4.10 | 0.1.0 | `mysqldump`, `mysqldump_dir`, `mysqldump_with_users`, `xtrabackup` |
+| [MySQL](adapters/mysql/README.md) | 8.4, 9.7, percona-server 8.4.10 | 0.1.0 | `mysqldump`, `mysqldump_dir`, `mysqldump_with_users`, `xtrabackup` |
 | [Neo4j](adapters/neo4j/README.md) | 5.26 | 0.19.0 | `neo4j_dump`, `neo4j_dump_dir` |
 | [OpenSearch](adapters/opensearch/README.md) | 2.19.6, 3.8.0 | 0.14.0 | `opensearch_repo`, `opensearch_repo_tar` |
 | [Oracle Database](adapters/oracle/README.md) | 23.26.3.0 | 0.18.0 | `oracle_datapump` |

@@ -444,7 +444,7 @@
       "name": "MySQL",
       "status": "experimental",
       "since": "0.1.0",
-      "adapter_version": "0.12.0",
+      "adapter_version": "0.13.0",
       "engine": {
         "id": "mysql",
         "name": "MySQL"
@@ -456,6 +456,10 @@
         {
           "engine_version": "8.4",
           "image": "mysql:8.4"
+        },
+        {
+          "engine_version": "9.7",
+          "image": "mysql:9.7"
         },
         {
           "engine_version": "8.4.10",

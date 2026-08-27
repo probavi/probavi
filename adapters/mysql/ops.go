@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "mysql"
-	adapterVersion = "0.12.0"
+	adapterVersion = "0.13.0"
 
 	defaultUser     = "root"
 	defaultDatabase = "probavi"
@@ -356,11 +356,18 @@ wait
 // whole, in that order: the client's exit code says only that nothing it
 // executed failed, never that it reached the end of a complete dump.
 //
+// The dump arrives on stdin rather than through the client's own `source`
+// command. `-e "source <file>"` worked for years and stops working at
+// MySQL 9: the 9.7 client passes it to the server as SQL, which answers
+// ERROR 1064 near 'source /tmp/…' (measured against 8.4 and 9.7 — 8.4
+// accepts both forms, 9.7 only this one). The compressed path below has
+// always piped into the client, which is why only this one broke.
+//
 // A member that announces no ending (see complete.go) passes an empty
 // marker and the check is skipped — there is nothing to check against, and
 // failing a comment-free dump would refuse a backup that is fine.
 const restoreScript = `
-mysql -h 127.0.0.1 -u "$2" --database "$3" -e "source $1"
+mysql -h 127.0.0.1 -u "$2" --database "$3" < "$1"
 rc=$?
 [ "$rc" = 0 ] || exit "$rc"
 [ -z "$4" ] || tail -c "$5" -- "$1" | grep -qE "$4" || exit 91
