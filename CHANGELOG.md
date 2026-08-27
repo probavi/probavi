@@ -20,6 +20,15 @@ always called out explicitly.
   The adapter needed no change — the 8.0 image ships the same tools 7.0
   does, and the whole suite passes against both.
 
+  The oplog fixture needed one change, and it is a test-only one. It made
+  the dump/write race deterministic with the `waitInFindBeforeMakingBatch`
+  fail point, which MongoDB 8.0 does not register — the 8.0 server answers
+  `waitInFindBeforeMakingBatch not found`, and reading each `mongod`
+  binary's fail-point registrations confirms it is the one Find/Batch fail
+  point 7.0 has and 8.0 does not. The fixture now uses
+  `waitAfterCommandFinishesExecution`, which blocks until switched off the
+  same way and is registered in both.
+
   `adapters/mongodb/README.md` gains what the sweep turned up beside it:
   **`mongod` 8.0 refuses to start on Linux kernels 6.19 and newer**
   (SERVER-121912), so a drill on a recent kernel host ends as

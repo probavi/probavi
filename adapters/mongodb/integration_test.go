@@ -704,9 +704,16 @@ func makePlainArchive(t *testing.T, ctx context.Context, provider *docker.Provid
 
 // makeOplogFixture produces the archive at the heart of this test: a full
 // --oplog dump whose captured window contains a write the collection copy
-// does not. The waitInFindBeforeMakingBatch fail point holds the dump on a
-// later collection (zzpad sorts after shop) while the write lands, which
-// is what makes the race a fact instead of a coin flip.
+// does not. A server fail point holds the dump on a later collection
+// (zzpad sorts after shop) while the write lands, which is what makes the
+// race a fact instead of a coin flip.
+//
+// The fail point is waitAfterCommandFinishesExecution, which blocks until
+// it is switched off and is registered in every listed version. Its
+// predecessor here, waitInFindBeforeMakingBatch, is registered in 7.0 and
+// not in 8.0 — verified by reading each mongod binary's fail-point
+// registrations, after the 8.0 server answered "waitInFindBeforeMakingBatch
+// not found".
 func makeOplogFixture(t *testing.T, ctx context.Context, provider *docker.Provider) string {
 	t.Helper()
 	seed := startReplicaSet(t, ctx, provider)
@@ -715,7 +722,8 @@ func makeOplogFixture(t *testing.T, ctx context.Context, provider *docker.Provid
 		`db.getSiblingDB("shop").orders.insertMany([{_id:1},{_id:2}]);
 db.getSiblingDB("zzpad").big.insertMany(Array.from({length:2000},(_,i)=>({i:i})));`)
 	mustExec(t, ctx, seed, "mongosh", "--quiet", "--norc", "--host", "127.0.0.1", "admin", "--eval",
-		`db.runCommand({configureFailPoint:"waitInFindBeforeMakingBatch",mode:"alwaysOn",data:{nss:"zzpad.big"}})`)
+		`db.runCommand({configureFailPoint:"waitAfterCommandFinishesExecution",mode:"alwaysOn",`+
+			`data:{ns:"zzpad.big",commands:["find"]}})`)
 
 	// mongodump runs detached; the shell returns while it keeps going, the
 	// same pattern the mssql adapter uses to start its engine.
@@ -729,7 +737,7 @@ db.getSiblingDB("zzpad").big.insertMany(Array.from({length:2000},(_,i)=>({i:i}))
 	mustExec(t, ctx, seed, "mongosh", "--quiet", "--norc", "--host", "127.0.0.1", "shop",
 		"--eval", "db.orders.insertOne({_id:999,late:true})")
 	mustExec(t, ctx, seed, "mongosh", "--quiet", "--norc", "--host", "127.0.0.1", "admin", "--eval",
-		`db.runCommand({configureFailPoint:"waitInFindBeforeMakingBatch",mode:"off"})`)
+		`db.runCommand({configureFailPoint:"waitAfterCommandFinishesExecution",mode:"off"})`)
 	awaitLog(t, ctx, seed, "oplog entr", "the dump never wrote its captured oplog")
 
 	dest := filepath.Join(t.TempDir(), "race.archive")
