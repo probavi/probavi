@@ -246,6 +246,45 @@
       "docs": "adapters/etcd/README.md"
     },
     {
+      "id": "firebird",
+      "name": "Firebird",
+      "status": "experimental",
+      "since": null,
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "firebird",
+        "name": "Firebird"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "5.0.4",
+          "image": "firebirdsql/firebird:5.0.4"
+        },
+        {
+          "engine_version": "4.0.7",
+          "image": "firebirdsql/firebird:4.0.7"
+        }
+      ],
+      "sources": [
+        {
+          "id": "firebird_gbak",
+          "name": "One gbak transportable backup file",
+          "pitr": false
+        },
+        {
+          "id": "firebird_gbak_dir",
+          "name": "A directory of gbak backups; the newest is restored",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/firebird/README.md"
+    },
+    {
       "id": "influxdb",
       "name": "InfluxDB",
       "status": "experimental",

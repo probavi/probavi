@@ -22,7 +22,8 @@ pkgname=('probavi' 'probavi-adapter-postgres' 'probavi-adapter-mysql'
          'probavi-adapter-elasticsearch'
          'probavi-adapter-oracle'
          'probavi-adapter-neo4j'
-         'probavi-adapter-solr')
+         'probavi-adapter-solr'
+         'probavi-adapter-firebird')
 pkgver=${PKGVER}
 pkgrel=1
 # The git tag, which differs from pkgver for a pre-release: makepkg
@@ -102,4 +103,5 @@ package_probavi-adapter-elasticsearch() { _package_adapter elasticsearch; }
 package_probavi-adapter-oracle() { _package_adapter oracle; }
 package_probavi-adapter-neo4j() { _package_adapter neo4j; }
 package_probavi-adapter-solr() { _package_adapter solr; }
+package_probavi-adapter-firebird() { _package_adapter firebird; }
 package_probavi-adapter-mssql()    { _package_adapter mssql; }
