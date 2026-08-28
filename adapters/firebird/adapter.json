@@ -1,0 +1,28 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. The image is the Firebird project's own, and both listed lines were measured: 5.0.4 and 4.0.7 restore each other's gbak backups cleanly, and a downward restore fails only when the schema uses something the older engine lacks. There is no server to start — isql against a plain file path uses the embedded engine — so the sandbox needs no idle command, no port and no credentials. Firebird publishes no forward end-of-life date (its release policy states a relative five-year rule and the discontinued page lists only 2.5 and older), so supported_until is null. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "firebird",
+  "name": "Firebird",
+  "status": "experimental",
+  "since": null,
+  "engine_name": "Firebird",
+  "conformance_verified": true,
+  "docs": "adapters/firebird/README.md",
+  "versions_checked": "2026-08-28",
+  "verified": [
+    {
+      "engine_version": "5.0.4",
+      "image": "firebirdsql/firebird:5.0.4",
+      "supported_until": null,
+      "baseline": true
+    },
+    {
+      "engine_version": "4.0.7",
+      "image": "firebirdsql/firebird:4.0.7",
+      "supported_until": null
+    }
+  ],
+  "sources": {
+    "firebird_gbak": "One gbak transportable backup file",
+    "firebird_gbak_dir": "A directory of gbak backups; the newest is restored"
+  }
+}

@@ -11,6 +11,50 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **A Firebird adapter** (`adapters/firebird` 0.1.0), the twenty-first
+  engine and the one the DB-Engines lens put next at rank 34 (ROADMAP.md,
+  Phase 2). It restores a `gbak` transportable backup — one file
+  (`firebird_gbak`) or the newest of a directory of them
+  (`firebird_gbak_dir`) — and checks are ordinary SQL. Zero core changes,
+  conformance 15/15, verified against Firebird 5.0.4 and 4.0.7.
+
+  **The sandbox starts nothing.** `isql` against a plain file path uses
+  Firebird's embedded engine, so a drill runs with no listener, no port
+  and no credential — measured on the project's own image under
+  `--network none`. It is the cheapest sandbox in the catalog: the sqlite
+  and duckdb pattern with a real relational engine.
+
+  **One measured hazard is the reason to read the adapter's README before
+  pointing a drill at Firebird.** An `ON CONNECT` database trigger travels
+  inside the backup and is restored with it. Measured end to end: a backup
+  of three rows restores with exit 0 and all three present, and the *first
+  ordinary connection* fires the trigger and deletes two, irreversibly.
+  Every connection the adapter makes carries `-nodbtriggers`, the check
+  runner included — suspended, never rewritten, so a check reading
+  `RDB$TRIGGERS` still sees what the operator declared.
+
+  **And one false green is closed.** A truncated backup and one corrupted
+  mid-file both make `gbak` exit 1 while leaving behind a database that
+  opens and answers queries holding every row. Anything judging by whether
+  the restored database responds would call a broken backup proven, so the
+  verdict is `gbak`'s exit code alone and the database file does not
+  survive the failure that produced it. Two smaller measurements shape the
+  same step: `gbak` writes everything to stdout and nothing to stderr, and
+  it *prompts* on a damaged volume, so its stdin is closed rather than
+  left to wait for an answer nobody is there to give.
+
+  Identifiers follow the Oracle precedent: the core quotes them the
+  standard way and Firebird honours that case-sensitively, so name tables
+  as the dictionary stores them (`table: ORDERS`). `isql` has no delimiter
+  setting, so a multi-column custom check returns its own column layout
+  rather than tab-separated fields; single-value results — every
+  generating built-in — are exact. The backup's own clock reaches
+  `backup.created_at`, and because `gbak` stamps a wall clock with no
+  offset, `source.params.backup_timezone` anchors it or the field stays
+  null.
+
 ## [0.20.0] - 2026-08-27
 
 ### Added
