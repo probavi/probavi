@@ -3,7 +3,7 @@
   "id": "firebird",
   "name": "Firebird",
   "status": "experimental",
-  "since": null,
+  "since": "0.21.0",
   "engine_name": "Firebird",
   "conformance_verified": true,
   "docs": "adapters/firebird/README.md",
