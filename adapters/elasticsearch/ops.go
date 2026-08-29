@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "elasticsearch"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.2.0"
 
 	// workDirName is created under the provider's scratch directory —
 	// the official images run as the elasticsearch user (uid 1000,

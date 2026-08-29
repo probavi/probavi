@@ -255,11 +255,13 @@ func TestUnknownSigningKeyRejected(t *testing.T) {
 }
 
 // TestTailTruncationIsNotDetectable pins a documented limitation rather than
-// a defect: §1 puts "proving absence of additional records" out of scope, so
-// a valid prefix of a log is itself a valid log. Anyone relying on the
-// evidence chain must pair it with an external record of the expected count
-// or last sequence number. The test exists so that this stays a conscious
-// property of the format and not a surprise during an audit.
+// a defect: §1 keeps truncation at the end out of what the file alone
+// proves, and §9 says why no file-only algorithm can do better — a valid
+// prefix of a log is itself a valid log. Anyone relying on the chain must
+// pair it with an anchor kept outside the file: the expected record count,
+// or the last sequence number with the hash of its line. The test exists so
+// that this stays a conscious property of the format and not a surprise
+// during an audit.
 func TestTailTruncationIsNotDetectable(t *testing.T) {
 	lines := splitLines(t, exampleLog(t, "log_v1.jsonl"))
 	res := verifyBytes(t, joinLines(lines[:2]), NewKeyring(exampleKey(t)))

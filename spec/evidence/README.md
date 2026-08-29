@@ -111,9 +111,12 @@ the specification worth re-reading:
 
 A valid prefix of a log is itself a valid log: nothing inside the format
 proves that records were not removed from the *end*. This is
-`TestTailTruncationIsNotDetectable`, and it follows from §1 putting "proving
-absence of additional records" out of scope. Pair the chain with an external
-note of the expected record count or last sequence number when that matters.
+`TestTailTruncationIsNotDetectable`, and it is the specification's own
+position rather than this module's reading of it: §1 keeps end truncation
+outside what the file alone proves, and §9 states why no file-only algorithm
+can do better, plus what would close it — an anchor kept outside the file.
+Pair the chain with one when that matters: the last sequence number with the
+hash of its stored line, or at minimum the expected record count.
 
 ## Licence
 

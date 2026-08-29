@@ -37,6 +37,117 @@ always called out explicitly.
   No schema change: `checks[].detail` is the same field with the same
   limits, carrying less. Records already written keep whatever they were
   given — the log is append-only, and nothing rewrites them.
+- **A crafted backup archive could exhaust the drill host's memory.** The
+  adapters that read what an archive states about itself kept one entry per
+  distinct name with no bound on how many. A tar entry is a 512-byte header
+  that compresses to almost nothing, so a small archive can carry any number
+  of them, and several of those entries are read into memory at up to 8 MiB
+  each: measured with a faithful replica of the opensearch loop, a 1.2 MB
+  crafted `.tar.gz` holding 150 zero-filled `index-N` members left 1.26 GiB
+  resident — about 1094×, so a ~120 MB archive would reach ~126 GB.
+  `SECURITY.md` names a backup file as attacker-controlled input, and the
+  consequence is not only availability: the process dies *during* a drill,
+  and a drill that leaves no evidence record is the severest failure this
+  project defines (`docs/evidence-schema.md` §7).
+
+  Every archive walk now carries a retention bound and refuses with
+  `source_corrupt` past it rather than reading on: `opensearch` and
+  `elasticsearch` (generation members), `influxdb` (member names and
+  manifest bodies), `cassandra` (table file names, TOCs, manifests and
+  digests), `prometheus` (block metadata, whose compaction parents stay
+  raw), and `solr` (collection and configuration names). The bound counts
+  what a walk *keeps*, not what it reads, so a large legitimate archive
+  full of entries a pass ignores still drills; each adapter's limits are
+  set against the shape of a real backup for that engine, and each refusal
+  says what there was too much of. The remaining walks were audited and
+  need no bound: `clickhouse` and `victoriametrics` retain nothing per
+  entry, `mariadb`, `mysql` and `postgres` stream through a fixed buffer.
+  The directory kinds are not bounded either — their bookkeeping is
+  proportional to files that already exist on the operator's own disk,
+  with no archive in between to multiply them.
+
+  Adapter versions move accordingly (`cassandra` 0.3.0, `elasticsearch`
+  0.2.0, `influxdb` 0.3.0, `opensearch` 0.3.0, `prometheus` 0.5.0, `solr`
+  0.2.0), and each adapter's README records the new refusal.
+### Changed
+
+- **The evidence specification now states the one removal its chain cannot
+  see.** Deleting the newest N lines of a log leaves records 1…M whose
+  sequence still starts at 1 and whose chain is unbroken, so both verifiers
+  return `VALID` with M records and exit 0 — correctly, since no algorithm
+  reading only the file can distinguish a truncated log from a shorter one.
+  The behaviour is unchanged and no byte of the format moves; what changes
+  is that the documents say so.
+
+  `docs/evidence-schema.md` §9's security note listed modification,
+  deletion, reordering and appended garbage and read as exhaustive. It now
+  names truncation, explains why the file cannot answer for it, and records
+  that a later drill appends onto the shortened chain, so the removal leaves
+  no trace afterwards either. §1's first goal is narrowed to match — it
+  promised a third party could verify from the file alone that "nothing was
+  altered or removed", which held for every removal except the one at the
+  end. Both implementations already pinned parts of this in tests;
+  `internal/evidence` now pins it too, next to the four-attack suite where
+  removal from *within* the sequence is covered.
+
+  Two anchors already available are written down rather than left to be
+  discovered: a `probavi push` receiver that retains what it was sent can
+  see a log shrink (every push carries the whole file), and the `records`
+  count `probavi evidence verify` reports never decreases for an
+  append-only log. Neither is a substitute for a signed head, and the
+  anchor that would close the gap is a schema decision not taken here.
+  `SECURITY.md` marks tail truncation as answered so a report can aim past
+  it.
+
+### Security
+
+- **An adapter's argv could become `systemd-run` options on the bare-host
+  provider.** `internal/sandbox/remotehost` built every command as
+  `systemd-run … -p User=<drill user> -p WorkingDirectory=<workspace>`
+  followed directly by the argv the adapter sent — with no `--`, so
+  `systemd-run` kept reading options where the payload began. Confirmed on
+  systemd 260: with two `-p WorkingDirectory=` properties the later one
+  wins, so an argv beginning `-p User=root` overrode the drill user the
+  provider sets, and `--slice=` would have moved the payload out of the
+  slice `Destroy` stops — past the mediated sandbox verbs, which
+  SECURITY.md names as in scope.
+
+  The prefix now ends in `--`, so every argv element is an argument of the
+  command and never an option of the unit. Only this provider was
+  affected: the k8s provider already terminates its `kubectl exec` args,
+  and the docker CLI refuses option-shaped argv on its own. Pinned by a
+  test that renders the remote command for an option-shaped argv, in both
+  the plain and the environment-carrying branch; `docs/sandbox-bare-host.md`
+  §6 states the requirement.
+
+- **A symlink inside a backup source walked through the `put_file`
+  allow-list.** The core's guard compared `filepath.Clean`ed strings, and
+  Clean is purely lexical: with a symlink `link -> /etc` inside the drill's
+  configured backup source, an adapter asking for `<source>/link/hostname`
+  passed the check, and the provider — which opens the path afterwards —
+  read the file outside the source. `..` traversal was refused correctly;
+  only the symlink route worked. `docs/adapter-protocol.md` §4.2 has always
+  stated the guarantee ("the core only permits source paths that belong to
+  the drill's configured backup source"), and it did not hold.
+
+  Containment is now decided by resolving the request inside an `os.Root`,
+  so every symlink component is followed under the source directory and one
+  that leads out is refused. Two consequences worth knowing: an absolute
+  symlink inside the source is refused even when it points back inside —
+  telling it from an escape needs the string comparison this replaces — and
+  a path *beneath* the source that resolves to nothing is now
+  `invalid_request` instead of reaching the provider and failing there. The
+  configured source path itself is unchanged: it is the operator's own
+  choice and may be a symlink. The guard stats rather than opens, so a
+  named pipe in a backup tree cannot block a drill.
+
+  One residual gap is documented rather than hidden (§4.2): the core
+  resolves the path and the provider opens it again, so a process able to
+  write inside the backup source could swap a component in between. Closing
+  it means handing the open file to the provider instead of its path, which
+  changes the sandbox interface and how the docker provider copies; it is
+  not taken here. Nothing changes for adapters — same arguments, same
+  value, same error codes — and the protocol version does not move.
 
 ## [0.21.0] - 2026-08-28
 

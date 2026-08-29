@@ -150,7 +150,7 @@ what was restored.
 | --- | --- |
 | `source_not_found` | the path does not exist, or a directory holds no backups |
 | `source_unreadable` | the artifact cannot be read, or is still being written |
-| `source_corrupt` | Solr could not restore a core from it, or an archive holds no backup |
+| `source_corrupt` | Solr could not restore a core from it, an archive holds no backup, or an archive carries more collection and configuration names than a backup holds |
 | `unsupported_source` | an unknown kind, several collections, or document expiry (above) |
 | `invalid_request` | a standalone server, a PITR request, or a collection name Solr will not take |
 | `engine_not_ready` | Solr did not answer within three minutes |

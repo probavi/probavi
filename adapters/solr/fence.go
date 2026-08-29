@@ -134,6 +134,7 @@ func inspectBackupTar(path string) (collection string, expiring []string, perr *
 func scanBackupTar(r io.Reader, path string) (collection string, expiring []string, perr *protoError) {
 	tr := tar.NewReader(r)
 	collections := map[string]bool{}
+	kept := retention{}
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -143,17 +144,11 @@ func scanBackupTar(r io.Reader, path string) (collection string, expiring []stri
 			// Not tar-shaped, or truncated: say nothing here.
 			return collection, expiring, nil
 		}
-		name := filepath.ToSlash(filepath.Clean(hdr.Name))
-		if c := collectionOf(name); c != "" {
-			collections[c] = true
+		next, within := takeTarEntry(tr, hdr, collections, expiring, &kept)
+		if !within {
+			return "", nil, tooMuchKept()
 		}
-		if filepath.Base(name) != solrConfigFile || hdr.Typeflag != tar.TypeReg {
-			continue
-		}
-		body, rerr := io.ReadAll(io.LimitReader(tr, maxConfigBytes))
-		if rerr == nil && bytes.Contains(body, []byte(expirationClass)) {
-			expiring = append(expiring, name)
-		}
+		expiring = next
 	}
 	sort.Strings(expiring)
 	names := make([]string, 0, len(collections))
@@ -179,8 +174,76 @@ func scanBackupTar(r io.Reader, path string) (collection string, expiring []stri
 // and an archive must never be able to make this pass allocate freely.
 const maxConfigBytes = 4 << 20
 
+const (
+	// keptMaxBytes and keptMaxEntries bound what this pass holds on to
+	// across entries: collection names, and the names of configuration
+	// files carrying the expiration class. A tar entry is a 512-byte
+	// header that compresses to almost nothing, so a small archive can
+	// carry any number of them, and a backup file is attacker-controlled
+	// input (SECURITY.md). The entry bound is tight because what this
+	// pass retains is inherently tiny: an archive this adapter restores
+	// holds one collection, and its configuration files number in the
+	// dozens.
+	keptMaxBytes   = 64 << 20
+	keptMaxEntries = 4096
+)
+
+// retention accounts for what the pass keeps rather than for what it
+// reads: an archive may hold any number of entries this pass ignores,
+// and refusing those would turn a large legitimate backup into a failed
+// drill.
+type retention struct {
+	entries int
+	bytes   int
+}
+
+// take accounts for one retained name of n bytes and reports whether the
+// pass may keep it.
+func (r *retention) take(n int) bool {
+	r.entries++
+	r.bytes += n
+	return r.entries <= keptMaxEntries && r.bytes <= keptMaxBytes
+}
+
+// tooMuchKept is the verdict for an archive whose bookkeeping this pass
+// cannot bound. The fence stays silent about archives it cannot read,
+// but an archive built to exhaust the drill host's memory is positive
+// evidence about the source.
+func tooMuchKept() *protoError {
+	return protoErr("source_corrupt", false,
+		"the archive carries more collection and configuration names than a Solr backup holds — "+
+			"over %d of them, or more than %d MiB. Reading on would cost the drill host memory an "+
+			"archive gets to choose, so the walk stops here",
+		keptMaxEntries, keptMaxBytes>>20)
+}
+
 // collectionOf reports the collection a backup entry belongs to, read
 // from the file the engine itself writes beside the index.
+// takeTarEntry folds one archive entry into the pass: the collection its
+// path names, and configuration files carrying the expiration class.
+// within false means the walk's retention budget is spent.
+func takeTarEntry(tr *tar.Reader, hdr *tar.Header, collections map[string]bool,
+	expiring []string, kept *retention) (next []string, within bool) {
+	name := filepath.ToSlash(filepath.Clean(hdr.Name))
+	if c := collectionOf(name); c != "" && !collections[c] {
+		if !kept.take(len(c)) {
+			return expiring, false
+		}
+		collections[c] = true
+	}
+	if filepath.Base(name) != solrConfigFile || hdr.Typeflag != tar.TypeReg {
+		return expiring, true
+	}
+	body, rerr := io.ReadAll(io.LimitReader(tr, maxConfigBytes))
+	if rerr != nil || !bytes.Contains(body, []byte(expirationClass)) {
+		return expiring, true
+	}
+	if !kept.take(len(name)) {
+		return expiring, false
+	}
+	return append(expiring, name), true
+}
+
 func collectionOf(name string) string {
 	base := filepath.Base(name)
 	if !strings.HasPrefix(base, "backup_") || !strings.HasSuffix(base, ".properties") {
