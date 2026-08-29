@@ -76,7 +76,10 @@ func resolveTar(path string) (*resolvedSource, *protoError) {
 			"source path %s is a directory; use kind prometheus_snapshot for a snapshot directory, "+
 				"or prometheus_snapshot_dir for a directory of them", path)
 	}
-	census, live, ok := listTarSnapshot(path)
+	census, live, walkErr, ok := listTarSnapshot(path)
+	if walkErr != nil {
+		return nil, walkErr
+	}
 	if ok && live != "" {
 		return nil, protoErr("unsupported_source", false,
 			"the archive contains %q, which only a live data directory holds: this is a tar of a "+

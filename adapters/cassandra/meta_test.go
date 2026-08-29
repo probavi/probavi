@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -340,5 +341,49 @@ func TestParseTOC(t *testing.T) {
 		if components[i] != want[i] {
 			t.Fatalf("parseTOC = %v, want %v", components, want)
 		}
+	}
+}
+
+// TestInspectSnapshotTarRefusesUnboundedTableMetadata pins the retention
+// bound. Every TOC, manifest and digest an archive carries is read at up
+// to metaMaxBytes and kept per table, so without a bound a small archive
+// decides how much memory the drill host spends. A backup file is
+// attacker-controlled input (SECURITY.md), and a drill killed for memory
+// leaves no evidence record — the severest failure this project defines.
+// The directory kind needs no such bound: its bookkeeping is
+// proportional to files that already exist on the operator's disk.
+func TestInspectSnapshotTarRefusesUnboundedTableMetadata(t *testing.T) {
+	body := strings.Repeat("a", metaMaxBytes)
+	dest := filepath.Join(t.TempDir(), "snap.tar.gz")
+	f, err := os.Create(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gzw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gzw)
+	for i := 0; i <= keptMaxBytes/metaMaxBytes; i++ {
+		name := fmt.Sprintf("probavi/orders/nb-%d-big%s", i, tocSuffix)
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(body))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []io.Closer{tw, gzw, f} {
+		if err := c.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	census, verdict, ok := inspectSnapshotTar(dest)
+	if verdict == nil || !ok {
+		t.Fatalf("inspectSnapshotTar = %+v, verdict %v, ok %v; want a refusal", census, verdict, ok)
+	}
+	if verdict.Code != "source_corrupt" {
+		t.Errorf("code = %s, want source_corrupt", verdict.Code)
+	}
+	if !strings.Contains(verdict.Message, "memory") {
+		t.Errorf("message %q must say why the walk stopped", verdict.Message)
 	}
 }

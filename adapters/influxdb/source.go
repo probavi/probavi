@@ -33,6 +33,18 @@ const (
 	// manifestMaxBytes bounds the manifest read; real manifests are a few
 	// KB (measured).
 	manifestMaxBytes = 8 << 20
+	// keptMaxBytes and keptMaxEntries bound what one archive walk holds
+	// on to across entries: member names, and the manifest bodies read
+	// out of the stream at up to manifestMaxBytes each. A tar entry is a
+	// 512-byte header that compresses to almost nothing, so a small
+	// archive can carry any number of them, and a backup file is
+	// attacker-controlled input (SECURITY.md). The entry bound is set
+	// against a real backup's shape rather than against a round number:
+	// a backup directory holds one file per shard beside the KV, SQL and
+	// manifest files, and a busy instance with years of retention still
+	// counts in the tens of thousands.
+	keptMaxBytes   = 64 << 20
+	keptMaxEntries = 200_000
 	// manifestVersionVerified is the only manifest format this adapter is
 	// verified against (measured on 2.7.12 through 2.9.1).
 	manifestVersionVerified = 2
@@ -139,7 +151,10 @@ func resolveTar(path string) (*resolvedSource, *protoError) {
 				"influx_backup_dir for a directory of them", path)
 	}
 	src := &resolvedSource{dir: path, tarball: true, sizeBytes: info.Size()}
-	manifests, members, ok := listTarBackup(path)
+	manifests, members, perr, ok := listTarBackup(path)
+	if perr != nil {
+		return nil, perr
+	}
 	if ok {
 		name, perr := chooseTarManifest(manifests)
 		if perr != nil {
@@ -169,30 +184,31 @@ func resolveTar(path string) (*resolvedSource, *protoError) {
 // wrapping directory (the two layouts a tar of a backup directory
 // takes). ok is false for an archive Go's readers cannot walk —
 // metadata is a bonus, never a verdict.
-func listTarBackup(path string) (manifests map[string][]byte, members map[string]bool, ok bool) {
+func listTarBackup(path string) (manifests map[string][]byte, members map[string]bool, perr *protoError, ok bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 	defer f.Close() //nolint:errcheck // read-only walk; the checksum pass reopens it
 	var r io.Reader = f
 	head := make([]byte, 2)
 	if _, err := io.ReadFull(f, head); err != nil {
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 	if head[0] == 0x1f && head[1] == 0x8b {
 		gz, err := gzip.NewReader(f)
 		if err != nil {
-			return nil, nil, false
+			return nil, nil, nil, false
 		}
 		r = gz
 	}
 	tr := tar.NewReader(r)
 	manifests = map[string][]byte{}
 	members = map[string]bool{}
+	kept := retention{}
 	sawEntry := false
 	for {
 		hdr, err := tr.Next()
@@ -200,37 +216,86 @@ func listTarBackup(path string) (manifests map[string][]byte, members map[string
 			break
 		}
 		if err != nil {
-			return nil, nil, false
+			return nil, nil, nil, false
 		}
 		sawEntry = true
-		if !recordTarEntry(tr, hdr, manifests, members) {
-			return nil, nil, false
+		switch recordTarEntry(tr, hdr, manifests, members, &kept) {
+		case entryRecorded:
+		case entryUnreadable:
+			return nil, nil, nil, false
+		case entryOverBudget:
+			return nil, nil, tooMuchKept(), false
 		}
 	}
-	return manifests, members, sawEntry
+	return manifests, members, nil, sawEntry
 }
+
+// retention accounts for what a walk keeps rather than for what it
+// reads: an archive may hold any number of entries this pass ignores,
+// and refusing those would turn a large legitimate copy into a failed
+// drill.
+type retention struct {
+	entries int
+	bytes   int
+}
+
+// take accounts for one retained entry of n bytes and reports whether
+// the walk may keep it.
+func (r *retention) take(n int) bool {
+	r.entries++
+	r.bytes += n
+	return r.entries <= keptMaxEntries && r.bytes <= keptMaxBytes
+}
+
+// tooMuchKept refuses an archive whose bookkeeping this walk cannot
+// bound. It is a verdict rather than a silent skip: the listing is a
+// bonus, but an archive built to exhaust the drill host's memory is
+// positive evidence about the source.
+func tooMuchKept() *protoError {
+	return protoErr("source_corrupt", false,
+		"the archive carries more members than an `influx backup` directory holds — over %d of them, "+
+			"or more than %d MiB of manifests and names. Reading on would cost the drill host memory "+
+			"an archive gets to choose, so the walk stops here",
+		keptMaxEntries, keptMaxBytes>>20)
+}
+
+// entryVerdict is what one archive entry did to the walk.
+type entryVerdict int
+
+const (
+	entryRecorded entryVerdict = iota
+	entryUnreadable
+	entryOverBudget
+)
 
 // recordTarEntry notes one archive entry: member names at the accepted
 // depths, and manifest contents read out of the stream. False means the
 // walk itself must give up.
-func recordTarEntry(tr *tar.Reader, hdr *tar.Header, manifests map[string][]byte, members map[string]bool) bool {
+func recordTarEntry(tr *tar.Reader, hdr *tar.Header, manifests map[string][]byte,
+	members map[string]bool, kept *retention) entryVerdict {
 	if hdr.Typeflag != tar.TypeReg {
-		return true
+		return entryRecorded
 	}
 	segments := strings.Split(strings.TrimPrefix(strings.TrimSuffix(hdr.Name, "/"), "./"), "/")
 	if len(segments) < 1 || len(segments) > 2 {
-		return true
+		return entryRecorded
 	}
 	name := segments[len(segments)-1]
+	if !members[name] && !kept.take(len(name)) {
+		return entryOverBudget
+	}
 	members[name] = true
 	if strings.HasSuffix(name, manifestSuffix) {
 		raw, err := io.ReadAll(io.LimitReader(tr, manifestMaxBytes+1))
 		if err != nil || len(raw) > manifestMaxBytes {
-			return false
+			return entryUnreadable
+		}
+		if _, seen := manifests[name]; !seen && !kept.take(len(raw)) {
+			return entryOverBudget
 		}
 		manifests[name] = raw
 	}
-	return true
+	return entryRecorded
 }
 
 // chooseTarManifest mirrors chooseManifest for entries read out of an

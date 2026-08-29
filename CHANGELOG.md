@@ -11,6 +11,41 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Security
+
+- **A crafted backup archive could exhaust the drill host's memory.** The
+  adapters that read what an archive states about itself kept one entry per
+  distinct name with no bound on how many. A tar entry is a 512-byte header
+  that compresses to almost nothing, so a small archive can carry any number
+  of them, and several of those entries are read into memory at up to 8 MiB
+  each: measured with a faithful replica of the opensearch loop, a 1.2 MB
+  crafted `.tar.gz` holding 150 zero-filled `index-N` members left 1.26 GiB
+  resident — about 1094×, so a ~120 MB archive would reach ~126 GB.
+  `SECURITY.md` names a backup file as attacker-controlled input, and the
+  consequence is not only availability: the process dies *during* a drill,
+  and a drill that leaves no evidence record is the severest failure this
+  project defines (`docs/evidence-schema.md` §7).
+
+  Every archive walk now carries a retention bound and refuses with
+  `source_corrupt` past it rather than reading on: `opensearch` and
+  `elasticsearch` (generation members), `influxdb` (member names and
+  manifest bodies), `cassandra` (table file names, TOCs, manifests and
+  digests), `prometheus` (block metadata, whose compaction parents stay
+  raw), and `solr` (collection and configuration names). The bound counts
+  what a walk *keeps*, not what it reads, so a large legitimate archive
+  full of entries a pass ignores still drills; each adapter's limits are
+  set against the shape of a real backup for that engine, and each refusal
+  says what there was too much of. The remaining walks were audited and
+  need no bound: `clickhouse` and `victoriametrics` retain nothing per
+  entry, `mariadb`, `mysql` and `postgres` stream through a fixed buffer.
+  The directory kinds are not bounded either — their bookkeeping is
+  proportional to files that already exist on the operator's own disk,
+  with no archive in between to multiply them.
+
+  Adapter versions move accordingly (`cassandra` 0.3.0, `elasticsearch`
+  0.2.0, `influxdb` 0.3.0, `opensearch` 0.3.0, `prometheus` 0.5.0, `solr`
+  0.2.0), and each adapter's README records the new refusal.
+
 ## [0.21.0] - 2026-08-28
 
 ### Added

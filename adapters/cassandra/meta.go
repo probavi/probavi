@@ -100,7 +100,54 @@ const (
 	dataSuffix   = "-Data.db"
 	// metaMaxBytes bounds manifest/TOC/digest reads; real ones are tiny.
 	metaMaxBytes = 1 << 20
+	// keptMaxBytes and keptMaxEntries bound what one archive walk holds
+	// on to across entries: the file names of every table it meets, and
+	// the manifest, TOC and digest bodies it reads at up to metaMaxBytes
+	// each. A tar entry is a 512-byte header that compresses to almost
+	// nothing, so a small archive can carry any number of them, and a
+	// backup file is attacker-controlled input (SECURITY.md). The entry
+	// bound is set against a real snapshot's shape: a large keyspace
+	// runs to thousands of SSTable components per table, so tens of
+	// thousands across a snapshot, and nothing real approaches this.
+	// The directory kind is not bounded here and does not need to be:
+	// its bookkeeping is proportional to files that already exist on the
+	// operator's own disk, with no archive in between to multiply them.
+	keptMaxBytes   = 64 << 20
+	keptMaxEntries = 200_000
 )
+
+// errTooMuchKept ends an archive walk that would otherwise let the
+// archive choose how much memory the drill host spends.
+var errTooMuchKept = errors.New("archive metadata exceeds what a snapshot carries")
+
+// retention accounts for what a walk keeps rather than for what it
+// reads: an archive may hold any number of entries this pass ignores,
+// and refusing those would turn a large legitimate copy into a failed
+// drill.
+type retention struct {
+	entries int
+	bytes   int
+}
+
+// take accounts for one retained entry of n bytes and reports whether
+// the walk may keep it.
+func (r *retention) take(n int) bool {
+	r.entries++
+	r.bytes += n
+	return r.entries <= keptMaxEntries && r.bytes <= keptMaxBytes
+}
+
+// tooMuchKept is the verdict for an archive whose bookkeeping this walk
+// cannot bound. The listing is a bonus everywhere else, but an archive
+// built to exhaust the drill host's memory is positive evidence about
+// the source.
+func tooMuchKept() *protoError {
+	return protoErr("source_corrupt", false,
+		"the archive carries more table files than a collected snapshot holds — over %d of them, "+
+			"or more than %d MiB of names and metadata. Reading on would cost the drill host memory "+
+			"an archive gets to choose, so the walk stops here",
+		keptMaxEntries, keptMaxBytes>>20)
+}
 
 // judgeTable weighs one table against its own claims. Every refusal is
 // positive evidence; a table that makes no claims (no TOC, no digest)
@@ -418,6 +465,7 @@ type tarWalkState struct {
 	tables    map[tableRef]*tableFacts
 	sawEntry  bool
 	depthBase int // segments before <keyspace>; learned from the first file
+	kept      retention
 }
 
 // walkTar accumulates per-table facts from the stream. A snapshot tars
@@ -475,15 +523,34 @@ func walkTarEntry(state *tarWalkState, hdr *tar.Header, tr *tar.Reader) (*protoE
 		facts = newTableFacts()
 		state.tables[ref] = facts
 	}
-	if err := recordTarEntry(facts, base, tr); err != nil {
+	if err := recordTarEntry(facts, base, tr, &state.kept); err != nil {
+		if errors.Is(err, errTooMuchKept) {
+			return tooMuchKept(), true
+		}
 		return nil, false
 	}
 	return nil, true
 }
 
-func recordTarEntry(facts *tableFacts, base string, tr *tar.Reader) error {
+// recordTarEntry files one entry and charges what it retains to the
+// walk's budget: the name always, and the bytes of a piece read out of
+// the stream. The Data.db pass is not charged — it hashes through and
+// keeps four bytes.
+func recordTarEntry(facts *tableFacts, base string, tr *tar.Reader, kept *retention) error {
+	if !kept.take(len(base)) {
+		return errTooMuchKept
+	}
 	return recordEntry(facts, base,
-		func() ([]byte, error) { return io.ReadAll(io.LimitReader(tr, metaMaxBytes)) },
+		func() ([]byte, error) {
+			raw, err := io.ReadAll(io.LimitReader(tr, metaMaxBytes))
+			if err != nil {
+				return nil, err
+			}
+			if !kept.take(len(raw)) {
+				return nil, errTooMuchKept
+			}
+			return raw, nil
+		},
 		func() (uint32, error) {
 			h := crc32.NewIEEE()
 			_, err := io.Copy(h, tr)
