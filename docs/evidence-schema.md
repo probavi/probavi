@@ -284,6 +284,13 @@ MUST NOT appear anywhere in a record:
   pins its definition);
 - result rows or any per-row data — `checks[].detail` carries aggregates
   only (counts, ages, latencies);
+- the text of an engine's own diagnostics. A failed check records that its
+  runner failed and with which exit code, never the message: engines
+  routinely quote row data in error text — PostgreSQL answers a violated
+  unique constraint with `DETAIL: Key (email)=(…) already exists.` — and a
+  record that carries it is no longer shareable as it stands. The
+  diagnostic goes to the drill host's log, which is where an operator
+  debugs from;
 - raw hostnames (§3 `env.host_id`), file paths outside `drill.config_hash`
   scope, or adapter stderr content.
 
@@ -436,6 +443,15 @@ notes are collected in `spec/evidence/README.md`.
 
 ## Changelog
 
+- Editorial (2026-08-29, no format change): §8 names engine diagnostics
+  among the things a record must not carry. The rule was already there in
+  substance — "result rows or any per-row data" and "adapter stderr
+  content" — but the everyday case sat between the two: a check's runner
+  fails, and the engine's message quotes the row that caused it. The core
+  recorded that message as the check's `detail`; it now records the
+  runner's exit code and logs the message on the drill host instead. No
+  field, no serialization rule and no shape changes: `checks[].detail` is
+  the same string field with the same limits, carrying less.
 - v2 frozen (2026-08-05): the core writes v2, the independent verifier
   accepts it, and `log_v2.jsonl` joins the published conformance vectors
   (§11.2). `log_v1.jsonl` is byte-frozen alongside `log_v0.jsonl` — a

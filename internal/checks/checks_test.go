@@ -1,8 +1,10 @@
 package checks
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -145,8 +147,8 @@ func TestTableExists(t *testing.T) {
 	t.Run("missing table is a verdict", func(t *testing.T) {
 		exec := &fakeExec{t: t, respond: queryFailure(`ERROR: relation "orders" does not exist` + "\nLINE 1: ...")}
 		res := runSingle(t, config.Check{Builtin: "table_exists", Table: "orders"}, exec)
-		if res.OK || !strings.Contains(res.Detail, "relation 'orders' does not exist") {
-			t.Errorf("result = %+v — stderr must be single-line and quote-sanitized", res)
+		if res.OK || !strings.Contains(res.Detail, "sql_runner exited 1") {
+			t.Errorf("result = %+v — a failed runner is recorded by its exit code", res)
 		}
 	})
 	t.Run("injection attempt aborts the run", func(t *testing.T) {
@@ -373,16 +375,23 @@ func TestQuoteIdent(t *testing.T) {
 }
 
 func TestDetailTruncation(t *testing.T) {
-	// Engine stderr is routinely non-ASCII (localized messages, accented
-	// identifiers). Truncating such a detail by byte offset splits a rune,
-	// and the invalid UTF-8 makes the evidence record unwritable — a
-	// completed drill that leaves no proof. Every stride is exercised so
-	// that no cut position can regress.
+	// The service_healthy detail comes from the adapter and may be any
+	// UTF-8 (localized messages, accented identifiers). Truncating such a
+	// detail by byte offset splits a rune, and the invalid UTF-8 makes the
+	// evidence record unwritable — a completed drill that leaves no proof.
+	// Every stride is exercised so that no cut position can regress.
 	for _, filler := range []string{"e", "é", "€", "𝄞"} {
 		t.Run(filler, func(t *testing.T) {
 			long := strings.Repeat(filler, 500)
-			exec := &fakeExec{t: t, respond: queryFailure(long)}
-			res := runSingle(t, config.Check{SQL: "SELECT 1", Expect: config.ScalarFromString("1")}, exec)
+			exec := &fakeExec{t: t, respond: value("1")}
+			deps := testDeps(exec)
+			deps.Healthcheck = func(context.Context) (bool, string, error) { return true, long, nil }
+			results, err := Run(context.Background(),
+				[]config.Check{{Builtin: config.CheckServiceHealthy}}, deps)
+			if err != nil || len(results) != 1 {
+				t.Fatalf("Run = %+v, %v", results, err)
+			}
+			res := results[0]
 			switch {
 			case len(res.Detail) > evidence.MaxDetailBytes:
 				t.Errorf("detail is %d bytes, want at most %d", len(res.Detail), evidence.MaxDetailBytes)
@@ -440,5 +449,80 @@ func TestUnrunnableConfigurationIsAnInfrastructureError(t *testing.T) {
 	_, err := Run(context.Background(), []config.Check{{Builtin: "not_registered"}}, testDeps(exec))
 	if err == nil || !strings.Contains(err.Error(), "unrunnable check configuration") {
 		t.Fatalf("err = %v, want an unrunnable-configuration failure", err)
+	}
+}
+
+// TestEngineDiagnosticsNeverReachTheDetail is the §8 redaction rule as a
+// gate. An engine quotes row data in its error text — PostgreSQL answers a
+// violated unique constraint with `DETAIL: Key (email)=(...) already
+// exists.` — and a check detail is signed into a record meant to be handed
+// to an auditor as it stands. runSQL has always refused to record the
+// returned value for exactly this reason; the diagnostic was the way
+// around it. It goes to the drill host's log instead, where the operator
+// can read it, with the ephemeral sandbox password masked: an engine that
+// echoes its connection settings must not put a credential in a log
+// either (AGENTS.md §3.3).
+func TestEngineDiagnosticsNeverReachTheDetail(t *testing.T) {
+	const (
+		rowData = `DETAIL: Key (email)=(alice@example.com) already exists.`
+		secret  = "ephemeral-sandbox-password"
+	)
+	stderr := "ERROR: duplicate key value violates unique constraint \"orders_email_key\"\n" +
+		rowData + "\nconnection: password=" + secret
+
+	log := &bytes.Buffer{}
+	deps := testDeps(&fakeExec{t: t, respond: queryFailure(stderr)})
+	deps.Target.Password = secret
+	deps.Logger = slog.New(slog.NewTextHandler(log, nil))
+
+	results, err := Run(context.Background(), []config.Check{
+		{SQL: "SELECT 1", Expect: config.ScalarFromString("1")},
+		{Builtin: config.CheckTableExists, Table: "orders"},
+		{Builtin: config.CheckRowCount, Table: "orders", Min: i64(1)},
+		{Builtin: config.CheckFreshness, Table: "orders", Column: "created_at",
+			MaxAge: config.Duration(time.Hour)},
+	}, deps)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(results) != 4 {
+		t.Fatalf("results = %d, want one per check", len(results))
+	}
+	for _, res := range results {
+		if res.OK {
+			t.Errorf("%s passed on a runner that exited 1", res.Name)
+		}
+		for _, leaked := range []string{"alice@example.com", "duplicate key", "orders_email_key", secret} {
+			if strings.Contains(res.Detail, leaked) {
+				t.Errorf("%s detail carries the engine's own text (%q): %q", res.Name, leaked, res.Detail)
+			}
+		}
+		if !strings.Contains(res.Detail, "sql_runner exited 1") {
+			t.Errorf("%s detail = %q, want the runner's exit code", res.Name, res.Detail)
+		}
+	}
+	logged := log.String()
+	if !strings.Contains(logged, rowData) {
+		t.Error("the diagnostic must reach the drill host's log — it is the operator's only copy of it")
+	}
+	if strings.Contains(logged, secret) {
+		t.Errorf("the log carries the sandbox password: %s", logged)
+	}
+}
+
+// TestMask covers both halves of the one redaction this package performs
+// on its way to the log. A drill whose engine needs no password has
+// nothing to mask, and the diagnostic must reach the operator unaltered;
+// one that does must never see it echoed back into a log line.
+func TestMask(t *testing.T) {
+	for name, tt := range map[string]struct{ in, secret, want string }{
+		"nothing to mask":    {"FATAL: connection refused", "", "FATAL: connection refused"},
+		"secret echoed back": {`could not connect: "password=hunter2"`, "hunter2", `could not connect: "password=[redacted]"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := mask(tt.in, tt.secret); got != tt.want {
+				t.Errorf("mask(%q, %q) = %q, want %q", tt.in, tt.secret, got, tt.want)
+			}
+		})
 	}
 }
