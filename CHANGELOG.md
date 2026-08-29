@@ -11,6 +11,36 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Changed
+
+- **The evidence specification now states the one removal its chain cannot
+  see.** Deleting the newest N lines of a log leaves records 1…M whose
+  sequence still starts at 1 and whose chain is unbroken, so both verifiers
+  return `VALID` with M records and exit 0 — correctly, since no algorithm
+  reading only the file can distinguish a truncated log from a shorter one.
+  The behaviour is unchanged and no byte of the format moves; what changes
+  is that the documents say so.
+
+  `docs/evidence-schema.md` §9's security note listed modification,
+  deletion, reordering and appended garbage and read as exhaustive. It now
+  names truncation, explains why the file cannot answer for it, and records
+  that a later drill appends onto the shortened chain, so the removal leaves
+  no trace afterwards either. §1's first goal is narrowed to match — it
+  promised a third party could verify from the file alone that "nothing was
+  altered or removed", which held for every removal except the one at the
+  end. Both implementations already pinned parts of this in tests;
+  `internal/evidence` now pins it too, next to the four-attack suite where
+  removal from *within* the sequence is covered.
+
+  Two anchors already available are written down rather than left to be
+  discovered: a `probavi push` receiver that retains what it was sent can
+  see a log shrink (every push carries the whole file), and the `records`
+  count `probavi evidence verify` reports never decreases for an
+  append-only log. Neither is a substitute for a signed head, and the
+  anchor that would close the gap is a schema decision not taken here.
+  `SECURITY.md` marks tail truncation as answered so a report can aim past
+  it.
+
 ### Security
 
 - **An adapter's argv could become `systemd-run` options on the bare-host

@@ -32,7 +32,13 @@ These are the failures that would undermine what Probavi claims:
 
 - Anything that lets a forged, altered, reordered or removed evidence record
   survive `probavi evidence verify`, or that makes the hash chain or the
-  ed25519 signature accept what it should reject.
+  ed25519 signature accept what it should reject. One case is already
+  answered and is not a finding on its own: deleting records from the *end*
+  of a log leaves a shorter log that verifies, which
+  [docs/evidence-schema.md](docs/evidence-schema.md) §1 and §9 state as the
+  chain's documented limit, together with the anchors that bound it. A way
+  past any of the rest — including hiding a record without shortening the
+  log — is very much a report we want.
 - Anything that puts a credential where it does not belong: an evidence
   record, a log line, a notification payload, a report, a process argument
   list.
