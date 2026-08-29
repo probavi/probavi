@@ -445,12 +445,22 @@ func (s *Sandbox) reaperUnit() string { return s.name + "-reaper" }
 // execPrefix is the transient-unit shape every payload runs with: inside
 // the slice, as the drill user, in the workspace, stdio piped through the
 // ssh connection.
+//
+// It ends in the "--" terminator, and that is load-bearing rather than
+// tidy: systemd-run keeps parsing its own options until it sees one, and
+// the payload that follows is an adapter's argv — attacker-reachable
+// input (SECURITY.md). Unterminated, an argv beginning "-p User=root"
+// would set a property of the unit instead of an argument of the command
+// (the later property wins), and "--slice=" would move the payload out of
+// the slice Destroy stops. The k8s provider terminates for the same
+// reason; the docker CLI refuses such argv on its own.
 func (s *Sandbox) execPrefix() []string {
 	return []string{
 		"systemd-run", "--quiet", "--collect", "--wait", "--pipe",
 		"--slice=" + s.slice(),
 		"-p", "User=" + s.user,
 		"-p", "WorkingDirectory=" + s.workspace,
+		"--",
 	}
 }
 

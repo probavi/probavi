@@ -11,6 +11,27 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Security
+
+- **An adapter's argv could become `systemd-run` options on the bare-host
+  provider.** `internal/sandbox/remotehost` built every command as
+  `systemd-run … -p User=<drill user> -p WorkingDirectory=<workspace>`
+  followed directly by the argv the adapter sent — with no `--`, so
+  `systemd-run` kept reading options where the payload began. Confirmed on
+  systemd 260: with two `-p WorkingDirectory=` properties the later one
+  wins, so an argv beginning `-p User=root` overrode the drill user the
+  provider sets, and `--slice=` would have moved the payload out of the
+  slice `Destroy` stops — past the mediated sandbox verbs, which
+  SECURITY.md names as in scope.
+
+  The prefix now ends in `--`, so every argv element is an argument of the
+  command and never an option of the unit. Only this provider was
+  affected: the k8s provider already terminates its `kubectl exec` args,
+  and the docker CLI refuses option-shaped argv on its own. Pinned by a
+  test that renders the remote command for an option-shaped argv, in both
+  the plain and the environment-carrying branch; `docs/sandbox-bare-host.md`
+  §6 states the requirement.
+
 ## [0.21.0] - 2026-08-28
 
 ### Added

@@ -233,7 +233,7 @@ func TestCreateFullSequence(t *testing.T) {
 		quoteJoin("id", "-un"),
 		quoteJoin("sh", "-c", setupScript, "sh", ws, testHostID+" "+sandbox.OwnerID(os.Getpid())),
 		quoteJoin("systemd-run", "--quiet", "--collect", "--wait", "--pipe",
-			"--slice="+name+".slice", "-p", "User=drill", "-p", "WorkingDirectory="+ws, "true"),
+			"--slice="+name+".slice", "-p", "User=drill", "-p", "WorkingDirectory="+ws, "--", "true"),
 		quoteJoin("systemctl", "set-property", "--runtime", name+".slice", "CPUQuota=200%", "MemoryMax=2G"),
 		quoteJoin("systemd-run", "--quiet", "--collect", "--unit="+name+"-reaper",
 			"--on-active=7200", "--timer-property=AccuracySec=1m",
@@ -381,7 +381,7 @@ func TestExec(t *testing.T) {
 		}
 		want := quoteJoin("systemd-run", "--quiet", "--collect", "--wait", "--pipe",
 			"--slice="+sbx.name+".slice", "-p", "User=drill", "-p", "WorkingDirectory="+sbx.workspace,
-			"sh", "-c", sandbox.EnvPreludeScript(2), "sh", "psql", "-c", "SELECT 'x'")
+			"--", "sh", "-c", sandbox.EnvPreludeScript(2), "sh", "psql", "-c", "SELECT 'x'")
 		if got := remoteCmd(t, fake, 0); got != want {
 			t.Errorf("call = %s\nwant   %s (env via stdin, everything quoted)", got, want)
 		}
@@ -703,6 +703,46 @@ func TestExecKeepsSecretsOutOfArgv(t *testing.T) {
 	}
 	if !strings.HasPrefix(fake.stdins[0], "PGPASSWORD="+secret+"\n") {
 		t.Errorf("stdin = %q, want the secret delivered out of band", fake.stdins[0])
+	}
+}
+
+// TestExecTerminatesSystemdOptions pins the "--" between systemd-run's own
+// options and the payload. The payload is the adapter's argv, which
+// SECURITY.md names as attacker-reachable input: unterminated, "-p
+// User=root" would override the drill user this provider sets (the later
+// property wins) and "--slice=" would move the payload out of the slice
+// Destroy stops.
+func TestExecTerminatesSystemdOptions(t *testing.T) {
+	optionShaped := []string{"-p", "User=root", "--slice=escape.slice", "id"}
+
+	for name, tt := range map[string]struct {
+		env  map[string]string
+		tail []string
+	}{
+		"without env": {tail: optionShaped},
+		"with env": {
+			env:  map[string]string{"A": "1"},
+			tail: append([]string{"sh", "-c", sandbox.EnvPreludeScript(1), "sh"}, optionShaped...),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, fake := testProvider(t, response{})
+			sbx := testSandbox(p)
+			if _, err := sbx.Exec(context.Background(), sandbox.ExecRequest{
+				Argv: optionShaped,
+				Env:  tt.env,
+			}); err != nil {
+				t.Fatalf("Exec: %v", err)
+			}
+			want := quoteJoin(append([]string{
+				"systemd-run", "--quiet", "--collect", "--wait", "--pipe",
+				"--slice=" + sbx.name + ".slice", "-p", "User=drill",
+				"-p", "WorkingDirectory=" + sbx.workspace, "--",
+			}, tt.tail...)...)
+			if got := remoteCmd(t, fake, 0); got != want {
+				t.Errorf("call = %s\nwant   %s (every argv element after the terminator)", got, want)
+			}
+		})
 	}
 }
 
