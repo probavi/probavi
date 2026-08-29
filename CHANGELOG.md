@@ -62,6 +62,35 @@ always called out explicitly.
   the plain and the environment-carrying branch; `docs/sandbox-bare-host.md`
   §6 states the requirement.
 
+- **A symlink inside a backup source walked through the `put_file`
+  allow-list.** The core's guard compared `filepath.Clean`ed strings, and
+  Clean is purely lexical: with a symlink `link -> /etc` inside the drill's
+  configured backup source, an adapter asking for `<source>/link/hostname`
+  passed the check, and the provider — which opens the path afterwards —
+  read the file outside the source. `..` traversal was refused correctly;
+  only the symlink route worked. `docs/adapter-protocol.md` §4.2 has always
+  stated the guarantee ("the core only permits source paths that belong to
+  the drill's configured backup source"), and it did not hold.
+
+  Containment is now decided by resolving the request inside an `os.Root`,
+  so every symlink component is followed under the source directory and one
+  that leads out is refused. Two consequences worth knowing: an absolute
+  symlink inside the source is refused even when it points back inside —
+  telling it from an escape needs the string comparison this replaces — and
+  a path *beneath* the source that resolves to nothing is now
+  `invalid_request` instead of reaching the provider and failing there. The
+  configured source path itself is unchanged: it is the operator's own
+  choice and may be a symlink. The guard stats rather than opens, so a
+  named pipe in a backup tree cannot block a drill.
+
+  One residual gap is documented rather than hidden (§4.2): the core
+  resolves the path and the provider opens it again, so a process able to
+  write inside the backup source could swap a component in between. Closing
+  it means handing the open file to the provider instead of its path, which
+  changes the sandbox interface and how the docker provider copies; it is
+  not taken here. Nothing changes for adapters — same arguments, same
+  value, same error codes — and the protocol version does not move.
+
 ## [0.21.0] - 2026-08-28
 
 ### Added

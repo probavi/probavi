@@ -18,7 +18,7 @@ import (
 // do runs one operation: fresh process, one request line in, sandbox calls
 // mediated, exactly one final response out (§2, §3). guard is non-nil only
 // for provision (put_file source allow-listing).
-func (r *Runner) do(ctx context.Context, op string, payload any, verbs SandboxVerbs, guard func(string) error) (json.RawMessage, error) {
+func (r *Runner) do(ctx context.Context, op string, payload any, verbs SandboxVerbs, guard func(string) (string, error)) (json.RawMessage, error) {
 	requestID := newRequestID()
 	request, err := json.Marshal(envelope{
 		Protocol: ProtocolVersion, RequestID: requestID, Op: op, Payload: mustMarshal(payload),
@@ -157,7 +157,7 @@ func (r *Runner) start(ctx context.Context) (*session, error) {
 
 // readLoop consumes adapter stdout until the final response (§3.4),
 // dispatching sandbox calls along the way (§3.2, §3.3).
-func (s *session) readLoop(ctx context.Context, op, requestID string, verbs SandboxVerbs, guard func(string) error) (*envelope, *Error) {
+func (s *session) readLoop(ctx context.Context, op, requestID string, verbs SandboxVerbs, guard func(string) (string, error)) (*envelope, *Error) {
 	for {
 		env, verr := s.readMessage(op, requestID)
 		if verr != nil {

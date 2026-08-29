@@ -202,6 +202,28 @@ Copy a file from the host into the sandbox. The core only permits source
 paths that belong to the drill's configured backup source; anything else
 fails the call with `invalid_request`.
 
+**Belonging is decided by resolving the path, not by comparing strings.**
+A request beneath the configured source must resolve inside it with every
+symlink component followed, so a symlink inside the source that leads out
+of it is refused — a lexical prefix test would accept
+`<source>/link/passwd` and let the provider read what `link` points at. An
+absolute symlink is refused for the same reason even when it happens to
+point back inside: telling one from an escape needs exactly the string
+comparison this rule replaces. The configured source path itself is the
+operator's own choice and is permitted unresolved — `/backups/latest`
+pointing at today's directory is an ordinary layout. A request beneath the
+source that resolves to nothing is refused with `invalid_request` rather
+than reaching the provider.
+
+One gap remains, and is stated rather than left implied: the core
+resolves the path and the provider then opens it again, so a process able
+to write inside the backup source on the drill host could swap a
+component between the two calls. It is bounded by what such a process can
+do anyway — the backup being restored is in that same tree — and closing
+it means handing the open file to the provider instead of its path.
+Nothing about the verb changes for an adapter either way: same arguments,
+same value, same error code.
+
 Args: `source_path` (host path, string, required), `dest_path` (sandbox
 path, string, required), `mode` (octal string, optional, default `"0600"`).
 
@@ -564,6 +586,14 @@ further change to this protocol is a version bump (§8).
   item. 2026-08-01 (no wire change): machine-readable JSON Schemas added
   under `docs/schemas/adapter/`, CI-verified against the golden files and
   message samples — §11 complete, **v0 frozen**.
+  2026-08-29 (no wire change): §4.2 states how the core decides that a
+  source path belongs to the drill's backup source — resolved, with
+  symlinks followed, rather than compared as cleaned strings — and names
+  the residual gap between that check and the provider's own open. The
+  guarantee is the one the section already stated; the implementation had
+  been lexical, so a symlink inside the source reached past it. No verb,
+  argument, value or error code changes, and no conforming adapter stops
+  conforming: a clarification within v0, not a §8 version bump.
   2026-08-04 (no wire change): §6.2 now states the `created_at` contract
   explicitly — an RFC 3339 instant of any precision, which the core
   normalizes to the evidence schema's millisecond UTC form by truncation —

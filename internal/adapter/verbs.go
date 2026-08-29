@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -52,7 +55,7 @@ type putFileValue struct {
 // dispatchVerb fulfills one sandbox call. Errors returned as (result.ok ==
 // false) do not abort the operation — the adapter decides (§3.3); only a
 // nil return with error means the core itself must give up.
-func dispatchVerb(ctx context.Context, verbs SandboxVerbs, guard func(string) error, call *sandboxCall) sandboxResult {
+func dispatchVerb(ctx context.Context, verbs SandboxVerbs, guard func(string) (string, error), call *sandboxCall) sandboxResult {
 	switch call.Verb {
 	case "exec":
 		return dispatchExec(ctx, verbs, call)
@@ -90,7 +93,7 @@ func dispatchExec(ctx context.Context, verbs SandboxVerbs, call *sandboxCall) sa
 	}}
 }
 
-func dispatchPutFile(ctx context.Context, verbs SandboxVerbs, guard func(string) error, call *sandboxCall) sandboxResult {
+func dispatchPutFile(ctx context.Context, verbs SandboxVerbs, guard func(string) (string, error), call *sandboxCall) sandboxResult {
 	args := putFileArgs{}
 	if err := json.Unmarshal(call.Args, &args); err != nil || args.SourcePath == "" || args.DestPath == "" {
 		return verbError(call.CallID, CodeInvalidRequest, false, "malformed put_file args")
@@ -98,10 +101,11 @@ func dispatchPutFile(ctx context.Context, verbs SandboxVerbs, guard func(string)
 	if guard == nil {
 		return verbError(call.CallID, CodeInvalidRequest, false, "put_file is not permitted in this operation")
 	}
-	if err := guard(args.SourcePath); err != nil {
+	source, err := guard(args.SourcePath)
+	if err != nil {
 		return verbError(call.CallID, CodeInvalidRequest, false, "%v", err)
 	}
-	res, err := verbs.PutFile(ctx, args.SourcePath, args.DestPath, args.Mode)
+	res, err := verbs.PutFile(ctx, source, args.DestPath, args.Mode)
 	if err != nil {
 		return verbError(call.CallID, CodeSandboxError, true, "put_file: %v", err)
 	}
@@ -120,17 +124,56 @@ func verbError(callID, code string, retryable bool, format string, a ...any) san
 }
 
 // sourceGuard permits put_file sources that are the drill's configured
-// backup source path or live beneath it (§4.2). Everything else — /etc,
-// key files, arbitrary host paths — is refused.
-func sourceGuard(sourcePath string) func(string) error {
+// backup source path or live beneath it (§4.2), and returns the path the
+// provider is to open. Everything else — /etc, key files, arbitrary host
+// paths — is refused.
+//
+// Containment is decided by resolving the request inside an os.Root, not
+// by comparing cleaned strings. filepath.Clean is purely lexical, so a
+// prefix test accepts <source>/link/passwd when link is a symlink to /etc
+// and the provider then reads what the symlink points at. Under os.Root
+// every component is resolved relative to the source directory and any
+// symlink leading out of it is refused — including an absolute one that
+// happens to point back inside, which cannot be told from an escape
+// without trusting the same lexical comparison. The source directory
+// itself may be a symlink: the operator configured that path.
+//
+// It stats rather than opens. A named pipe under the source would block
+// an open indefinitely, and containment does not need the bytes.
+//
+// The provider opens the returned path a second time, which leaves the
+// residual gap adapter-protocol.md §4.2 documents: a writer on the drill
+// host could swap a component between the two. Closing it means handing
+// the open file to the provider instead of its path — a change to the
+// sandbox interface and to the way the docker provider copies — and is
+// not taken here.
+func sourceGuard(sourcePath string) func(string) (string, error) {
 	root := filepath.Clean(sourcePath)
-	return func(requested string) error {
+	prefix := root + string(filepath.Separator)
+	return func(requested string) (string, error) {
 		clean := filepath.Clean(requested)
-		if clean == root || strings.HasPrefix(clean, root+string(filepath.Separator)) {
-			return nil
+		// No quotes in these messages: they cross the protocol as JSON
+		// strings and must stay trivially embeddable.
+		outside := func() error {
+			return fmt.Errorf("put_file source %s is outside the drill's backup source %s", clean, root)
 		}
-		// No quotes in the message: it crosses the protocol as a JSON
-		// string and must stay trivially embeddable.
-		return fmt.Errorf("put_file source %s is outside the drill's backup source %s", clean, root)
+		if clean == root {
+			return clean, nil
+		}
+		if !strings.HasPrefix(clean, prefix) {
+			return "", outside()
+		}
+		r, err := os.OpenRoot(root)
+		if err != nil {
+			return "", outside()
+		}
+		defer r.Close() //nolint:errcheck // read-only directory handle
+		if _, err := r.Stat(strings.TrimPrefix(clean, prefix)); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return "", fmt.Errorf("put_file source %s does not exist under the drill's backup source %s", clean, root)
+			}
+			return "", outside()
+		}
+		return clean, nil
 	}
 }
