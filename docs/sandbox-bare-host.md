@@ -61,7 +61,7 @@ Lifecycle mapping (command shapes, subject to implementation detail):
 | Contract call | On the target (via ssh) |
 |---|---|
 | `Create` | `mkdir -p` workspace + `scratch/`, write `owner` marker; verify `systemd-run` works; arm the deadline backstop (§5). |
-| `Exec` | `systemd-run --slice=<slice> --wait --pipe --collect --same-dir=<workspace> env K=V… argv…` — stdin/stdout/stderr stream over the ssh connection; the §4.1 capture caps apply on the drill host as everywhere else. |
+| `Exec` | `systemd-run --slice=<slice> --wait --pipe --collect --same-dir=<workspace> env K=V… -- argv…` — stdin/stdout/stderr stream over the ssh connection; the §4.1 capture caps apply on the drill host as everywhere else. The `--` is mandatory, not cosmetic (§6). |
 | `PutFile` | `ssh <target> sh -c 'cat > "$1" && chmod "$2" "$1"' sh <dest> <mode>` with the local file on stdin — the k8s provider's positional trick; bytes cross only the ssh connection. |
 | `Destroy` | `systemctl stop <slice>` (kills every descendant), then `rm -rf` workspace. Idempotent: a missing slice or workspace is success. |
 | `SweepOrphans` | List `probavi-sbx-*` slices and workspaces; read `owner` markers; remove those owned by this drill host whose pid is dead. Other hosts' sandboxes are never touched (same host-scoping as docker/k8s). |
@@ -117,6 +117,15 @@ Three independent layers, mirroring the k8s provider's philosophy:
   acceptable **only** on a dedicated host (§1); the implementation SHOULD
   prefer a 0600 env file in the workspace over argv env where the engine
   allows it.
+- The adapter's argv is untrusted input (SECURITY.md), and it is handed
+  to a command that parses options: `systemd-run` reads its own options
+  up to the `--` terminator, so the terminator MUST separate them from
+  the payload. Without it an argv beginning `-p User=root` sets a
+  property of the transient unit rather than an argument of the command —
+  the later property wins over the one this provider sets — and
+  `--slice=` moves the payload out of the slice `Destroy` stops. The
+  same terminator is why the k8s provider ends its `kubectl exec` args
+  with `--`.
 - The ssh target (user@host) is connection detail: it lives in an
   environment variable (`PROBAVI_SSH_TARGET`), never in drill config —
   sandbox params enter signed evidence records verbatim, and

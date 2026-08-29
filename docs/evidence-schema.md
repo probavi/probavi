@@ -20,7 +20,12 @@ accept every published version — `probavi-evidence/0`, `/1` and `/2`
 
 - A third party holding only (a) the log file and (b) the signer's public
   key(s) MUST be able to verify **offline** that: every record is authentic,
-  the sequence is complete and ordered, and nothing was altered or removed.
+  the sequence is complete and ordered, and nothing was altered, reordered,
+  or removed from *within* it. The qualifier is exact and it is not
+  decoration: a record removed from within the sequence leaves a hole the
+  chain reports, while records removed from the *end* leave a shorter chain
+  that is still perfect. No value a file contains can attest to what was
+  deleted past its end; §9 states what does.
 - Records are self-describing enough to reconstruct *what was proven*: which
   backup, restored how, checked how, with what results and measured
   durations.
@@ -29,7 +34,9 @@ accept every published version — `probavi-evidence/0`, `/1` and `/2`
   including the operator. Defenses: per-record ed25519 signatures over
   canonical bytes, a SHA-256 hash chain, and an append-only writer.
 - Out of scope for v0: confidentiality of the log (it is designed to be
-  shareable — see redaction, §8), and proving *absence* of additional logs.
+  shareable — see redaction, §8), proving *absence* of additional logs, and
+  — from the file alone — proving that the log has not been truncated at
+  its end (§9).
 
 ## 2. The log
 
@@ -328,9 +335,45 @@ Exit codes: `0` VALID, `1` VALID_WITH_DAMAGE, `2` INVALID.
 
 Security note: an unparseable line can only ever be a crash artifact —
 signed content cannot be altered or removed this way. Modifying any stored
-line fails the canonical-bytes or signature check; deleting a line breaks
-`seq`/`prev_hash` continuity; reordering breaks `prev_hash`. Appending
-garbage is detected and reported but forges nothing.
+line fails the canonical-bytes or signature check; deleting a line from
+within the sequence breaks `seq`/`prev_hash` continuity; reordering breaks
+`prev_hash`. Appending garbage is detected and reported but forges nothing.
+
+**Truncation is the exception, and the list above is incomplete without
+it.** Deleting the newest N lines leaves records 1…M whose sequence still
+starts at 1 and whose chain is unbroken, so the algorithm returns VALID
+with M records and exit code 0. This is not a defect in the algorithm and
+no algorithm reading only the file can do better: the chain proves what
+the file holds, never what was removed beyond its end. Nor does the
+removal leave a trace afterwards — a drill that runs later appends onto
+the shortened chain, and the log stays internally valid forever. What an
+attacker with write access gains is bounded but real: they can delete the
+newest records, and that is exactly enough to hide the drill that just
+failed. Hiding an *older* failure means deleting everything after it too,
+which is a much larger and more visible gap.
+
+Closing it requires an anchor kept outside the file: the highest `seq`
+with the SHA-256 of its stored line, held where the attacker cannot
+rewrite it, and compared against what the log now shows. This schema
+defines no such anchor, and adding one is a change to this document
+first. Until then two properties already in the product bound the
+exposure, and both are the operator's to use:
+
+- **A retained copy detects a shrink.** `probavi push` sends the whole
+  file on every run (`evidence-push.md` §1.4). A receiver that *keeps*
+  what it was sent can compare successive pushes: an append-only log
+  never gets shorter, and a shorter log whose records match the prefix of
+  an earlier copy has been truncated. A receiver that overwrites its copy
+  is no anchor at all.
+- **The record count never decreases.** `probavi evidence verify` reports
+  `records`. For an append-only log that number is monotonic, so an
+  operator who writes it down after each drill — or who simply knows how
+  many drills have run — holds the cheapest anchor there is.
+
+Neither is a substitute for a signed head, and neither survives an
+attacker who also controls the anchor. They are written down so that the
+gap is bounded in the specification rather than discovered during an
+audit.
 
 ## 10. Versioning and migration
 
@@ -436,6 +479,18 @@ notes are collected in `spec/evidence/README.md`.
 
 ## Changelog
 
+- Editorial (2026-08-29, no format change): §9 names tail truncation as
+  the one removal the chain alone cannot see, states why no file-only
+  algorithm can close it, and records the two anchors available today —
+  a push receiver that retains what it was sent, and the monotonic record
+  count. §1's first goal is narrowed to match: it promised that a third
+  party could verify "nothing was altered or removed" from the file
+  alone, which was true of every removal except the one at the end, and
+  the out-of-scope bullet now says so explicitly. No field, no
+  serialization rule, no verification step and no record byte changes;
+  both implementations already behave exactly as the text now describes,
+  and both pin it with a test. An anchor that would *close* the gap is a
+  change to this document before any code, and is not taken here.
 - v2 frozen (2026-08-05): the core writes v2, the independent verifier
   accepts it, and `log_v2.jsonl` joins the published conformance vectors
   (§11.2). `log_v1.jsonl` is byte-frozen alongside `log_v0.jsonl` — a

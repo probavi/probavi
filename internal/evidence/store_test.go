@@ -334,6 +334,28 @@ func TestTamperDetection(t *testing.T) {
 	}
 }
 
+// TestTailTruncationVerifiesValid pins the documented limit of the chain
+// (evidence-schema.md §1 and §9): removing the newest records leaves a
+// shorter chain that is still perfect, so verification returns VALID.
+// TestTamperDetection's "removed record" case covers removal from within
+// the sequence, which does break continuity — this is the one member of
+// that family the file cannot answer for. The independent verifier pins
+// the same property from the specification alone (spec/evidence). If
+// either implementation ever starts reporting this, it is because the
+// format gained an anchor outside the file, and both documents must say
+// so before either test changes.
+func TestTailTruncationVerifiesValid(t *testing.T) {
+	lines := logLines(t, buildLog(t))
+	truncated := strings.Join(lines[:2], "\n") + "\n"
+	res, err := Verify(strings.NewReader(truncated), testKeyring())
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if res.Status != StatusValid || res.Records != 2 {
+		t.Fatalf("Verify = %s with %d records, want VALID with 2 (the tail is unanchored)", res.Status, res.Records)
+	}
+}
+
 func TestTornTailIsDamageNotTampering(t *testing.T) {
 	raw, err := os.ReadFile(buildLog(t))
 	if err != nil {

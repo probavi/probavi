@@ -288,6 +288,16 @@ successful one carries everything.
   are verified against the operator's public key, which the receiver never
   holds. A receiver that returns 200 has proven nothing about the evidence,
   and Probavi records nothing about the push — a delivery is not evidence.
+- **A retained copy turns a receiver into a truncation anchor.** The
+  chain proves what a log contains, not that its end is still there:
+  deleting the newest records leaves a shorter log that verifies VALID
+  (`evidence-schema.md` §1, §9). Because every push carries the whole file
+  (§1.4), a receiver that keeps what it was sent — rather than overwriting
+  its copy — can see a log grow shorter, or recognise a shorter log as the
+  prefix of one it already holds. Probavi neither requires this of a
+  receiver nor can check it, and a delivery still proves nothing (previous
+  bullet); it is stated here because an operator who wants the property
+  needs to know it is theirs to build.
 - Receivers are untrusted. Their responses are read for the status code and
   for the bounded, sanitised reason of §7, and for nothing else.
 

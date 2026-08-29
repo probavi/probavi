@@ -549,19 +549,110 @@ func TestNewResolution(t *testing.T) {
 	}
 }
 
-func TestSourceGuard(t *testing.T) {
-	guard := sourceGuard("/backups/orders")
-	for path, wantOK := range map[string]bool{
-		"/backups/orders":                true,
-		"/backups/orders/2026/full.dump": true,
-		"/backups/orders/../orders/x":    true,  // cleans to inside
-		"/backups/orders-evil/x":         false, // sibling prefix trick
-		"/backups/orders/../secrets":     false, // cleans to outside
-		"/etc/passwd":                    false,
+// guardTree builds a backup source with one escape route of every kind
+// beside the legitimate files, and returns the source root.
+func guardTree(t *testing.T) string {
+	t.Helper()
+	base := t.TempDir()
+	root := filepath.Join(base, "backups", "orders")
+	if err := os.MkdirAll(filepath.Join(root, "2026"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for _, p := range []string{
+		filepath.Join(root, "full.dump"),
+		filepath.Join(root, "2026", "full.dump"),
+		filepath.Join(base, "secrets"),
 	} {
-		if err := guard(path); (err == nil) != wantOK {
-			t.Errorf("guard(%q) = %v, want ok=%v", path, err, wantOK)
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", p, err)
 		}
+	}
+	for target, link := range map[string]string{
+		"/etc":                           filepath.Join(root, "etc-link"),
+		"../../secrets":                  filepath.Join(root, "escape-link"),
+		"full.dump":                      filepath.Join(root, "inside-link"),
+		filepath.Join(root, "full.dump"): filepath.Join(root, "abs-link"),
+	} {
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatalf("symlink %s: %v", link, err)
+		}
+	}
+	return root
+}
+
+// TestSourceGuard exercises containment against a real tree. The §4.2
+// guarantee is about the file the provider ends up opening, and a lexical
+// prefix test cannot see a symlink: it accepts <source>/etc-link/hostname
+// and the provider reads /etc/hostname.
+func TestSourceGuard(t *testing.T) {
+	root := guardTree(t)
+	guard := sourceGuard(root)
+	for name, tt := range map[string]struct {
+		path   string
+		wantOK bool
+	}{
+		"the source itself":             {root, true},
+		"a file beneath it":             {filepath.Join(root, "full.dump"), true},
+		"a nested file":                 {filepath.Join(root, "2026", "full.dump"), true},
+		"a path that cleans to inside":  {filepath.Join(root, "..", "orders", "full.dump"), true},
+		"a symlink staying inside":      {filepath.Join(root, "inside-link"), true},
+		"a symlink to a directory out":  {filepath.Join(root, "etc-link", "hostname"), false},
+		"a symlink to a file out":       {filepath.Join(root, "escape-link"), false},
+		"an absolute symlink":           {filepath.Join(root, "abs-link"), false},
+		"the sibling prefix trick":      {root + "-evil/x", false},
+		"a path that cleans to outside": {filepath.Join(root, "..", "secrets"), false},
+		"an unrelated path":             {"/etc/passwd", false},
+		"a file that does not exist":    {filepath.Join(root, "missing.dump"), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := guard(tt.path)
+			if (err == nil) != tt.wantOK {
+				t.Fatalf("guard(%s) = %q, %v; want ok=%v", tt.path, got, err, tt.wantOK)
+			}
+			if tt.wantOK && got != filepath.Clean(tt.path) {
+				t.Errorf("guard returned %q, want the cleaned request %q", got, filepath.Clean(tt.path))
+			}
+			if err != nil && strings.ContainsAny(err.Error(), "\"\n") {
+				t.Errorf("refusal %q must stay a single quote-free line: it crosses the protocol as a JSON string", err)
+			}
+		})
+	}
+}
+
+// TestSourceGuardAcceptsASymlinkedSource: the configured source may
+// itself be a symlink — /backups/latest -> /mnt/disk2/2026-08-29 is an
+// ordinary layout, and the operator chose it. Containment starts at what
+// that path resolves to; only symlinks found *inside* it are escapes.
+func TestSourceGuardAcceptsASymlinkedSource(t *testing.T) {
+	root := guardTree(t)
+	alias := filepath.Join(t.TempDir(), "latest")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	guard := sourceGuard(alias)
+	if _, err := guard(filepath.Join(alias, "full.dump")); err != nil {
+		t.Errorf("guard refused a file under a symlinked source: %v", err)
+	}
+	if _, err := guard(filepath.Join(alias, "etc-link", "hostname")); err == nil {
+		t.Error("guard accepted an escape from a symlinked source")
+	}
+}
+
+// TestSourceGuardRefusesAnUnusableSource covers a source that cannot
+// contain anything: nothing lives beneath a regular file, and the guard
+// must not fall back to the lexical answer for it.
+func TestSourceGuardRefusesAnUnusableSource(t *testing.T) {
+	root := guardTree(t)
+	file := filepath.Join(root, "full.dump")
+	guard := sourceGuard(file)
+	if _, err := guard(file); err != nil {
+		t.Errorf("guard refused the configured source itself: %v", err)
+	}
+	if _, err := guard(filepath.Join(file, "anything")); err == nil {
+		t.Error("guard accepted a path beneath a regular file")
+	}
+	if _, err := sourceGuard(filepath.Join(root, "nonexistent"))(filepath.Join(root, "nonexistent", "x")); err == nil {
+		t.Error("guard accepted a path beneath a source that does not exist")
 	}
 }
 
