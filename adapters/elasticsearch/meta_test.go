@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -266,5 +267,57 @@ func TestIndexVersionNewer(t *testing.T) {
 			t.Errorf("indexVersionNewer(%d, %d) = %v, want %v — the pre-check refuses on positive evidence only",
 				tc.snapshot, tc.engine, got, tc.want)
 		}
+	}
+}
+
+// zipOfEntries writes a zip of synthetic entries: the shape a crafted
+// archive takes, where each member costs the walk bookkeeping the
+// archive itself barely pays for.
+func zipOfEntries(t *testing.T, dest string, names []string, content []byte) string {
+	t.Helper()
+	f, err := os.Create(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	for _, name := range names {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []io.Closer{zw, f} {
+		if err := c.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dest
+}
+
+// TestInspectRepoZipRefusesUnboundedGenerations pins the retention
+// bound. This walk keeps directory entries rather than contents, so its
+// own cost per member is small — but it is unbounded without this, and a
+// backup file is attacker-controlled input. The sibling opensearch
+// adapter, whose tar walk must retain the bytes, carries the same bound
+// with a byte budget attached.
+func TestInspectRepoZipRefusesUnboundedGenerations(t *testing.T) {
+	names := make([]string, 0, keptMaxEntries+1)
+	for i := 0; i <= keptMaxEntries; i++ {
+		names = append(names, indexGenPrefix+strconv.Itoa(i))
+	}
+	path := zipOfEntries(t, filepath.Join(t.TempDir(), "repo.zip"), names, []byte("{}"))
+
+	census, verdict, ok := inspectRepoZip(path)
+	if verdict == nil || !ok {
+		t.Fatalf("inspectRepoZip = %+v, verdict %v, ok %v; want a refusal", census, verdict, ok)
+	}
+	if verdict.Code != "source_corrupt" {
+		t.Errorf("code = %s, want source_corrupt", verdict.Code)
+	}
+	if !strings.Contains(verdict.Message, indexGenPrefix) {
+		t.Errorf("message %q must name what there is too much of", verdict.Message)
 	}
 }

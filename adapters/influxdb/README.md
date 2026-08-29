@@ -38,6 +38,15 @@ An archive the host cannot walk still drills: the sandbox extraction is
 the authority, and the manifest is recovered from the unpacked tree so
 the census and the fences run on facts read from somewhere real.
 
+The walk itself is bounded, and that bound is a refusal rather than a
+silent skip. A tar entry is a 512-byte header that compresses to almost
+nothing, so a small archive can carry any number of manifest members,
+each read into memory at up to 8 MiB — an archive would otherwise
+decide how much memory the drill host spends. Past the bound the
+adapter answers `source_corrupt` and stops reading: an archive built
+that way is not an `influx backup` directory, and a drill killed for
+memory would leave no evidence record at all.
+
 ## No credential from the backup is ever needed
 
 The adapter initializes the fresh instance with fixed sandbox-local

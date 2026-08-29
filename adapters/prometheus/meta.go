@@ -203,6 +203,59 @@ func readBlockMeta(path string) (blockMeta, bool) {
 // bytes (measured).
 const metaMaxBytes = 1 << 20
 
+const (
+	// keptMaxBytes and keptMaxEntries bound what one archive walk holds
+	// on to across entries: one decoded block meta per meta.json, whose
+	// compaction parents are kept as raw JSON. A tar entry is a
+	// 512-byte header that compresses to almost nothing, so a small
+	// archive can carry any number of meta.json members, each read up to
+	// metaMaxBytes, and a backup file is attacker-controlled input
+	// (SECURITY.md). A TSDB snapshot holds one block directory per
+	// compaction unit — hundreds on a large instance, never this many.
+	keptMaxBytes   = 64 << 20
+	keptMaxEntries = 200_000
+)
+
+// metaFootprint is what one decoded block meta keeps: its ULID and the
+// compaction parent list, which stays raw because its shape has varied
+// across server versions.
+func metaFootprint(m blockMeta) int {
+	n := len(m.ULID)
+	for _, raw := range m.Compaction.Parents {
+		n += len(raw)
+	}
+	return n
+}
+
+// retention accounts for what a walk keeps rather than for what it
+// reads: an archive may hold any number of entries this pass ignores,
+// and refusing those would turn a large legitimate copy into a failed
+// drill.
+type retention struct {
+	entries int
+	bytes   int
+}
+
+// take accounts for one retained entry of n bytes and reports whether
+// the walk may keep it.
+func (r *retention) take(n int) bool {
+	r.entries++
+	r.bytes += n
+	return r.entries <= keptMaxEntries && r.bytes <= keptMaxBytes
+}
+
+// tooMuchKept is the verdict for an archive whose bookkeeping this walk
+// cannot bound. The listing is a bonus everywhere else, but an archive
+// built to exhaust the drill host's memory is positive evidence about
+// the source.
+func tooMuchKept() *protoError {
+	return protoErr("source_corrupt", false,
+		"the archive carries more block metadata than a snapshot holds — over %d meta.json members, "+
+			"or more than %d MiB of them. Reading on would cost the drill host memory an archive gets "+
+			"to choose, so the walk stops here",
+		keptMaxEntries, keptMaxBytes>>20)
+}
+
 func decodeBlockMeta(r io.Reader) (blockMeta, bool) {
 	meta := blockMeta{}
 	if err := json.NewDecoder(r).Decode(&meta); err != nil {
@@ -232,31 +285,31 @@ func plausibleEpochMs(ms int64) bool {
 // positive evidence, which the caller refuses on. Both the plain and the
 // gzip form are read (measured: backup jobs produce both, and the
 // in-sandbox busybox tar unpacks both).
-func listTarSnapshot(path string) (info snapshotInfo, live string, ok bool) {
+func listTarSnapshot(path string) (info snapshotInfo, live string, perr *protoError, ok bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return snapshotInfo{}, "", false
+		return snapshotInfo{}, "", nil, false
 	}
-	info, live, ok = walkTarFile(f)
+	info, live, perr, ok = walkTarFile(f)
 	if err := f.Close(); err != nil {
-		return snapshotInfo{}, "", false
+		return snapshotInfo{}, "", nil, false
 	}
-	return info, live, ok
+	return info, live, perr, ok
 }
 
-func walkTarFile(f *os.File) (info snapshotInfo, live string, ok bool) {
+func walkTarFile(f *os.File) (info snapshotInfo, live string, perr *protoError, ok bool) {
 	var r io.Reader = f
 	head := make([]byte, 2)
 	if _, err := io.ReadFull(f, head); err != nil {
-		return snapshotInfo{}, "", false
+		return snapshotInfo{}, "", nil, false
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return snapshotInfo{}, "", false
+		return snapshotInfo{}, "", nil, false
 	}
 	if head[0] == 0x1f && head[1] == 0x8b {
 		gz, err := gzip.NewReader(f)
 		if err != nil {
-			return snapshotInfo{}, "", false
+			return snapshotInfo{}, "", nil, false
 		}
 		r = gz
 	}
@@ -267,16 +320,17 @@ func walkTarFile(f *os.File) (info snapshotInfo, live string, ok bool) {
 // directories at its root or one wrapping directory above them
 // (measured: both layouts unpack and serve), so meta.json is expected at
 // depth two or three and the live markers at depth one or two.
-func walkTar(tr *tar.Reader) (info snapshotInfo, live string, ok bool) {
+func walkTar(tr *tar.Reader) (info snapshotInfo, live string, perr *protoError, ok bool) {
 	sawEntry := false
 	metas := []blockMeta{}
+	kept := retention{}
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			return snapshotInfo{}, "", false
+			return snapshotInfo{}, "", nil, false
 		}
 		sawEntry = true
 		segments := splitTarName(hdr.Name)
@@ -288,10 +342,13 @@ func walkTar(tr *tar.Reader) (info snapshotInfo, live string, ok bool) {
 			continue
 		}
 		if meta, metaOK := decodeBlockMeta(io.LimitReader(tr, metaMaxBytes)); metaOK {
+			if !kept.take(metaFootprint(meta)) {
+				return snapshotInfo{}, "", tooMuchKept(), true
+			}
 			metas = append(metas, meta)
 		}
 	}
-	return censusOf(metas), live, sawEntry
+	return censusOf(metas), live, nil, sawEntry
 }
 
 // splitTarName normalizes an entry name into path segments.

@@ -221,3 +221,4 @@ change changes the hash.
 | the engine lists no snapshots where the repository's files claim some | `source_corrupt` — the census |
 | failed shards or a cluster below green after the restore | `source_corrupt` — the verdict reads |
 | the restored node never became ready | `engine_not_ready`, or `restore_failed` with the node's own log line |
+| more `index-<gen>` members than a repository root carries | `source_corrupt` — the walk stops rather than growing with the archive |

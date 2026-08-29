@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -280,5 +281,57 @@ func TestVersionNewer(t *testing.T) {
 			t.Errorf("versionNewer(%q, %q) = %v, want %v — the pre-check refuses on positive evidence only",
 				tc.a, tc.b, got, tc.want)
 		}
+	}
+}
+
+// tarOfEntries writes a gzipped tar of synthetic entries: the shape a
+// crafted archive takes, where a 512-byte header compresses to nothing
+// and the walk's own bookkeeping is the cost.
+func tarOfEntries(t *testing.T, dest string, names []string, content []byte) string {
+	t.Helper()
+	f, err := os.Create(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gzw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gzw)
+	for _, name := range names {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(content))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []io.Closer{tw, gzw, f} {
+		if err := c.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dest
+}
+
+// TestInspectRepoTarRefusesUnboundedGenerations pins the retention
+// bound. Every index-<gen> member is read and kept until index.latest
+// says which one matters, so without a bound a small archive of many
+// members decides how much memory the drill host spends — measured at
+// 1.26 GiB resident from a 1.2 MB archive. The refusal is a verdict, not
+// a silent skip: no repository root carries these.
+func TestInspectRepoTarRefusesUnboundedGenerations(t *testing.T) {
+	names := make([]string, 0, keptMaxEntries+1)
+	for i := 0; i <= keptMaxEntries; i++ {
+		names = append(names, fmt.Sprintf("%s%d", indexGenPrefix, i))
+	}
+	path := tarOfEntries(t, filepath.Join(t.TempDir(), "repo.tar.gz"), names, []byte("{}"))
+
+	census, verdict, ok := inspectRepoTar(path)
+	if verdict == nil || !ok {
+		t.Fatalf("inspectRepoTar = %+v, verdict %v, ok %v; want a refusal", census, verdict, ok)
+	}
+	if verdict.Code != "source_corrupt" {
+		t.Errorf("code = %s, want source_corrupt", verdict.Code)
+	}
+	if !strings.Contains(verdict.Message, indexGenPrefix) {
+		t.Errorf("message %q must name what there is too much of", verdict.Message)
 	}
 }

@@ -464,3 +464,30 @@ func TestResolveTarPicksNewest(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveTarRefusesUnboundedManifests pins the retention bound. Each
+// .manifest member is read into memory at up to manifestMaxBytes and
+// kept until the walk can choose between them, so without a bound a
+// small archive decides how much memory the drill host spends — a
+// backup file is attacker-controlled input (SECURITY.md), and a drill
+// killed for memory leaves no evidence record, which is the severest
+// failure this project defines.
+func TestResolveTarRefusesUnboundedManifests(t *testing.T) {
+	body := strings.Repeat("a", manifestMaxBytes)
+	entries := make([]tarEntry, 0, keptMaxBytes/manifestMaxBytes+1)
+	for i := 0; i <= keptMaxBytes/manifestMaxBytes; i++ {
+		entries = append(entries, tarEntry{name: fmt.Sprintf("b%d%s", i, manifestSuffix), content: body})
+	}
+	path := buildTar(t, filepath.Join(t.TempDir(), "backup.tar.gz"), true, entries)
+
+	src, perr := resolveTar(path)
+	if perr == nil {
+		t.Fatalf("resolveTar = %+v, want a refusal", src)
+	}
+	if perr.Code != "source_corrupt" {
+		t.Errorf("code = %s, want source_corrupt", perr.Code)
+	}
+	if !strings.Contains(perr.Message, "memory") {
+		t.Errorf("message %q must say why the walk stopped", perr.Message)
+	}
+}

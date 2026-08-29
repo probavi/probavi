@@ -378,7 +378,7 @@ func TestListTarSnapshot(t *testing.T) {
 	t.Run("a plain archive with blocks at the root", func(t *testing.T) {
 		path := buildTar(t, filepath.Join(t.TempDir(), "snap.tar"), false,
 			snapshotTarEntries("", maxAug2026-60000, maxAug2026))
-		info, live, ok := listTarSnapshot(path)
+		info, live, _, ok := listTarSnapshot(path)
 		if !ok || live != "" || info.blocks != 2 || info.maxTimeMs != maxAug2026 {
 			t.Errorf("listTarSnapshot = %+v live=%q ok=%v", info, live, ok)
 		}
@@ -387,7 +387,7 @@ func TestListTarSnapshot(t *testing.T) {
 	t.Run("a gzip archive with one wrapping directory", func(t *testing.T) {
 		path := buildTar(t, filepath.Join(t.TempDir(), "snap.tar.gz"), true,
 			snapshotTarEntries("20260816T102848Z-abcd", maxAug2026))
-		info, live, ok := listTarSnapshot(path)
+		info, live, _, ok := listTarSnapshot(path)
 		if !ok || live != "" || info.blocks != 1 || info.maxTimeMs != maxAug2026 {
 			t.Errorf("listTarSnapshot = %+v live=%q ok=%v", info, live, ok)
 		}
@@ -399,7 +399,7 @@ func TestListTarSnapshot(t *testing.T) {
 			tarEntry{name: "wal/00000001", content: "wal segment"},
 			tarEntry{name: "lock", content: ""})
 		path := buildTar(t, filepath.Join(t.TempDir(), "datadir.tar"), false, entries)
-		_, live, ok := listTarSnapshot(path)
+		_, live, _, ok := listTarSnapshot(path)
 		if !ok || live == "" {
 			t.Errorf("live = %q ok=%v, want a named live marker", live, ok)
 		}
@@ -419,7 +419,7 @@ func TestListTarSnapshotSubtractsCompactionSources(t *testing.T) {
 				maxAug2026)},
 		tarEntry{name: "01COMPACTED/index", content: "index bytes"})
 	path := buildTar(t, filepath.Join(t.TempDir(), "window.tar"), false, entries)
-	info, live, ok := listTarSnapshot(path)
+	info, live, _, ok := listTarSnapshot(path)
 	if !ok || live != "" || info.blocks != 1 || info.sourcesSkipped != 1 || info.maxTimeMs != maxAug2026 {
 		t.Errorf("listTarSnapshot = %+v live=%q ok=%v, want 1 required block and 1 skipped source",
 			info, live, ok)
@@ -432,7 +432,7 @@ func TestListTarSnapshotEdgeCases(t *testing.T) {
 		if err := os.WriteFile(path, bytes.Repeat([]byte{0xA5}, 4096), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, ok := listTarSnapshot(path); ok {
+		if _, _, _, ok := listTarSnapshot(path); ok {
 			t.Error("random bytes walked as a tar")
 		}
 	})
@@ -440,7 +440,7 @@ func TestListTarSnapshotEdgeCases(t *testing.T) {
 	t.Run("a walkable archive without blocks counts zero", func(t *testing.T) {
 		path := buildTar(t, filepath.Join(t.TempDir(), "other.tar"), false,
 			[]tarEntry{{name: "README.md", content: "hello"}})
-		info, live, ok := listTarSnapshot(path)
+		info, live, _, ok := listTarSnapshot(path)
 		if !ok || live != "" || info.blocks != 0 {
 			t.Errorf("listTarSnapshot = %+v live=%q ok=%v, want zero blocks", info, live, ok)
 		}
@@ -455,5 +455,34 @@ func TestPlausibleEpochMs(t *testing.T) {
 	}
 	if !plausibleEpochMs(maxAug2026) {
 		t.Errorf("plausibleEpochMs(%d) = false", maxAug2026)
+	}
+}
+
+// TestListTarSnapshotRefusesUnboundedBlockMetadata pins the retention
+// bound. Every meta.json is decoded and kept — the compaction parent
+// list stays raw, because its shape has varied across server versions —
+// so without a bound a small archive decides how much memory the drill
+// host spends. A backup file is attacker-controlled input (SECURITY.md),
+// and a drill killed for memory leaves no evidence record.
+func TestListTarSnapshotRefusesUnboundedBlockMetadata(t *testing.T) {
+	// One parent whose raw JSON is nearly the whole read limit: what is
+	// retained per block, in one allocation rather than thousands.
+	meta := `{"ulid":"b","maxTime":1700000000000,"compaction":{"parents":[{"ulid":"` +
+		strings.Repeat("a", metaMaxBytes-128) + `"}]}}`
+	entries := make([]tarEntry, 0, keptMaxBytes/metaMaxBytes+2)
+	for i := 0; i <= keptMaxBytes/metaMaxBytes+1; i++ {
+		entries = append(entries, tarEntry{name: fmt.Sprintf("snap/b%d/meta.json", i), content: meta})
+	}
+	path := buildTar(t, filepath.Join(t.TempDir(), "snapshot.tar.gz"), true, entries)
+
+	_, _, perr, _ := listTarSnapshot(path)
+	if perr == nil {
+		t.Fatal("listTarSnapshot accepted an archive whose block metadata it cannot bound")
+	}
+	if perr.Code != "source_corrupt" {
+		t.Errorf("code = %s, want source_corrupt", perr.Code)
+	}
+	if !strings.Contains(perr.Message, "memory") {
+		t.Errorf("message %q must say why the walk stopped", perr.Message)
 	}
 }

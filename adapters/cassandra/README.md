@@ -232,3 +232,4 @@ error.
 | reading a restored table fails | `source_corrupt`, carrying the engine's refusal |
 | a restored table reads no rows while its snapshot declares a TTL | `restore_failed`, naming the table and the TTL |
 | the node never became ready | `engine_not_ready`, or `restore_failed` with the node's own log line |
+| more table files or metadata than a collected snapshot holds | `source_corrupt` — the archive walk stops rather than growing with the archive |

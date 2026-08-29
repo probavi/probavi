@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "prometheus"
-	adapterVersion = "0.4.0"
+	adapterVersion = "0.5.0"
 
 	// workDirName is created under the provider's scratch directory — the
 	// one directory the provider guarantees writable (the official images

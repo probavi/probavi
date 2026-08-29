@@ -67,7 +67,44 @@ const (
 	indexGenPrefix  = "index-"
 	// metaMaxBytes bounds an index-<gen> read; real ones are small.
 	metaMaxBytes = 8 << 20
+	// keptMaxBytes and keptMaxEntries bound what one archive walk holds
+	// on to across entries. A tar entry is a 512-byte header that
+	// compresses to almost nothing, so a small archive can carry
+	// thousands of index-<gen> members and each is read up to
+	// metaMaxBytes: measured at 1.26 GiB resident from a 1.2 MB archive
+	// before these existed, and a backup file is attacker-controlled
+	// input (SECURITY.md). A repository root names one current
+	// generation, so nothing real comes close to either bound.
+	keptMaxBytes   = 64 << 20
+	keptMaxEntries = 4096
 )
+
+// retention accounts for what a walk keeps rather than for what it
+// reads: an archive may hold any number of entries this pass ignores,
+// and refusing those would turn a large legitimate copy into a failed
+// drill.
+type retention struct {
+	entries int
+	bytes   int
+}
+
+// take accounts for one retained entry of n bytes and reports whether
+// the walk may keep it.
+func (r *retention) take(n int) bool {
+	r.entries++
+	r.bytes += n
+	return r.entries <= keptMaxEntries && r.bytes <= keptMaxBytes
+}
+
+// tooMuchKept is the refusal both archive walks share.
+func tooMuchKept() *protoError {
+	return protoErr("source_corrupt", false,
+		"the archive carries more %s members than a snapshot repository holds — over %d of them, "+
+			"or more than %d MiB in total. A repository root names one current generation, so this "+
+			"is not a copy of one, and reading on would cost the drill host memory an archive gets "+
+			"to choose",
+		indexGenPrefix, keptMaxEntries, keptMaxBytes>>20)
+}
 
 // liveMarkers are directory entries only an engine's live data directory
 // contains — an fs repository holds generations, blobs and metadata,
@@ -183,6 +220,7 @@ type tarScan struct {
 	sawEntry    bool
 	generations map[string][]byte
 	latest      []byte
+	kept        retention
 }
 
 // walkTar scans the archive: the repository sits at the root or under
@@ -252,6 +290,9 @@ func (s *tarScan) takeEntry(tr *tar.Reader, hdr *tar.Header) (*protoError, bool)
 		raw, err := io.ReadAll(io.LimitReader(tr, metaMaxBytes))
 		if err != nil {
 			return nil, false
+		}
+		if !s.kept.take(len(base) + len(raw)) {
+			return tooMuchKept(), true
 		}
 		s.generations[base] = raw
 	}

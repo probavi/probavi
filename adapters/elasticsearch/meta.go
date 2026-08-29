@@ -71,6 +71,16 @@ const (
 	indexGenPrefix  = "index-"
 	// metaMaxBytes bounds an index-<gen> read; real ones are small.
 	metaMaxBytes = 8 << 20
+	// keptMaxEntries bounds how many index-<gen> members one walk holds
+	// on to. This walk keeps directory entries rather than contents —
+	// the generation itself is read once, after index.latest names it —
+	// so the archive's own central directory, which archive/zip parses
+	// before this code runs, is the larger cost. The bound is here so
+	// that a backup file, which SECURITY.md names as attacker-controlled
+	// input, cannot buy unbounded bookkeeping on top of it; the sibling
+	// opensearch adapter, whose tar walk must retain contents, carries
+	// the same bound with bytes attached.
+	keptMaxEntries = 4096
 )
 
 // liveMarkers are directory entries only an engine's live data directory
@@ -167,6 +177,7 @@ type zipScan struct {
 	sawEntry    bool
 	generations map[string]*zip.File
 	latest      *zip.File
+	kept        int
 }
 
 // walkZip scans the archive's directory: the repository sits at the root
@@ -227,6 +238,14 @@ func (s *zipScan) takeEntry(f *zip.File) *protoError {
 	case base == indexLatestName:
 		s.latest = f
 	case strings.HasPrefix(base, indexGenPrefix):
+		s.kept++
+		if s.kept > keptMaxEntries {
+			return protoErr("source_corrupt", false,
+				"the archive carries more %s members than a snapshot repository holds — over %d of "+
+					"them. A repository root names one current generation, so this is not a copy of "+
+					"one, and reading on would cost the drill host memory an archive gets to choose",
+				indexGenPrefix, keptMaxEntries)
+		}
 		s.generations[base] = f
 	}
 	return nil

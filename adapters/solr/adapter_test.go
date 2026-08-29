@@ -691,3 +691,36 @@ func TestTarKindRefusesADirectory(t *testing.T) {
 		}
 	}
 }
+
+// TestScanBackupTarRefusesUnboundedNames pins the retention bound. The
+// fence keeps a name per collection it meets and per configuration file
+// carrying the expiration class, and a tar entry is a 512-byte header
+// that compresses to almost nothing — so without a bound a small archive
+// decides how much memory the drill host spends. A backup file is
+// attacker-controlled input (SECURITY.md). The bound is tight because
+// what the fence retains is inherently tiny: this adapter restores one
+// collection.
+func TestScanBackupTarRefusesUnboundedNames(t *testing.T) {
+	buf := &bytes.Buffer{}
+	tw := tar.NewWriter(buf)
+	for i := 0; i <= keptMaxEntries; i++ {
+		name := fmt.Sprintf("c%d/backup_x.properties", i)
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	collection, expiring, perr := scanBackupTar(bytes.NewReader(buf.Bytes()), "backup.tar")
+	if perr == nil {
+		t.Fatalf("scanBackupTar = %q, expiring %v; want a refusal", collection, expiring)
+	}
+	if perr.Code != "source_corrupt" {
+		t.Errorf("code = %s, want source_corrupt", perr.Code)
+	}
+	if !strings.Contains(perr.Message, "memory") {
+		t.Errorf("message %q must say why the walk stopped", perr.Message)
+	}
+}

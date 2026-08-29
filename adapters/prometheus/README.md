@@ -207,3 +207,4 @@ change changes the hash.
 | every block named as another present block's compaction source | `source_corrupt` — cyclic metadata |
 | no series at the instant the backup claims | `source_corrupt` — the probe |
 | the restored server never became ready | `engine_not_ready`, or `restore_failed` with the server's own log line |
+| more block metadata than a snapshot holds | `source_corrupt` — the archive walk stops rather than growing with the archive |

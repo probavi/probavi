@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "influxdb"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 
 	// Where the restored instance serves inside the sandbox. No TLS and
 	// no operator credentials: a Probavi sandbox is zero-ingress

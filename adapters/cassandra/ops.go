@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "cassandra"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 
 	// workDirName is created under the provider's scratch directory.
 	workDirName = "probavi-cassandra"
