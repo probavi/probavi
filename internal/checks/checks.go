@@ -4,12 +4,16 @@
 // are per-check; only infrastructure failures abort a run.
 //
 // Details obey the evidence redaction rules (evidence-schema.md §8):
-// aggregates (counts, ages, latencies) yes, query result values no.
+// aggregates (counts, ages, latencies) yes, query result values no, and
+// no engine diagnostic text — a failed check records that the runner
+// failed and with what exit code, while the engine's own message goes to
+// the drill host's log (runner.go).
 package checks
 
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -53,6 +57,9 @@ type Deps struct {
 	Target      Target
 	// Now is injectable for freshness tests; nil means time.Now.
 	Now func() time.Time
+	// Logger receives what a check must not record: the engine's own
+	// diagnostics on a failed runner. Nil discards them.
+	Logger *slog.Logger
 }
 
 // Result is one executed check, ready to be mapped into an evidence record.
@@ -72,6 +79,9 @@ type Result struct {
 func Run(ctx context.Context, list []config.Check, deps Deps) ([]Result, error) {
 	if deps.Now == nil {
 		deps.Now = time.Now
+	}
+	if deps.Logger == nil {
+		deps.Logger = slog.New(slog.DiscardHandler)
 	}
 	results := make([]Result, 0, len(list))
 	for i := range list {
@@ -143,7 +153,7 @@ func runTableExists(ctx context.Context, deps *Deps, table string) (bool, string
 		return false, "", qerr
 	}
 	if !out.succeeded {
-		return false, "table is not queryable: " + out.errLine, nil
+		return false, "table is not queryable: " + runnerFailure(out), nil
 	}
 	return true, "table exists", nil
 }
@@ -158,7 +168,7 @@ func runRowCount(ctx context.Context, deps *Deps, c *config.Check) (bool, string
 		return false, "", qerr
 	}
 	if !out.succeeded {
-		return false, "count query failed: " + out.errLine, nil
+		return false, "count query failed: " + runnerFailure(out), nil
 	}
 	n, perr := strconv.ParseInt(out.value, 10, 64)
 	if perr != nil {
@@ -182,7 +192,7 @@ func runFreshness(ctx context.Context, deps *Deps, c *config.Check) (bool, strin
 		return false, "", qerr
 	}
 	if !out.succeeded {
-		return false, "freshness query failed: " + out.errLine, nil
+		return false, "freshness query failed: " + runnerFailure(out), nil
 	}
 	if out.value == "" {
 		return false, "table has no rows or only NULL timestamps", nil
@@ -206,7 +216,7 @@ func runSQL(ctx context.Context, deps *Deps, sql, expect string) (bool, string, 
 		return false, "", qerr
 	}
 	if !out.succeeded {
-		return false, "query failed: " + out.errLine, nil
+		return false, "query failed: " + runnerFailure(out), nil
 	}
 	// Redaction: never embed the returned value — a custom query may
 	// select anything; the check name identifies what mismatched.
@@ -214,6 +224,13 @@ func runSQL(ctx context.Context, deps *Deps, sql, expect string) (bool, string, 
 		return false, "query returned a different value than expected", nil
 	}
 	return true, "matched expectation", nil
+}
+
+// runnerFailure is what a failed check may say about the runner: that it
+// failed, and with which of its own exit codes. The engine's message is
+// not here by design — see runner.go and evidence-schema.md §8.
+func runnerFailure(out *queryResult) string {
+	return fmt.Sprintf("sql_runner exited %d", out.exitCode)
 }
 
 func boundsText(minBound, maxBound *int64) string {
@@ -245,10 +262,10 @@ func quoteIdent(name string) (string, error) {
 }
 
 // truncateDetail keeps details inside the evidence limit. It delegates to
-// the evidence package rather than slicing: details carry engine stderr,
-// which is routinely non-ASCII, and a cut inside a multi-byte rune
-// produces invalid UTF-8 that the record layer rejects — turning a
-// completed drill into one with no evidence at all.
+// the evidence package rather than slicing: the service_healthy detail
+// comes from the adapter and may be any UTF-8, and a cut inside a
+// multi-byte rune produces invalid UTF-8 that the record layer rejects —
+// turning a completed drill into one with no evidence at all.
 func truncateDetail(s string) string {
 	return evidence.TruncateLine(s, evidence.MaxDetailBytes)
 }

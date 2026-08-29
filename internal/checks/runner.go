@@ -10,12 +10,13 @@ import (
 )
 
 // queryResult is one sql_runner execution: succeeded reflects the runner's
-// exit code, value the trimmed stdout, errLine a sanitized first stderr
-// line for failed queries.
+// exit code, value the trimmed stdout, exitCode the runner's own code when
+// it failed. The runner's stderr is deliberately not here — it reaches the
+// drill host's log and nothing else (logRunnerFailure).
 type queryResult struct {
 	succeeded bool
 	value     string
-	errLine   string
+	exitCode  int
 }
 
 // query renders the sql_runner template and executes it in the sandbox.
@@ -29,7 +30,8 @@ func query(ctx context.Context, deps *Deps, sql string) (*queryResult, error) {
 		return nil, fmt.Errorf("sql_runner exec: %w", err)
 	}
 	if res.ExitCode != 0 {
-		return &queryResult{succeeded: false, errLine: sanitizeLine(res.Stderr)}, nil
+		logRunnerFailure(deps, argv[0], res)
+		return &queryResult{succeeded: false, exitCode: res.ExitCode}, nil
 	}
 	return &queryResult{succeeded: true, value: strings.TrimSpace(string(res.Stdout))}, nil
 }
@@ -63,14 +65,36 @@ func renderRunner(r Runner, t Target, sql string) ([]string, map[string]string, 
 	return argv, env, nil
 }
 
-// sanitizeLine reduces runner stderr to a single quote-free line that is
-// safe for evidence details: engine error messages, never row data.
-func sanitizeLine(stderr []byte) string {
-	s := strings.TrimSpace(string(stderr))
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		s = s[:i]
+// logRunnerFailure puts the engine's own diagnostic where an operator can
+// read it — the drill host's log — and nowhere else. It is never a check
+// detail: details are signed into the evidence record, and an engine
+// routinely quotes row data in its error text (PostgreSQL answers a
+// violated unique constraint with `DETAIL: Key (email)=(...) already
+// exists.`), which evidence-schema.md §8 forbids a record from carrying.
+// runSQL has always refused to record the returned value for this reason;
+// the diagnostic was the way around it.
+//
+// The whole diagnostic is logged rather than its first line: an engine
+// puts the actionable part below the summary, and the sandbox has already
+// capped what it captured — stderr_truncated says whether it did. The one
+// secret this package holds is masked first, because an engine that
+// echoes its connection settings back must not put a credential in a log
+// either (AGENTS.md §3.3).
+func logRunnerFailure(deps *Deps, runner string, res *sandbox.ExecResult) {
+	deps.Logger.Warn("sql_runner exited non-zero",
+		"runner", runner,
+		"exit_code", res.ExitCode,
+		"stderr", mask(strings.TrimSpace(string(res.Stderr)), deps.Target.Password),
+		"stderr_truncated", res.Truncated)
+}
+
+// mask removes the ephemeral sandbox password wherever an engine echoed it
+// back into its diagnostic.
+func mask(s, secret string) string {
+	if secret == "" {
+		return s
 	}
-	return strings.ReplaceAll(s, `"`, "'")
+	return strings.ReplaceAll(s, secret, "[redacted]")
 }
 
 // timestampFormats covers the textual forms engines commonly print for

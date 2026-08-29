@@ -13,6 +13,30 @@ always called out explicitly.
 
 ### Security
 
+- **A failed check recorded the engine's own error message in the signed
+  evidence record.** The core took the first line of the sql_runner's
+  stderr and put it in the check's `detail`, which is signed into the
+  record. Engines quote row data in error text as a matter of course —
+  PostgreSQL answers a violated unique constraint with `DETAIL: Key
+  (email)=(…) already exists.` — so a record meant to be handed to an
+  auditor as it stands could carry a value out of the restored database.
+  `docs/evidence-schema.md` §8 forbade both "result rows or any per-row
+  data" and "adapter stderr content"; the everyday case sat between the
+  two, and `runSQL` had already refused to record the returned *value* for
+  exactly this reason.
+
+  A failed check now records that its runner failed and with which exit
+  code — `count query failed: sql_runner exited 1` — and the engine's
+  message goes to the drill host's log, where an operator debugs from.
+  The whole diagnostic is logged rather than its first line, because an
+  engine puts the actionable part below the summary, and the ephemeral
+  sandbox password is masked out of it first: a diagnostic that echoes a
+  connection setting must not put a credential in a log either. §8 now
+  names engine diagnostics explicitly.
+
+  No schema change: `checks[].detail` is the same field with the same
+  limits, carrying less. Records already written keep whatever they were
+  given — the log is append-only, and nothing rewrites them.
 - **A crafted backup archive could exhaust the drill host's memory.** The
   adapters that read what an archive states about itself kept one entry per
   distinct name with no bound on how many. A tar entry is a 512-byte header

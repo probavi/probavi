@@ -333,7 +333,8 @@ func (d *Drill) checkDeps(probe *adapter.ProbeResult, provRes *adapter.Provision
 			Database: provRes.Connection.Database,
 			Password: d.resolvePassword(provRes.Connection.PasswordEnv),
 		},
-		Now: d.Now,
+		Now:    d.Now,
+		Logger: d.Logger,
 	}
 }
 
