@@ -81,3 +81,7 @@ cover.out
 .idea/
 .vscode/
 .DS_Store
+
+# qdrant adapter binary
+/qdrant
+/adapters/*/qdrant

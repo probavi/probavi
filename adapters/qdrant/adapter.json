@@ -1,0 +1,30 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The images below are the official Qdrant ones; the sandbox needs no wrapper, because they already carry bash, which is the only HTTP client this adapter has (the image has no curl, wget, nc or python3 — measured 2026-08-30). The baseline is 1.19, the current line, with 1.18 beside it. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "qdrant",
+  "name": "Qdrant",
+  "status": "experimental",
+  "since": null,
+  "engine_name": "Qdrant",
+  "conformance_verified": true,
+  "docs": "adapters/qdrant/README.md",
+  "versions_checked": "2026-08-30",
+  "verified": [
+    {
+      "engine_version": "1.19.0",
+      "image": "qdrant/qdrant:v1.19.0",
+      "supported_until": null,
+      "baseline": true
+    },
+    {
+      "engine_version": "1.18.1",
+      "image": "qdrant/qdrant:v1.18.1",
+      "supported_until": null
+    }
+  ],
+  "sources": {
+    "qdrant_snapshot": "One collection snapshot, from `POST /collections/<c>/snapshots`",
+    "qdrant_snapshot_dir": "A directory of them; the newest by file time is restored (no Qdrant snapshot records when it was taken)",
+    "qdrant_full_snapshot": "One whole-storage snapshot, from `POST /snapshots`",
+    "qdrant_full_snapshot_dir": "A directory of them; the newest by file time is restored"
+  }
+}
