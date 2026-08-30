@@ -123,7 +123,7 @@
       "id": "couchdb",
       "name": "CouchDB",
       "status": "experimental",
-      "since": null,
+      "since": "0.23.0",
       "adapter_version": "0.1.0",
       "engine": {
         "id": "couchdb",

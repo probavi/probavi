@@ -3,7 +3,7 @@
   "id": "couchdb",
   "name": "CouchDB",
   "status": "experimental",
-  "since": null,
+  "since": "0.23.0",
   "engine_name": "Apache CouchDB",
   "conformance_verified": true,
   "docs": "adapters/couchdb/README.md",

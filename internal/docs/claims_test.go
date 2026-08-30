@@ -97,3 +97,49 @@ func TestReadmeDoesNotDeferShippedCapabilities(t *testing.T) {
 		}
 	}
 }
+
+// adapterLists are the hand-written enumerations of what ships. A reader
+// downloading binaries or setting USE flags takes the set from these
+// sentences, and each is bounded by the prose around it so that a
+// rewording fails loudly rather than silently narrowing the claim.
+var adapterLists = []struct {
+	doc          string
+	after, until string
+}{
+	{sourceDoc, "Adapters ship for ", ". Both binaries must sit"},
+	{"docs/packaging.md", "Adapters are USE flags\n(", ") rather than separate packages"},
+}
+
+// TestAdapterListsNameEveryAdapter closes the gap
+// TestReadmeNamesEveryShippedCapability cannot see. That gate reads the
+// whole document, and the generated engine table names every adapter — so
+// the README passed it while the download list a few lines below was
+// missing four adapters that had shipped in the three preceding releases.
+// The same list appears in the packaging doc as Gentoo USE flags, and had
+// gone stale in the same way. Someone installing from either one gets the
+// set from the sentence, not from the table.
+func TestAdapterListsNameEveryAdapter(t *testing.T) {
+	m := readManifest(t)
+	for _, l := range adapterLists {
+		t.Run(l.doc, func(t *testing.T) {
+			body := read(t, l.doc)
+			start := strings.Index(body, l.after)
+			if start < 0 {
+				t.Fatalf("%s no longer contains %q — the list this gate reads has moved, "+
+					"so re-anchor it rather than deleting the gate", l.doc, l.after)
+			}
+			start += len(l.after)
+			end := strings.Index(body[start:], l.until)
+			if end < 0 {
+				t.Fatalf("%s: %q is no longer followed by %q", l.doc, l.after, l.until)
+			}
+			list := body[start : start+end]
+			for _, a := range m.Adapters {
+				if !strings.Contains(list, "`"+a.ID+"`") {
+					t.Errorf("%s enumerates the adapters that ship and omits %s: a reader "+
+						"following that sentence never installs it", l.doc, a.ID)
+				}
+			}
+		})
+	}
+}
