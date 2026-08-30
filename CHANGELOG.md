@@ -11,6 +11,8 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-08-30
+
 ### Added
 
 - **CouchDB is the twenty-third engine** (`adapters/couchdb` 0.1.0), rank 58
@@ -3391,7 +3393,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/probavi/probavi/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/probavi/probavi/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/probavi/probavi/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/probavi/probavi/compare/v0.19.0...v0.20.0
