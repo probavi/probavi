@@ -684,6 +684,10 @@
         {
           "engine_version": "2.29.1-pg17",
           "image": "timescale/timescaledb:2.29.1-pg17"
+        },
+        {
+          "engine_version": "17-3.5",
+          "image": "postgis/postgis:17-3.5"
         }
       ],
       "sources": [

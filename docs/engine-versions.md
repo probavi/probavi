@@ -111,8 +111,8 @@ manifest change is already the row below.
 The narrowing has **one dimension, and only one**: which adapters run,
 never which of their versions. A change to an adapter can break any
 engine version that adapter claims, and a variant image — a
-`timescale/timescaledb`, a `pgvector/pgvector`, a `percona/percona-server`
-— cannot be exercised by the baseline at all, which §1 already requires
+`timescale/timescaledb`, a `pgvector/pgvector`, a `postgis/postgis`, a
+`percona/percona-server` — cannot be exercised by the baseline at all, which §1 already requires
 of every variant entry. Two measured reminders of what version narrowing
 would hide: the valkey append-only work failed on 9.0 and 9.1 alone
 (`valkey-check-aof` misreads the `VALKEY`-magic base a 9.x rewrite

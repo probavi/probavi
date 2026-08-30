@@ -448,3 +448,52 @@ an operator should know:
   rebuilds HNSW/IVFFlat indexes from scratch, and on real datasets that
   rebuild can dominate `restore_seconds` — expect the RTO trend of a
   vector-heavy drill to track index build time, not just data volume.
+
+## PostGIS
+
+The `verified` list carries a PostGIS entry (`postgis/postgis:17-3.5` —
+PostgreSQL 17 with PostGIS 3.5 bundled), and its matrix job exercises
+what makes the variant a variant: the suite seeds a `geometry(Point,
+4326)` column under a GiST index, dumps it, restores it through the
+drill, and answers a bounding-box query, a `ST_DWithin` distance query
+and an index-definition query through the declared runner — then reads
+the query plan to prove the restored index is one the planner will
+actually use, because a present-but-unusable index is a slower recovery
+than the backup promised.
+
+No source kind of its own is needed, and that is a finding rather than an
+omission: `pg_dump` records `CREATE EXTENSION IF NOT EXISTS postgis WITH
+SCHEMA public`, so the `pgdump` kinds restore a spatial database
+unchanged. The entry is still load-bearing — the same dump against a
+plain `postgres` image fails with `extension "postgis" is not
+available` — which is why the claim is exercised rather than asserted.
+
+Four things an operator should know, all measured on 3.5.2:
+
+- **The extension comes from the image, not the backup**, exactly as with
+  pgvector: `pg_dump` records `CREATE EXTENSION` without a version, so
+  the restored database gets whatever the sandbox image ships. Keep the
+  sandbox image's PostGIS at least as new as production's.
+- **Custom spatial reference systems travel; the stock ones do not.**
+  PostGIS registers `spatial_ref_sys` with a filter, so its roughly eight
+  and a half thousand built-in rows stay out of a dump and come from the
+  extension on the other side, while an SRID the operator added is
+  dumped and restored. A drill therefore proves the operator's own
+  projections came back, and there is no duplicate-key collision to
+  work around.
+- **A dump that keeps PostGIS in a schema of its own does not restore
+  into this image's default database.** The image installs the extension
+  into `postgres` in `public` at first boot, so a dump saying `CREATE
+  EXTENSION IF NOT EXISTS postgis WITH SCHEMA gis` finds the extension
+  already present, skips the statement — `IF NOT EXISTS` does not
+  reconcile the schema — and every `gis.geometry` reference then fails.
+  The drill fails loudly (`restore_failed`, nothing restored), never as a
+  green. The same dump restores cleanly into a database that does not
+  already carry the extension.
+- **`postgis_topology` and `postgis_tiger_geocoder` collide the same
+  way, and more easily.** They live in the `topology`, `tiger` and
+  `tiger_data` schemas, which `pg_dump` emits as plain `CREATE SCHEMA` —
+  a statement with no `IF NOT EXISTS` — while this image has already
+  created all three. A dump from a database carrying either extension
+  therefore stops at `schema "tiger" already exists`. Drilling one needs
+  a sandbox image that does not pre-install them.

@@ -456,10 +456,30 @@ func TestPgBackRestPITREndToEnd(t *testing.T) {
 // there would create the extension too — and the timescale fence would
 // rightly refuse it. A plain fixture must state only what its test
 // claims; a plain image makes this a no-op.
+//
+// The postgis image needs more than a drop of its own extension, and the
+// reason is worth stating because it is also what an operator meets. It
+// installs postgis, postgis_topology and postgis_tiger_geocoder, and the
+// last two live in schemas of their own — `topology`, `tiger`,
+// `tiger_data`. pg_dump emits those as plain `CREATE SCHEMA`, which has
+// no IF NOT EXISTS, so a dump taken from such a database does not restore
+// into another instance of the same image: `schema "tiger" already
+// exists`, and the restore fails (measured). Dropping the family here
+// leaves a database that states only what a test put in it. The order is
+// the dependency order; fuzzystrmatch is the tiger geocoder's.
 func dropPreinstalledExtensions(t *testing.T, ctx context.Context, seed *docker.Sandbox) {
 	t.Helper()
 	mustExec(t, ctx, seed, "psql", "-h", "127.0.0.1", "-U", "postgres",
-		"-v", "ON_ERROR_STOP=1", "-c", "DROP EXTENSION IF EXISTS timescaledb")
+		"-v", "ON_ERROR_STOP=1", "-c", strings.Join([]string{
+			"DROP EXTENSION IF EXISTS timescaledb",
+			"DROP EXTENSION IF EXISTS postgis_tiger_geocoder",
+			"DROP EXTENSION IF EXISTS postgis_topology",
+			"DROP EXTENSION IF EXISTS postgis",
+			"DROP EXTENSION IF EXISTS fuzzystrmatch",
+			"DROP SCHEMA IF EXISTS tiger CASCADE",
+			"DROP SCHEMA IF EXISTS tiger_data CASCADE",
+			"DROP SCHEMA IF EXISTS topology CASCADE",
+		}, "; "))
 }
 
 func buildPgBackRestImage(t *testing.T, ctx context.Context) string {
@@ -995,6 +1015,151 @@ func assertRunnerRow(t *testing.T, ctx context.Context, sbx *docker.Sandbox,
 	if got := strings.TrimSpace(string(out.Stdout)); out.ExitCode != 0 || got != want {
 		t.Fatalf("check %q = %q (exit %d, stderr %s), want %q", sql, got, out.ExitCode, out.Stderr, want)
 	}
+}
+
+// TestPostGISRestoreDrill earns the manifest's postgis entry the way the
+// pgvector and timescaledb ones are earned: listed means exercised, and
+// for a variant image the exercise must cover what makes it a variant.
+// Restoring an ordinary table on the postgis image would say nothing
+// about spatial data, so the fixture is a geometry column under a GiST
+// index, and the checks go through the probe-declared runner.
+//
+// No source kind of its own, deliberately, and that is the finding rather
+// than an omission: pg_dump records `CREATE EXTENSION IF NOT EXISTS
+// postgis WITH SCHEMA public`, so the existing pgdump kinds restore a
+// spatial database unchanged (measured). The entry is still load-bearing
+// — the same dump against a plain postgres image fails with `extension
+// "postgis" is not available` — which is exactly why it is exercised here
+// rather than asserted in a document.
+//
+// The fixture is two thousand rows on purpose. The five named points are
+// what the spatial queries select; the filler sits a hemisphere away so
+// the planner reaches for the GiST index unaided, which is the property a
+// restored index has to have and a merely present one need not.
+func TestPostGISRestoreDrill(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-postgres"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	provider := docker.New(nil)
+	params := map[string]string{"image": verifiedImage(t), "env.POSTGRES_HOST_AUTH_METHOD": "trust",
+		"memory": engineMemoryLimit}
+
+	fixture := filepath.Join(t.TempDir(), "spatial.dump")
+	if !makePostGISFixture(t, ctx, provider, params, fixture) {
+		t.Skip("image does not provide the postgis extension; the postgis matrix job exercises this test")
+	}
+
+	sbx, err := provider.Create(ctx, params)
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("postgres", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "pgdump", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	assertRunnerRow(t, ctx, sbx, probe, res, "SELECT count(*) FROM places", "2000")
+	// A bounding-box query and a distance query: the first is what the
+	// GiST index answers, the second is computed geography rather than
+	// stored geometry, so together they prove the extension is doing work
+	// and not merely present.
+	assertRunnerRow(t, ctx, sbx, probe, res,
+		"SELECT count(*) FROM places WHERE geom && ST_MakeEnvelope(16, 45, 23, 49, 4326)", "5")
+	assertRunnerRow(t, ctx, sbx, probe, res,
+		"SELECT count(*) FROM places WHERE ST_DWithin(geom::geography, "+
+			"ST_SetSRID(ST_MakePoint(19.0402, 47.4979), 4326)::geography, 60000)", "1")
+	assertRunnerRow(t, ctx, sbx, probe, res,
+		"SELECT count(*) FROM pg_indexes WHERE indexname = 'places_geom_gix' AND indexdef LIKE '%USING gist%'", "1")
+	// spatial_ref_sys travels selectively: postgis registers it with a
+	// filter, so the extension's own eight and a half thousand rows stay
+	// out of the dump and only what the operator added comes back. A
+	// restored drill that lost a custom projection would answer every
+	// query above and still be missing what the operator declared.
+	assertRunnerRow(t, ctx, sbx, probe, res,
+		"SELECT count(*) FROM spatial_ref_sys WHERE srid = 990001 AND auth_name = 'PROBAVI'", "1")
+
+	// Present is not the same as usable: a restored GiST index the planner
+	// will not touch is a slower recovery than the backup promised, and
+	// nothing in the row counts above would notice.
+	plan, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{
+		"psql", "-h", "127.0.0.1", "-U", "postgres", "-tA", "-c",
+		"EXPLAIN (FORMAT JSON) SELECT count(*) FROM places WHERE geom && ST_MakeEnvelope(16, 45, 23, 49, 4326)"}})
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	if plan.ExitCode != 0 || !strings.Contains(string(plan.Stdout), "places_geom_gix") {
+		t.Errorf("the planner did not reach for the restored GiST index (exit %d): %s", plan.ExitCode, plan.Stdout)
+	}
+}
+
+// makePostGISFixture seeds a spatial database in a throwaway sandbox and
+// extracts a pg_dump of it. It reports false when the image carries no
+// postgis, which is how this test skips on the plain matrix jobs.
+func makePostGISFixture(t *testing.T, ctx context.Context, provider *docker.Provider,
+	params map[string]string, dest string) bool {
+	t.Helper()
+	seed, err := provider.Create(ctx, params)
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+	awaitReady(t, ctx, seed)
+	dropPreinstalledExtensions(t, ctx, seed)
+
+	avail, err := seed.Exec(ctx, sandbox.ExecRequest{Argv: []string{
+		"psql", "-h", "127.0.0.1", "-U", "postgres", "-tA", "-c",
+		"SELECT count(*) FROM pg_available_extensions WHERE name = 'postgis'"}})
+	if err != nil {
+		t.Fatalf("probe extension: %v", err)
+	}
+	if avail.ExitCode != 0 || strings.TrimSpace(string(avail.Stdout)) != "1" {
+		return false
+	}
+
+	// The seed creates the extension itself rather than inheriting the
+	// image's: an operator's database is one where somebody ran CREATE
+	// EXTENSION, and that is the dump this drill has to restore.
+	seedSQL := `CREATE EXTENSION postgis;
+CREATE TABLE places (id bigserial PRIMARY KEY, name text NOT NULL, geom geometry(Point, 4326) NOT NULL);
+INSERT INTO places (name, geom) VALUES
+  ('Budapest', ST_SetSRID(ST_MakePoint(19.0402, 47.4979), 4326)),
+  ('Debrecen', ST_SetSRID(ST_MakePoint(21.6273, 47.5316), 4326)),
+  ('Szeged',   ST_SetSRID(ST_MakePoint(20.1414, 46.2530), 4326)),
+  ('Pecs',     ST_SetSRID(ST_MakePoint(18.2325, 46.0727), 4326)),
+  ('Gyor',     ST_SetSRID(ST_MakePoint(17.6504, 47.6875), 4326));
+INSERT INTO places (name, geom)
+  SELECT 'filler-'||g, ST_SetSRID(ST_MakePoint(-60.0 + (g % 100) * 0.05, -40.0 + (g / 100) * 0.05), 4326)
+  FROM generate_series(1, 1995) g;
+CREATE INDEX places_geom_gix ON places USING GIST (geom);
+INSERT INTO spatial_ref_sys (srid, auth_name, auth_srid, srtext, proj4text)
+  VALUES (990001, 'PROBAVI', 990001, 'LOCAL_CS["probavi-drill"]', '+proj=longlat +datum=WGS84 +no_defs');
+ANALYZE places;`
+	mustExec(t, ctx, seed, "psql", "-h", "127.0.0.1", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-c", seedSQL)
+	mustExec(t, ctx, seed, "pg_dump", "-h", "127.0.0.1", "-U", "postgres", "-Fc", "-f", "/tmp/spatial.dump", "postgres")
+	if out, err := exec.CommandContext(ctx, "docker", "cp", seed.ID()+":/tmp/spatial.dump", dest).CombinedOutput(); err != nil {
+		t.Fatalf("extract fixture: %v: %s", err, out)
+	}
+	return true
 }
 
 // TestTimescaleRestoreDrill earns the manifest's timescaledb entry the

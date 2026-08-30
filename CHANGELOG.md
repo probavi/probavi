@@ -13,6 +13,50 @@ always called out explicitly.
 
 ### Added
 
+- **PostGIS joins the verified list — as a variant of the PostgreSQL
+  adapter, not as a twenty-second engine.** `postgis/postgis:17-3.5`
+  (PostGIS 3.5.2 on PostgreSQL 17.5) gets its own matrix job beside the
+  pgvector and timescaledb ones, and no adapter code moved: `pg_dump`
+  records `CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA public`, so
+  the existing `pgdump` kinds restore a spatial database unchanged. Rank
+  28 of the DB-Engines lens covered without a new adapter to keep green,
+  and without spending the one new engine a release allows.
+
+  Listed means exercised, so the new drill covers what makes the variant a
+  variant: a `geometry(Point, 4326)` column under a GiST index, dumped,
+  restored, and then a bounding-box query, an `ST_DWithin` distance query
+  and an index-definition query answered through the probe-declared
+  runner. It also reads the query plan, because a restored index the
+  planner will not touch is a slower recovery than the backup promised and
+  no row count would notice. The entry is load-bearing rather than
+  decorative: the same dump against a plain `postgres` image fails with
+  `extension "postgis" is not available`.
+
+  Measuring the engine before writing anything moved the plan twice. The
+  hazard that was expected does not exist — PostGIS registers
+  `spatial_ref_sys` with a filter, so its ~8500 built-in rows never enter
+  a dump and only operator-added SRIDs travel, which is both a collision
+  that cannot happen and a property now asserted in the drill. The hazard
+  that does exist was not on the list: the image pre-installs the
+  extension into the default database, so a dump that keeps PostGIS in a
+  schema of its own restores into a no-op — `IF NOT EXISTS` does not
+  reconcile the schema — and `postgis_topology` and
+  `postgis_tiger_geocoder` collide harder still, because their `topology`,
+  `tiger` and `tiger_data` schemas reach a dump as plain `CREATE SCHEMA`,
+  which has no `IF NOT EXISTS` at all. Both fail loudly and neither can
+  report a green; the adapter README states them, with the workaround, in
+  preference to the adapter growing a config key for them.
+
+  The shared seed helper now clears the whole postgis family, not just
+  timescaledb, so a plain fixture states only what its test claims on
+  every variant image. Nothing in the issue #166 class was found: no event
+  trigger, no background worker beyond stock PostgreSQL, no scheduler
+  extension, an empty `shared_preload_libraries` — there is nothing here
+  to suspend. The project publishes no forward end-of-life date, its
+  policy being relative, so the entry carries `supported_until: null` with
+  `versions_checked` recording the reading; PostgreSQL's own five dates
+  were re-read the same day and match what the manifest already stated.
+
 - **`probavi evidence verify` answers for records deleted from the end of a
   log.** The chain proves what a file holds, never what was removed past its
   end: a valid prefix of a log is itself a valid log, so both verifiers
