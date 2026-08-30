@@ -19,6 +19,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/probavi/probavi/internal/sandbox"
 )
 
 // TestFullDrillViaCLI is the README quickstart as a test: build the real
@@ -146,16 +148,19 @@ func TestFullDrillViaCLI(t *testing.T) {
 
 	// No ORPHANED sandbox may survive a drill: containers whose owner
 	// process is dead. Live-owner containers belong to integration tests
-	// of other packages running in parallel and must be tolerated.
+	// of other packages running in parallel and must be tolerated, which
+	// is why the question is asked through sandbox.OwnerAlive rather than
+	// by hand: the label is an owner id, and since owner ids grew a
+	// pid-reuse token it has not been a bare pid.
 	for _, id := range strings.Fields(dockerOut(t, ctx, "ps", "-aq", "--filter", "label=com.probavi.sandbox=1")) {
 		out, err := exec.CommandContext(ctx, "docker", "inspect", "-f",
 			`{{ index .Config.Labels "com.probavi.pid" }}`, id).Output()
 		if err != nil {
 			continue // vanished between ps and inspect — that IS the cleanup working
 		}
-		pid := strings.TrimSpace(string(out))
-		if _, err := os.Stat("/proc/" + pid); err != nil {
-			t.Errorf("orphaned sandbox %s (dead owner pid %s) survived the drill", id, pid)
+		owner := strings.TrimSpace(string(out))
+		if !sandbox.OwnerAlive(owner) {
+			t.Errorf("orphaned sandbox %s (dead owner %s) survived the drill", id, owner)
 		}
 	}
 
