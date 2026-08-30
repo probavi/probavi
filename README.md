@@ -65,7 +65,7 @@ the exact instant proven.
 | [Oracle Database](adapters/oracle/README.md) | 23.26.3.0 | 0.18.0 | `oracle_datapump` |
 | [PostgreSQL](adapters/postgres/README.md) | 14, 15, 16, 17, 18, pgvector 0.8.6-pg17, timescaledb 2.29.1-pg17, postgis 17-3.5 | 0.1.0 | `pgbackrest`, `pgdump`, `pgdump_dir`, `pgdump_with_globals`, `timescaledb_dump`, `timescaledb_dump_dir` |
 | [Prometheus](adapters/prometheus/README.md) | 3.13 | 0.12.0 | `prometheus_snapshot`, `prometheus_snapshot_dir`, `prometheus_snapshot_tar` |
-| [Qdrant](adapters/qdrant/README.md) | 1.19.0, 1.18.1 | unreleased | `qdrant_full_snapshot`, `qdrant_full_snapshot_dir`, `qdrant_snapshot`, `qdrant_snapshot_dir` |
+| [Qdrant](adapters/qdrant/README.md) | 1.19.0, 1.18.1 | 0.24.0 | `qdrant_full_snapshot`, `qdrant_full_snapshot_dir`, `qdrant_snapshot`, `qdrant_snapshot_dir` |
 | [Redis](adapters/redis/README.md) | 7.2, 7.4, 8.2, 8.10 | 0.8.0 | `redis_aof`, `redis_rdb`, `redis_rdb_dir` |
 | [Apache Solr](adapters/solr/README.md) | 10 | 0.20.0 | `solr_backup`, `solr_backup_dir`, `solr_backup_tar` |
 | [SQLite](adapters/sqlite/README.md) | 3.46, 3.49, 3.50, 3.51, 3.53 | 0.10.0 | `sqlite_db`, `sqlite_db_dir`, `sqlite_dump`, `sqlite_dump_dir` |
@@ -88,7 +88,7 @@ answers.
 The adapter protocol (v0) and evidence schema (v2) specs in `docs/` are normative and frozen, with
 machine-readable JSON Schemas in [docs/schemas/](docs/schemas/); third parties can build adapters in
 any language from [docs/adapter-development.md](docs/adapter-development.md) and validate them with
-`probavi adapter conformance` — no container runtime needed. Released as **v0.23.0**: reproducible
+`probavi adapter conformance` — no container runtime needed. Released as **v0.24.0**: reproducible
 binaries for Linux and macOS (amd64/arm64), the core and each adapter as its own archive, with
 checksums on the [releases page](https://github.com/probavi/probavi/releases) — pre-1.0, minor
 versions may break, every change is in [CHANGELOG.md](CHANGELOG.md). See [ROADMAP.md](ROADMAP.md)
@@ -138,7 +138,7 @@ Exit codes are the cron/CI contract: `0` backup proven restorable, `1` recoverab
 Every release publishes **one archive per binary** for Linux and macOS (amd64/arm64), with a `SHA256SUMS` covering all of them, on the [releases page](https://github.com/probavi/probavi/releases). `probavi` is the orchestrator: it resolves `probavi-adapter-<engine>` on your `PATH`, so take the core **plus an adapter for each engine you drill**.
 
 ```console
-$ tag=v0.23.0 os=linux arch=amd64
+$ tag=v0.24.0 os=linux arch=amd64
 $ base="https://github.com/probavi/probavi/releases/download/${tag}"
 $ curl -fsSLO "${base}/probavi_${tag#v}_${os}_${arch}.tar.gz"
 $ curl -fsSLO "${base}/probavi-adapter-postgres_${tag#v}_${os}_${arch}.tar.gz"
@@ -153,7 +153,7 @@ Adapters ship for `postgres`, `mysql`, `mariadb`, `mongodb`, `mssql`, `clickhous
 
 Verifying an evidence log needs nothing else: `probavi evidence verify` reads a log and a public key, so an auditor installs the core alone.
 
-Distribution packages are attached to every release — `.deb`, `.rpm` and `.apk` for both architectures, plus a `PKGBUILD` and a Gentoo ebuild that build from source. One package per binary, so `sudo apt install ./probavi_0.23.0_amd64.deb ./probavi-adapter-postgres_0.23.0_amd64.deb` is a working install. There is no Probavi apt or yum repository, on purpose: hosting one means a second long-lived signing key to guard, in a project whose trust proposition is how it handles the first one. [docs/packaging.md](docs/packaging.md) has the per-distribution commands, the dependency rationale, and a first drill from a packaged install.
+Distribution packages are attached to every release — `.deb`, `.rpm` and `.apk` for both architectures, plus a `PKGBUILD` and a Gentoo ebuild that build from source. One package per binary, so `sudo apt install ./probavi_0.24.0_amd64.deb ./probavi-adapter-postgres_0.24.0_amd64.deb` is a working install. There is no Probavi apt or yum repository, on purpose: hosting one means a second long-lived signing key to guard, in a project whose trust proposition is how it handles the first one. [docs/packaging.md](docs/packaging.md) has the per-distribution commands, the dependency rationale, and a first drill from a packaged install.
 
 On macOS, take the `darwin` archives above — a directly downloaded file is quarantined, so clear it with `xattr -d com.apple.quarantine`. Each release also attaches ready-made Homebrew formulae that name no tap, so `brew tap-new` plus two `curl`s gives a `brew install` with no quarantine step ([docs/packaging.md](docs/packaging.md) §5). There is no hosted Probavi tap. Note also that macOS has no native container runtime: the docker sandbox provider needs Docker Desktop, colima, OrbStack or a remote `DOCKER_HOST`.
 

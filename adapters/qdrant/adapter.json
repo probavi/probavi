@@ -3,7 +3,7 @@
   "id": "qdrant",
   "name": "Qdrant",
   "status": "experimental",
-  "since": null,
+  "since": "0.24.0",
   "engine_name": "Qdrant",
   "conformance_verified": true,
   "docs": "adapters/qdrant/README.md",
