@@ -50,6 +50,10 @@
 /adapters/*/neo4j
 /solr
 /adapters/*/solr
+/firebird
+/adapters/*/firebird
+/h2
+/adapters/*/h2
 
 # Test and coverage artifacts
 *.test

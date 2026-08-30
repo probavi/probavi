@@ -83,6 +83,12 @@ type Engine struct {
 type VerifiedTarget struct {
 	EngineVersion string `json:"engine_version"`
 	Image         string `json:"image"`
+	// EngineArtifact is set only where the engine ships as a library
+	// rather than as an image: Image is then the base a sandbox is built
+	// from, and this is the engine itself, at the URL CI fetched
+	// (docs/engine-versions.md §1). Additive within
+	// probavi-capabilities/1.
+	EngineArtifact string `json:"engine_artifact,omitempty"`
 }
 
 // Source is one backup source kind an adapter accepts.

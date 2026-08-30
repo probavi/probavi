@@ -90,7 +90,12 @@
               "type": "object",
               "properties": {
                 "engine_version": { "type": "string", "minLength": 1 },
-                "image": { "type": "string", "minLength": 1 }
+                "image": { "type": "string", "minLength": 1 },
+                "engine_artifact": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Present only where the engine ships as a library rather than as an image: image is then the base a sandbox is built from, and this is the engine itself, at the URL CI fetched (engine-versions.md \u00a71)."
+                }
               },
               "required": ["engine_version", "image"],
               "additionalProperties": false

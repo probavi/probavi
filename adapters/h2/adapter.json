@@ -1,0 +1,32 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. H2 ships as a jar on Maven Central rather than as an image, so each entry states the base CI pulls in `image` and the engine itself in `engine_artifact`, and the version is held against the artifact (docs/engine-versions.md §1). There is no usable H2 image: the only versioned community one is two release lines behind, on Java 11, and carries neither grep nor sed, which the check runner needs (all measured 2026-08-30). The baseline is the current release — H2 designates no long-term line, and the storage format is compatible across the whole 2.x series in both directions (measured), so the newest is not a moving target. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "h2",
+  "name": "H2",
+  "status": "experimental",
+  "since": null,
+  "engine_name": "H2",
+  "conformance_verified": true,
+  "docs": "adapters/h2/README.md",
+  "versions_checked": "2026-08-30",
+  "verified": [
+    {
+      "engine_version": "2.4.240",
+      "image": "eclipse-temurin:21-jre",
+      "engine_artifact": "https://repo1.maven.org/maven2/com/h2database/h2/2.4.240/h2-2.4.240.jar",
+      "supported_until": null,
+      "baseline": true
+    },
+    {
+      "engine_version": "2.3.232",
+      "image": "eclipse-temurin:21-jre",
+      "engine_artifact": "https://repo1.maven.org/maven2/com/h2database/h2/2.3.232/h2-2.3.232.jar",
+      "supported_until": null
+    }
+  ],
+  "sources": {
+    "h2_db": "One `<database>.mv.db` file, copied while the database was closed",
+    "h2_db_dir": "A directory of database files; the newest by file time is restored (no H2 artifact records when it was taken)",
+    "h2_backup": "One `BACKUP TO` archive — H2's own online backup, consistent by construction",
+    "h2_backup_dir": "A directory of archives; the newest by file time is restored"
+  }
+}

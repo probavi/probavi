@@ -228,6 +228,33 @@ func TestBuildRejectsInconsistentAdapters(t *testing.T) {
 			wantErr: "does not appear in image tag",
 		},
 		{
+			// An engine that ships as a library states its version in the
+			// artifact instead, because no image tag can carry it
+			// (docs/engine-versions.md §1).
+			name: "engine version absent from the artifact CI fetches",
+			mutate: func(_ *testing.T, a *fixtureAdapter) {
+				a.manifest["verified"] = []any{map[string]any{
+					"engine_version": "2.4.240", "image": "jre:21",
+					"engine_artifact": "https://example.invalid/h2-2.3.232.jar", "baseline": true}}
+			},
+			wantErr: "does not appear in engine_artifact",
+		},
+		{
+			// Uniqueness follows the engine, not the base: two artifacts
+			// on one image are the ordinary shape here, two entries of one
+			// artifact are the same job claimed twice.
+			name: "the same artifact listed twice",
+			mutate: func(_ *testing.T, a *fixtureAdapter) {
+				a.manifest["verified"] = []any{
+					map[string]any{"engine_version": "2.4.240", "image": "jre:21",
+						"engine_artifact": "https://example.invalid/h2-2.4.240.jar", "baseline": true},
+					map[string]any{"engine_version": "2.4.240", "image": "jre:21",
+						"engine_artifact": "https://example.invalid/h2-2.4.240.jar"},
+				}
+			},
+			wantErr: "is listed twice",
+		},
+		{
 			// Without a baseline the everyday integration job has no image
 			// to restore from, and the matrix would rest on whichever
 			// entry happened to be written first.
