@@ -288,7 +288,7 @@
       "id": "h2",
       "name": "H2",
       "status": "experimental",
-      "since": null,
+      "since": "0.22.0",
       "adapter_version": "0.1.0",
       "engine": {
         "id": "h2",

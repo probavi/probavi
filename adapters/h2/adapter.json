@@ -3,7 +3,7 @@
   "id": "h2",
   "name": "H2",
   "status": "experimental",
-  "since": null,
+  "since": "0.22.0",
   "engine_name": "H2",
   "conformance_verified": true,
   "docs": "adapters/h2/README.md",

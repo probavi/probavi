@@ -36,7 +36,7 @@ import (
 // version`. Release builds override it with
 // -ldflags "-X main.version=<semver>"; anything built without that is a
 // dev build and says so.
-var version = "0.21.0-dev"
+var version = "0.22.0-dev"
 
 // Exit codes for `probavi run` (cron/CI contract, documented in usage).
 // The numbers come from internal/cli, which declares the contract the
