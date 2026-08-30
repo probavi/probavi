@@ -71,6 +71,38 @@ always called out explicitly.
   0.2.0), and each adapter's README records the new refusal.
 ### Changed
 
+- **The evidence specification defines the anchor that closes tail
+  truncation.** The previous change stated the limit; this one specifies
+  the way past it. `docs/evidence-schema.md` gains §9.1: an anchor is the
+  chain head — the highest `seq` together with the SHA-256 of that
+  record's stored line, written `<seq>:sha256:<hex>` — taken from an
+  earlier verification and kept where the log's writer cannot rewrite it.
+  A verifier reports `head` on every run, so that each verification yields
+  the anchor for the next one, and accepts one as an optional `--anchor`
+  input with three outcomes: the anchor holds, and a longer log is simply
+  a log that has grown; the log ends before that `seq`, which is
+  truncation; or the line at that `seq` hashes differently, which is the
+  shape a log truncated and then grown again takes. The last two are
+  INVALID and exit 2 — the `0`/`1`/`2` vocabulary does not move, because a
+  log shorter than its anchor is not the log that anchor was taken of, and
+  a softer verdict would invite a script to treat it as less than a
+  failure.
+
+  No schema version bump and no record byte changes: the anchor is an
+  input to verification rather than a part of the format, and without one
+  a log plus a public key remain sufficient for everything the chain alone
+  can prove. Nothing new is signed either — a head signed with the log's
+  own key would add nothing, since the attacker §1 assumes is the one
+  holding that key; the anchor's strength is entirely in where it is kept,
+  which is why §9.1 says where one may live and that the core keeps none
+  of them. Conformance vectors for all three outcomes are given against
+  the already-published example logs, so an independent implementation can
+  check itself without generating anything.
+
+  The specification moves before the code, as a change to it must:
+  `probavi evidence verify` and `spec/evidence` implement §9.1 in the
+  change that follows this one, and §9's usage line gains the flag with
+  them.
 - **The evidence specification now states the one removal its chain cannot
   see.** Deleting the newest N lines of a log leaves records 1…M whose
   sequence still starts at 1 and whose chain is unbroken, so both verifiers

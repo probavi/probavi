@@ -310,7 +310,9 @@ all secrets it holds; truncation limits (§3) apply after redaction.
 `probavi evidence verify --log <file> --key <pub> [--key <pub>…]`
 implements exactly this algorithm; independent implementations need nothing
 else. That claim is not left as an assertion: `spec/evidence` is a second
-implementation written from this document alone (§12).
+implementation written from this document alone (§12). §9.1 adds one
+optional input to the algorithm below, and is specified ahead of both
+implementations.
 
 ```text
 expected_prev ← "sha256:" + 64×"0"
@@ -361,26 +363,138 @@ which is a much larger and more visible gap.
 
 Closing it requires an anchor kept outside the file: the highest `seq`
 with the SHA-256 of its stored line, held where the attacker cannot
-rewrite it, and compared against what the log now shows. This schema
-defines no such anchor, and adding one is a change to this document
-first. Until then two properties already in the product bound the
-exposure, and both are the operator's to use:
+rewrite it, and compared against what the log now shows. §9.1 defines
+that value, its written form, and what a verifier does when handed one.
 
-- **A retained copy detects a shrink.** `probavi push` sends the whole
-  file on every run (`evidence-push.md` §1.4). A receiver that *keeps*
-  what it was sent can compare successive pushes: an append-only log
-  never gets shorter, and a shorter log whose records match the prefix of
-  an earlier copy has been truncated. A receiver that overwrites its copy
-  is no anchor at all.
-- **The record count never decreases.** `probavi evidence verify` reports
-  `records`. For an append-only log that number is monotonic, so an
-  operator who writes it down after each drill — or who simply knows how
-  many drills have run — holds the cheapest anchor there is.
+### 9.1 Anchored verification
 
-Neither is a substitute for a signed head, and neither survives an
-attacker who also controls the anchor. They are written down so that the
-gap is bounded in the specification rather than discovered during an
-audit.
+An anchor is an *input* to verification, never a part of the format: no
+record byte changes, no field is added, nothing further is signed, and
+the schema version does not move (§10). Without one, §1 stands exactly
+as written — the log file and the public key remain sufficient for
+everything the chain itself can prove. Both verifiers of §12 take an
+anchor as one optional flag, `--anchor <seq>:sha256:<hex>`, beside the
+`--log` and `--key` flags they already have; the flag is specified here
+before it is built, so this section leads the implementations by one
+change.
+
+**The anchor is the chain head.** When the algorithm above finishes,
+`expected_seq − 1` is the highest verified `seq` and `expected_prev` is
+`"sha256:"` plus the hex of that record's `record_hash` (§5). That pair
+is the head:
+
+```text
+<seq>:sha256:<64 lowercase hex digits>
+```
+
+Because §5 chains over the same bytes, the head at `seq` is the value
+record `seq + 1` carries as its `prev_hash` — an anchor can be read out
+of a log as readily as it is printed by a verifier. The head of an empty
+log is the genesis value at seq 0: `0:sha256:` followed by 64 zeros.
+
+**A verifier MUST report the head.** The machine-readable result carries
+`head`, an object with `seq` (integer) and `hash` (string, `sha256:` and
+lowercase hex), on every run, with or without an anchor — so that each
+verification yields the anchor for the next one. The two parts are
+separate fields because the result is JSON; joining them with `:` gives
+the written form above. Where verification stopped early, `head`
+describes the prefix that verified: after INVALID it is the last record
+checked before the failing line, and a run that returned INVALID is never
+a source of an anchor. Damaged lines do not advance the chain (§2) and so
+do not move the head.
+
+**A verifier MUST accept an optional anchor.** An anchor `A` is the two
+parts of the written form split at the first `:` — `A.seq`, and `A.hash`
+still carrying its `sha256:` prefix. Because an anchor is a head, and the
+walk passes through every head the log has ever had, the anchored check
+is one equality asked once:
+
+```text
+# every check of §9 runs unchanged; with an anchor, additionally:
+
+# where the walk's head reaches the anchor's seq — before the first line
+# when A.seq is 0, immediately after record A.seq otherwise:
+if expected_prev ≠ A.hash:
+    INVALID (anchor mismatch; the failing line is the one record A.seq
+             was read from, and none when A.seq is 0)
+
+# after the last line, if that point was never reached:
+if expected_seq − 1 < A.seq:
+    INVALID (anchor truncation; no failing line — every line the file
+             still holds is intact)
+
+head ← (expected_seq − 1, expected_prev)      # reported on every run
+```
+
+That gives three outcomes:
+
+- **The anchor holds** — the walk reached `A.seq` carrying the same head,
+  and it continues from there. A log longer than its anchor is a log that
+  has grown, so the result is the one that same file would have produced
+  with no anchor given.
+- **The log ends before the anchor** — records are missing from its end.
+  INVALID, with a reason naming truncation.
+- **The head at `A.seq` differs** — the line at that `seq` is not the line
+  the anchor was taken of. INVALID, with a reason naming the mismatch.
+  This is the shape a log truncated and then grown again takes: long
+  enough, and wrong where it matters.
+
+An `A.seq` of 0 anchors the genesis value. It constrains nothing, and it
+exists so that the head a verifier prints for an empty log is accepted
+back as input.
+
+No new status and no new exit code — truncation and mismatch are INVALID
+and exit 2. A log shorter than its anchor is not the log that anchor was
+taken of, which is the same class of finding as a record removed from
+within the sequence; a softer verdict would invite a script to treat it
+as less than a failure. An anchor that does not parse as the form above
+is a usage error rather than a verdict.
+
+**Conformance vectors.** The three outcomes are pinned against the
+published example log (§12), so an independent implementation can check
+them without generating anything of its own:
+
+1. *The anchor holds.* `log_v2.jsonl` with anchor
+   `2:sha256:1fab7db153a3276cb7081e1bf6d16a9b31689b9f3d4b950b5a50748e3ae3032d`
+   → VALID, `records` 3, and `head`
+   `3:sha256:6b3e356a9444cf3d7ca6bfdf7ee6bdf35d88928b2d66fcc28a5ceb033308b62d`.
+   The log has grown past its anchor, which is the ordinary case.
+2. *The log ends before the anchor.* The same file reduced to its first
+   two lines — a plain truncation, nothing re-signed — anchored at the
+   head of the full file,
+   `3:sha256:6b3e356a9444cf3d7ca6bfdf7ee6bdf35d88928b2d66fcc28a5ceb033308b62d`
+   → INVALID naming truncation, with `head`
+   `2:sha256:1fab7db153a3276cb7081e1bf6d16a9b31689b9f3d4b950b5a50748e3ae3032d`.
+   Given no anchor, that same file is VALID with 2 records, which is the
+   gap this section closes.
+3. *The line at the anchor's `seq` is a different line.* `log_v2.jsonl`
+   with anchor
+   `2:sha256:28e87aa7b1a896e908fb1be0a8b8e9ad3c5a42d4d1e821e8a7ac82d8ec3ba241`
+   — the head at seq 2 of `log_v1.jsonl`, a different log — → INVALID at
+   line 2 naming the mismatch. A log truncated and then grown again takes
+   this shape: it is long enough, and the line at that `seq` is not the
+   line the anchor was taken of.
+
+**Where an anchor lives.** Anywhere the log's writer cannot rewrite it,
+and nowhere else: the verifier prints the value and the core keeps
+nothing. A `probavi push` receiver that retains what it was sent holds
+one for every push — and, because every push carries the whole file
+(`evidence-push.md` §1.4), such a receiver can see a log shrink without
+being handed an anchor at all. So does a ticket, a mail, or a commit in a
+repository the drill host cannot write to. Keeping the head beside the
+log would defeat the purpose: that host is the one whose write access the
+attack assumes.
+
+The anchor's strength is entirely in where it is kept, and this section
+puts all of the weight there deliberately. Signing the head with the
+log's own key would add nothing — the attacker of §1 holds that key and
+can sign a shorter head as easily as a shorter log. A head held or
+countersigned by a party other than the operator is stronger, and what
+makes it stronger is the second party rather than the second signature;
+this schema defines no format for one. The `records` count is monotonic
+for an append-only log and was the cheapest anchor available before this
+section existed; `head` costs the same to write down and says strictly
+more, so prefer it.
 
 ## 10. Versioning and migration
 
@@ -486,6 +600,19 @@ notes are collected in `spec/evidence/README.md`.
 
 ## Changelog
 
+- Anchored verification (2026-08-30, no format change): §9.1 defines the
+  anchor that closes the tail truncation §9 documents — the chain head,
+  written `<seq>:sha256:<hex>`, taken from an earlier verification and
+  kept where the log's writer cannot rewrite it. A verifier reports
+  `head` on every run and accepts `--anchor` as an optional input;
+  a log that ends before the anchor and a line that hashes differently at
+  the anchor's `seq` are both INVALID, and the exit codes do not move.
+  Conformance vectors for the three outcomes are given against the
+  already-published example logs. No field, record byte, or serialization
+  rule is affected and the schema version stays at `probavi-evidence/2`
+  (§10): an anchor is an input to verification rather than a part of the
+  format, and §1 stands unchanged without one. Specified ahead of the two
+  implementations, which follow in the next change.
 - Editorial (2026-08-29, no format change): §8 names engine diagnostics
   among the things a record must not carry. The rule was already there in
   substance — "result rows or any per-row data" and "adapter stderr
