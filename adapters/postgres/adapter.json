@@ -7,7 +7,7 @@
   "engine_name": "PostgreSQL",
   "conformance_verified": true,
   "docs": "adapters/postgres/README.md",
-  "versions_checked": "2026-08-27",
+  "versions_checked": "2026-08-30",
   "verified": [
     {
       "engine_version": "14",
@@ -43,6 +43,11 @@
     {
       "engine_version": "2.29.1-pg17",
       "image": "timescale/timescaledb:2.29.1-pg17",
+      "supported_until": null
+    },
+    {
+      "engine_version": "17-3.5",
+      "image": "postgis/postgis:17-3.5",
       "supported_until": null
     }
   ],
