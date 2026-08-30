@@ -49,6 +49,7 @@ the exact instant proven.
 | --- | --- | --- | --- |
 | [Apache Cassandra](adapters/cassandra/README.md) | 4.1, 5.0 | 0.13.0 | `cassandra_snapshot`, `cassandra_snapshot_dir`, `cassandra_snapshot_tar` |
 | [ClickHouse](adapters/clickhouse/README.md) | 26.3, 26.7 | 0.7.0 | `clickhouse_backup`, `clickhouse_backup_dir` |
+| [CouchDB](adapters/couchdb/README.md) | 3.5.2, 3.4.3 | unreleased | `couchbackup`, `couchbackup_dir`, `couchdb_data`, `couchdb_data_tar` |
 | [DuckDB](adapters/duckdb/README.md) | 1.4, 1.5 | 0.11.0 | `duckdb_db`, `duckdb_db_dir`, `duckdb_export` |
 | [Elasticsearch](adapters/elasticsearch/README.md) | 8.19.20, 9.5.2 | 0.17.0 | `elasticsearch_repo`, `elasticsearch_repo_zip` |
 | [etcd](adapters/etcd/README.md) | 3.5, 3.6, 3.7 | 0.7.0 | `etcd_snapshot`, `etcd_snapshot_dir` |

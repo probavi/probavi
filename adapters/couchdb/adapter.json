@@ -1,0 +1,30 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The images below are the official CouchDB ones; the sandbox needs no wrapper, because they already carry a POSIX shell and curl, which is everything the adapter drives the engine with (measured 2026-08-30). The baseline is the 3.5 line, the current one, with 3.4 beside it. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "couchdb",
+  "name": "CouchDB",
+  "status": "experimental",
+  "since": null,
+  "engine_name": "Apache CouchDB",
+  "conformance_verified": true,
+  "docs": "adapters/couchdb/README.md",
+  "versions_checked": "2026-08-30",
+  "verified": [
+    {
+      "engine_version": "3.5.2",
+      "image": "couchdb:3.5.2",
+      "supported_until": null,
+      "baseline": true
+    },
+    {
+      "engine_version": "3.4.3",
+      "image": "couchdb:3.4.3",
+      "supported_until": null
+    }
+  ],
+  "sources": {
+    "couchdb_data_tar": "A tar of CouchDB's data directory",
+    "couchdb_data": "One copy of CouchDB's data directory — the tree holding `_dbs.couch`, `_nodes.couch` and `shards/`",
+    "couchbackup": "One `couchbackup` file: its header line, then one JSON batch of documents per line",
+    "couchbackup_dir": "A directory of them; the newest by file time is restored (no CouchDB artifact records when it was taken)"
+  }
+}
