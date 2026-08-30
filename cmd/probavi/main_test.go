@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -117,6 +118,64 @@ func TestKeygenThenVerifyRoundTrip(t *testing.T) {
 	}
 	if res.Status != "VALID" || res.Records != 2 || len(res.DamagedLines) != 0 {
 		t.Errorf("verify output = %+v, want VALID with 2 records", res)
+	}
+}
+
+// TestVerifyPrintsTheHeadAndTakesItBack drives the operator's loop of
+// evidence-schema.md §9.1 end to end: verify, keep the head, hand it back
+// next time. The value printed has to be the value the flag accepts — a
+// verifier whose own output needs reshaping before it can be used again
+// would leave the property to a script nobody writes.
+func TestVerifyPrintsTheHeadAndTakesItBack(t *testing.T) {
+	logPath, _, pubPath := setupLog(t)
+
+	code, stdout, stderr := runCLI(t, "evidence", "verify", "--log", logPath, "--key", pubPath)
+	if code != exitValid {
+		t.Fatalf("verify exit %d, want 0; stderr: %s", code, stderr)
+	}
+	var intact verifyOutput
+	if err := json.Unmarshal([]byte(stdout), &intact); err != nil {
+		t.Fatalf("verify output is not JSON: %v (%q)", err, stdout)
+	}
+	if intact.Head.Seq != 2 || !strings.HasPrefix(intact.Head.Hash, "sha256:") {
+		t.Fatalf("head = %+v, want seq 2 with a sha256 reference", intact.Head)
+	}
+	anchor := fmt.Sprintf("%d:%s", intact.Head.Seq, intact.Head.Hash)
+
+	if code, _, stderr = runCLI(t, "evidence", "verify", "--log", logPath, "--key", pubPath, "--anchor", anchor); code != exitValid {
+		t.Fatalf("anchored verify of the intact log: exit %d, want 0; stderr: %s", code, stderr)
+	}
+
+	// Delete the newest record, which is the whole attack.
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	if err := os.WriteFile(logPath, []byte(lines[0]+"\n"), 0o600); err != nil {
+		t.Fatalf("truncate log: %v", err)
+	}
+
+	if code, _, stderr = runCLI(t, "evidence", "verify", "--log", logPath, "--key", pubPath); code != exitValid {
+		t.Fatalf("truncated log without an anchor: exit %d, want 0 — the removal must be invisible without one; stderr: %s", code, stderr)
+	}
+
+	code, stdout, _ = runCLI(t, "evidence", "verify", "--log", logPath, "--key", pubPath, "--anchor", anchor)
+	if code != exitInvalid {
+		t.Fatalf("truncated log with its anchor: exit %d, want %d (stdout: %s)", code, exitInvalid, stdout)
+	}
+	var truncated verifyOutput
+	if err := json.Unmarshal([]byte(stdout), &truncated); err != nil {
+		t.Fatalf("verify output is not JSON: %v (%q)", err, stdout)
+	}
+	if truncated.Status != "INVALID" || !strings.Contains(truncated.Reason, "truncated") {
+		t.Errorf("output = %+v, want INVALID naming truncation", truncated)
+	}
+	if truncated.FailedLine != 0 {
+		t.Errorf("failed_line = %d, want 0 — no line in the file is at fault", truncated.FailedLine)
+	}
+	if truncated.Head.Seq != 1 {
+		t.Errorf("head = %+v, want the shortened log's own head at seq 1", truncated.Head)
 	}
 }
 
@@ -262,6 +321,8 @@ func TestUsageErrors(t *testing.T) {
 		{"verify missing log file", []string{"evidence", "verify", "--log", missing, "--key", pubPath}},
 		{"verify unreadable key", []string{"evidence", "verify", "--log", logPath, "--key", missing}},
 		{"verify bad flag", []string{"evidence", "verify", "--no-such-flag"}},
+		{"verify malformed anchor", []string{"evidence", "verify", "--log", logPath, "--key", pubPath, "--anchor", "not-an-anchor"}},
+		{"verify anchor with a short hash", []string{"evidence", "verify", "--log", logPath, "--key", pubPath, "--anchor", "2:sha256:beef"}},
 		{"keygen without out", []string{"evidence", "keygen"}},
 		{"keygen bad flag", []string{"evidence", "keygen", "--no-such-flag"}},
 		{"keygen uncreatable path", []string{"evidence", "keygen", "--out", filepath.Join(missing, "sub", "k")}},

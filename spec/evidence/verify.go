@@ -51,6 +51,21 @@ type Result struct {
 	// Reason and Line are set only when Status is INVALID.
 	Reason string `json:"reason,omitempty"`
 	Line   int    `json:"line,omitempty"`
+	// Head is the chain head after the last record that verified (§9.1).
+	// It is reported on every run, with or without an anchor, so that each
+	// verification yields the anchor for the next one; after INVALID it
+	// describes only the prefix that verified.
+	Head Head `json:"head"`
+}
+
+// invalid finishes a Result with the §9 INVALID verdict. Line 0 means no
+// line is at fault, which is how §9.1 reports a log that simply stops
+// before its anchor.
+func invalid(res Result, line int, reason string) Result {
+	res.Status = StatusInvalid
+	res.Reason = reason
+	res.Line = line
+	return res
 }
 
 // Keyring maps a key_id (§6) to the public key that bears it. Verification
@@ -118,9 +133,25 @@ func readCappedLine(br *bufio.Reader) (line []byte, oversized bool, err error) {
 // return covers only I/O failures reading r; a log that fails verification
 // is a Result, not an error.
 func Verify(r io.Reader, keys Keyring) (Result, error) {
-	res := Result{Status: StatusValid, DamagedLines: []int{}}
-	expectedPrev := genesisPrevHash
-	expectedSeq := int64(1)
+	return VerifyAnchored(r, keys, nil)
+}
+
+// VerifyAnchored runs §9 and, given a non-nil anchor, the §9.1 check on top
+// of it: the log must once have carried that head, or records were removed
+// from its end. Verify is this function with no anchor, which is the whole
+// of §9 and remains sufficient for everything the chain alone can prove.
+func VerifyAnchored(r io.Reader, keys Keyring, anchor *Head) (Result, error) {
+	// res.Head carries what §9 calls expected_prev and expected_seq: the
+	// hash is expected_prev, and expected_seq is one past its seq. Keeping
+	// them there rather than in separate locals is what makes every return
+	// path report the head §9.1 requires, without repeating an assignment.
+	res := Result{Status: StatusValid, DamagedLines: []int{}, Head: Head{Seq: 0, Hash: genesisPrevHash}}
+	// The genesis head is one the walk carries before it has read anything,
+	// so an anchor at seq 0 is compared here.
+	check := anchorCheck{want: anchor}
+	if reason := check.at(res.Head); reason != "" {
+		return invalid(res, 0, reason), nil
+	}
 
 	br := bufio.NewReader(r)
 	for lineNo := 1; ; lineNo++ {
@@ -131,10 +162,7 @@ func Verify(r io.Reader, keys Keyring) (Result, error) {
 		// §4 caps a record; a line past that cap is not one, and saying so
 		// costs nothing because the bytes were never gathered.
 		if oversized {
-			res.Status = StatusInvalid
-			res.Reason = fmt.Sprintf("line exceeds the %d byte limit of §4", maxCanonicalBytes)
-			res.Line = lineNo
-			return res, nil
+			return invalid(res, lineNo, fmt.Sprintf("line exceeds the %d byte limit of §4", maxCanonicalBytes)), nil
 		}
 		if len(raw) == 0 {
 			break
@@ -153,19 +181,23 @@ func Verify(r io.Reader, keys Keyring) (Result, error) {
 			res.DamagedLines = append(res.DamagedLines, lineNo)
 			continue // the chain does not advance across damage
 		}
-		if reason := verifyRecord(rec, line, keys, expectedPrev, expectedSeq); reason != "" {
-			res.Status = StatusInvalid
-			res.Reason = reason
-			res.Line = lineNo
-			return res, nil
+		if reason := verifyRecord(rec, line, keys, res.Head.Hash, res.Head.Seq+1); reason != "" {
+			return invalid(res, lineNo, reason), nil
 		}
 
 		sum := sha256.Sum256(line)
-		expectedPrev = "sha256:" + hex.EncodeToString(sum[:])
-		expectedSeq++
+		res.Head = Head{Seq: res.Head.Seq + 1, Hash: "sha256:" + hex.EncodeToString(sum[:])}
 		res.Records++
+		if reason := check.at(res.Head); reason != "" {
+			return invalid(res, lineNo, reason), nil
+		}
 	}
 
+	// No line is at fault when the log simply stops short of its anchor:
+	// every line the file still holds verified.
+	if reason := check.missed(res.Head); reason != "" {
+		return invalid(res, 0, reason), nil
+	}
 	if len(res.DamagedLines) > 0 {
 		res.Status = StatusValidDamage
 	}

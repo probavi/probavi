@@ -54,7 +54,7 @@ func TestReadLineIsBounded(t *testing.T) {
 // cap this input is bounded only by available memory. With one, it is a
 // verdict.
 func TestVerifyRefusesAnEndlessLine(t *testing.T) {
-	res, err := Verify(strings.NewReader(strings.Repeat("x", MaxRecordBytes+64)), Keyring{})
+	res, err := Verify(strings.NewReader(strings.Repeat("x", MaxRecordBytes+64)), Keyring{}, nil)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestReadLineSurfacesReadErrors(t *testing.T) {
 	if _, _, _, err := readLine(br, MaxRecordBytes); !errors.Is(err, want) {
 		t.Errorf("err = %v, want the underlying read error", err)
 	}
-	if _, err := Verify(iotest.ErrReader(want), Keyring{}); !errors.Is(err, want) {
+	if _, err := Verify(iotest.ErrReader(want), Keyring{}, nil); !errors.Is(err, want) {
 		t.Errorf("Verify err = %v, want the underlying read error", err)
 	}
 }

@@ -1452,6 +1452,12 @@
             "required": true,
             "repeatable": true,
             "doc": "Public key file; repeat to build a keyring."
+          },
+          {
+            "id": "--anchor",
+            "required": false,
+            "repeatable": false,
+            "doc": "Chain head from an earlier verification, <seq>:sha256:<hex>; a log that ends before it is INVALID."
           }
         ],
         "positional": null,

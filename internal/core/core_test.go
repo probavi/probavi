@@ -279,7 +279,7 @@ func assertLogVerifies(t *testing.T, logPath string) {
 			t.Errorf("close log: %v", err)
 		}
 	}()
-	res, err := evidence.Verify(f, evidence.NewKeyring(evidence.NewSignerFromSeed(seed32()).PublicKey()))
+	res, err := evidence.Verify(f, evidence.NewKeyring(evidence.NewSignerFromSeed(seed32()).PublicKey()), nil)
 	if err != nil || res.Status != evidence.StatusValid || res.Records != 1 {
 		t.Errorf("evidence verify = %+v err=%v", res, err)
 	}

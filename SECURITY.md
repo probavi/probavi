@@ -36,9 +36,11 @@ These are the failures that would undermine what Probavi claims:
   answered and is not a finding on its own: deleting records from the *end*
   of a log leaves a shorter log that verifies, which
   [docs/evidence-schema.md](docs/evidence-schema.md) §1 and §9 state as the
-  chain's documented limit, together with the anchors that bound it. A way
-  past any of the rest — including hiding a record without shortening the
-  log — is very much a report we want.
+  chain's documented limit. §9.1 closes it with an input rather than an
+  algorithm — `probavi evidence verify --anchor`, checked against a head
+  kept outside the file — so a way past *that* check, or a truncation an
+  anchored run reports as VALID, is a finding. So is a way past any of the
+  rest, including hiding a record without shortening the log.
 - Anything that puts a credential where it does not belong: an evidence
   record, a log line, a notification payload, a report, a process argument
   list.

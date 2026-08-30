@@ -294,10 +294,12 @@ successful one carries everything.
   (`evidence-schema.md` §1, §9). Because every push carries the whole file
   (§1.4), a receiver that keeps what it was sent — rather than overwriting
   its copy — can see a log grow shorter, or recognise a shorter log as the
-  prefix of one it already holds. Probavi neither requires this of a
-  receiver nor can check it, and a delivery still proves nothing (previous
-  bullet); it is stated here because an operator who wants the property
-  needs to know it is theirs to build.
+  prefix of one it already holds. The head of the copy it kept is the
+  anchor of `evidence-schema.md` §9.1, which `probavi evidence verify
+  --anchor` checks directly. Probavi neither requires this of a receiver
+  nor can check it, and a delivery still proves nothing (previous bullet);
+  it is stated here because an operator who wants the property needs to
+  know it is theirs to build.
 - Receivers are untrusted. Their responses are read for the status code and
   for the bounded, sanitised reason of §7, and for nothing else.
 

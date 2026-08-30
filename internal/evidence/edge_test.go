@@ -123,7 +123,7 @@ func TestVerifySignatureShapeTampering(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			lines := logLines(t, path)
 			lines[0] = mutateLine(t, lines[0], tt.mutate)
-			res, err := Verify(strings.NewReader(strings.Join(lines, "\n")+"\n"), testKeyring())
+			res, err := Verify(strings.NewReader(strings.Join(lines, "\n")+"\n"), testKeyring(), nil)
 			if err != nil {
 				t.Fatalf("Verify: %v", err)
 			}
@@ -136,7 +136,7 @@ func TestVerifySignatureShapeTampering(t *testing.T) {
 
 func TestVerifyRejectsOversizedLine(t *testing.T) {
 	line := `{"a":"` + strings.Repeat("x", MaxRecordBytes) + `"}` + "\n"
-	res, err := Verify(strings.NewReader(line), testKeyring())
+	res, err := Verify(strings.NewReader(line), testKeyring(), nil)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}

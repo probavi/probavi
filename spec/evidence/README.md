@@ -48,11 +48,31 @@ itself has to be reproducible — an audit that records *which* verifier
 accepted a log has to be able to name it, and `@latest` moves:
 
 ```sh
-go install github.com/probavi/probavi/spec/evidence/cmd/probavi-evidence-verify@v0.4.0
+go install github.com/probavi/probavi/spec/evidence/cmd/probavi-evidence-verify@v0.5.0
 ```
 
 `--key` is repeatable; pass every public key a log may have been signed
 under, so that a log spanning a key rotation verifies end to end.
+
+## Anchoring a log against truncation
+
+Every run prints the log's chain head — the highest `seq` with the SHA-256
+of that record's stored line. Keep it somewhere the log's writer cannot
+rewrite and hand it back next time:
+
+```sh
+go run ./cmd/probavi-evidence-verify \
+    --log /var/lib/probavi/evidence.jsonl \
+    --key /etc/probavi/signer.pub \
+    --anchor 42:sha256:92301f78dbd977ae6773f1c842abcaebf523f426b6fead984df34f6fc36007ae
+```
+
+The anchor holds while the log has only grown; a log that ends before the
+anchor's `seq`, or whose line at that `seq` is not the line the anchor was
+taken of, is `INVALID`. This is the specification's §9.1, and it is the
+only thing that answers for records deleted from the *end* of a log: the
+chain proves what a file holds, never what was removed past its end, so a
+valid prefix of a log is itself a valid log.
 
 Exit codes follow the specification's §9:
 
@@ -66,7 +86,7 @@ Exit codes follow the specification's §9:
 The result is also written to stdout as one JSON object:
 
 ```json
-{"status":"VALID","records":3,"damaged_lines":[]}
+{"status":"VALID","records":3,"damaged_lines":[],"head":{"seq":3,"hash":"sha256:6b3e356a9444cf3d7ca6bfdf7ee6bdf35d88928b2d66fcc28a5ceb033308b62d"}}
 ```
 
 ## The worked example

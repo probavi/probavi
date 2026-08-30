@@ -11,6 +11,59 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **`probavi evidence verify` answers for records deleted from the end of a
+  log.** The chain proves what a file holds, never what was removed past its
+  end: a valid prefix of a log is itself a valid log, so both verifiers
+  returned VALID for a truncated one — correctly, and uselessly against the
+  attacker who deletes the drill that just failed. The previous change
+  stated that limit; `docs/evidence-schema.md` §9.1 then specified what
+  closes it, and this is that code.
+
+  Two halves. Every verification now prints `head` — the highest `seq` with
+  the SHA-256 of that record's stored line — in its machine-readable result,
+  with or without an anchor, so each run yields the anchor for the next one.
+  And `--anchor <seq>:sha256:<hex>` takes one back. Because an anchor *is* a
+  head, and the walk passes through every head the log has ever had, the
+  check is a single equality asked once; the three outcomes fall out of it.
+  The anchor holds, and a longer log is a log that has grown. The log ends
+  before that `seq`, which is truncation. Or the head at that `seq` differs,
+  which is the shape a log truncated and then grown again takes. The last
+  two are INVALID and exit 2 — a log shorter than its anchor is not the log
+  that anchor was taken of, the same class of finding as a record removed
+  from within the sequence, and a softer verdict would invite a script to
+  treat it as less than a failure. An anchor that does not parse is a usage
+  error (exit 3) and never a verdict: a value that cannot be read says
+  nothing about the log.
+
+  Nothing about the format moves — no field, no record byte, no
+  serialization rule, and the schema stays `probavi-evidence/2`. Nothing new
+  is signed either: a head signed with the log's own key would add nothing,
+  since the attacker the threat model assumes is the one holding that key.
+  The core keeps no anchors; it prints the value and stops. Where one lives
+  is the operator's, and §9.1 names the shapes — a `probavi push` receiver
+  that retains what it was sent, a ticket, a mail, a commit in a repository
+  the drill host cannot write to.
+
+  The chain's test list grows from four attacks to five. Beside the
+  modified, removed, reordered and forged-signature cases, both
+  implementations now cover a log truncated at its end, and the core adds
+  the attack that truncation is really for: a log rewound to one record and
+  grown back to full length by real, signed appends through the product's
+  own writer — nothing hand-forged. It verifies VALID on its own, exactly as
+  §9 says it will, and every anchor taken before the rewind refuses it, each
+  at its own `seq`. The three conformance vectors §9.1 publishes run in the
+  independent verifier against the already-frozen example logs, so neither
+  implementation is checked against the other's code.
+
+  Because that verifier changed, its module moves: **`spec/evidence/v0.5.0`**
+  — `VerifyAnchored`, the `Head` type, `head` in the JSON result, and the
+  `--anchor` flag — and the documented install pin moves with it. `Verify`
+  keeps its two-argument shape and delegates, so nothing that already called
+  it breaks. The schema is untouched: a v0.4.0 verifier still accepts every
+  log a v0.5.0 one does, it simply cannot be asked the anchored question.
+
 ### Security
 
 - **A failed check recorded the engine's own error message in the signed
