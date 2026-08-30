@@ -867,6 +867,55 @@
       "docs": "adapters/prometheus/README.md"
     },
     {
+      "id": "qdrant",
+      "name": "Qdrant",
+      "status": "experimental",
+      "since": null,
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "qdrant",
+        "name": "Qdrant"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "1.19.0",
+          "image": "qdrant/qdrant:v1.19.0"
+        },
+        {
+          "engine_version": "1.18.1",
+          "image": "qdrant/qdrant:v1.18.1"
+        }
+      ],
+      "sources": [
+        {
+          "id": "qdrant_full_snapshot",
+          "name": "One whole-storage snapshot, from `POST /snapshots`",
+          "pitr": false
+        },
+        {
+          "id": "qdrant_full_snapshot_dir",
+          "name": "A directory of them; the newest by file time is restored",
+          "pitr": false
+        },
+        {
+          "id": "qdrant_snapshot",
+          "name": "One collection snapshot, from `POST /collections/<c>/snapshots`",
+          "pitr": false
+        },
+        {
+          "id": "qdrant_snapshot_dir",
+          "name": "A directory of them; the newest by file time is restored (no Qdrant snapshot records when it was taken)",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/qdrant/README.md"
+    },
+    {
       "id": "redis",
       "name": "Redis",
       "status": "experimental",

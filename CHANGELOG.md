@@ -11,6 +11,85 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **Qdrant is the twenty-fourth engine** (`adapters/qdrant` 0.1.0), rank 59
+  of the DB-Engines lens and the last system the August reading left. It
+  restores a collection snapshot (`qdrant_snapshot`, `qdrant_snapshot_dir`)
+  and a whole-storage snapshot (`qdrant_full_snapshot`,
+  `qdrant_full_snapshot_dir`). Conformance 15/15, zero core changes.
+
+  **The engine restores its own snapshots**, which decided the design:
+  `qdrant --snapshot` and `qdrant --storage-snapshot` read the artifact at
+  startup, so the restore is one process launch and not a single HTTP
+  call. That matters here more than it would elsewhere, because the
+  official image carries **no HTTP client at all** — no `curl`, `wget`,
+  `nc` or `python3` — which would otherwise have made a restore
+  impossible to drive. It does carry `bash`, so the healthcheck and the
+  checks speak to the engine over `/dev/tcp`, and Qdrant answers with
+  `content-length` rather than chunked encoding, which makes one read the
+  whole body. The sandbox therefore starts idle and the adapter owns the
+  engine's whole lifetime, as it does for CouchDB.
+
+  **A damaged snapshot does not restore at all**, and that is new. Qdrant
+  validates what it reads and exits 101 without ever listening —
+  measured at truncations of 25%, 50%, 75%, 90% and 99%, and on a 4 KB bit
+  flip inside a structurally valid archive. There is no equivalent of the
+  h2 adapter's silently recovered empty database or the couchdb adapter's
+  shorter one, so a drill that passes here restored the whole snapshot.
+  Above that sits a second fence the engine supplies itself: every
+  snapshot gets a `.checksum` sidecar holding its SHA-256, matching to the
+  byte, and when the operator copied it too the adapter verifies the
+  artifact against it before anything crosses into the sandbox. What
+  remains is the well-formed zero — an empty collection has a valid
+  snapshot and comes back green with `points_count: 0` — so the restore's
+  verdict is the restored point count, the h2 and victoriametrics
+  precedent.
+
+  **Checks are written in what Qdrant answers to**: a path, optionally
+  followed by a space and a JSON body, which turns the request into the
+  `POST` that asks the engine its most useful question — an exact and
+  filterable point count. A path that does not begin with `/` is relative
+  to the restored collection. The runner takes the HTTP status as the
+  verdict and reduces the body to `count` or `points_count`.
+
+  **Issue #166 is the guard shape**, the OpenSearch precedent rather than
+  CouchDB's suspend. Qdrant has no TTL and no expiry; the only thing that
+  runs unbidden is the optimizer, whose vacuum reclaims points that were
+  already soft-deleted and that a point count therefore never counted.
+  Measured: a snapshot holding 300 deleted points of 1000 restores as 700
+  and is still 700 after the optimizer's window, with optimization on and
+  with it off. Suspending a mechanism that cannot subtract would be
+  theatre, so the adapter proves the property with a test instead.
+
+  Two smaller decisions are worth naming. The engine is started as
+  `/qdrant/qdrant` rather than through the image's `entrypoint.sh`, whose
+  purpose is to restart it in *recovery mode* after an OOM — an engine
+  deciding on its own to serve something other than what the backup held.
+  And `--disable-telemetry` is passed on every start and is not
+  configurable: Qdrant ships with `telemetry_disabled: false`, and ADR
+  0018 has no exceptions. Qdrant needs no credential at all, so unlike the
+  couchdb, neo4j and mssql adapters this one puts no secret on the wire.
+
+  **A copy of Qdrant's storage directory is deliberately not a source
+  kind.** It restores, and it is a terrible artifact: for a thousand
+  points the tree measures 593 MB apparent against 924 KB real, a forest
+  of 32 MB sparse files, so a copy made with anything that does not
+  understand holes writes hundreds of megabytes of zeroes per drill. The
+  snapshot API is the vendor's answer to exactly that.
+
+  Verified against 1.19.0 and 1.18.1; the project publishes no end-of-life
+  dates, so `supported_until` is null.
+
+### Changed
+
+- The **cross-version note in the Qdrant catalogue entry was wrong** and is
+  corrected. It said a restore was only safe within a minor, which would
+  have made the version matrix unusually tight; measured, all nine
+  combinations of {1.17.0, 1.18.1, 1.19.0} snapshot against engine restore
+  completely, downgrades included. The manifest still records only what CI
+  restores from — "verified against" is never widened into "supports".
+
 ## [0.23.0] - 2026-08-30
 
 ### Added
