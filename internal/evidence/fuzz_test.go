@@ -72,7 +72,7 @@ func FuzzVerify(f *testing.F) {
 	f.Add([]byte(`{"schema":"probavi-evidence/1"}`))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		res, err := Verify(bytes.NewReader(data), keyring)
+		res, err := Verify(bytes.NewReader(data), keyring, nil)
 		if err != nil {
 			// Verify reports I/O problems only; a bytes.Reader has none.
 			t.Fatalf("Verify returned an I/O error over an in-memory reader: %v", err)
@@ -127,7 +127,7 @@ func FuzzVerifyWithoutKeys(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		res, err := Verify(bytes.NewReader(data), Keyring{})
+		res, err := Verify(bytes.NewReader(data), Keyring{}, nil)
 		if err != nil {
 			t.Fatalf("Verify returned an I/O error over an in-memory reader: %v", err)
 		}

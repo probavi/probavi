@@ -171,7 +171,7 @@ $ docker run --rm --user "$(id -u):$(id -g)" \
     -v "$PWD/evidence:/evidence:ro" -v "$PWD/keys:/keys:ro" \
     ghcr.io/probavi/probavi:0.21.0 \
     evidence verify --log /evidence/evidence.jsonl --key /keys/probavi.key.pub
-{"status":"VALID","records":1,"damaged_lines":[],"failed_line":0,"reason":""}
+{"status":"VALID","records":1,"damaged_lines":[],"failed_line":0,"reason":"","head":{"seq":1,"hash":"sha256:4f79ebba9fbc598b7fd48bbe3bdc0058c870a7cd545ce65838878a9dd1f644ec"}}
 ```
 
 ## 5. Compose

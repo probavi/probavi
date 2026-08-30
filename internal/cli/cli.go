@@ -158,6 +158,7 @@ func Commands() []Command {
 			Flags: []Flag{
 				{Name: "--log", Required: true, Doc: "Path to the evidence log file."},
 				{Name: "--key", Required: true, Repeatable: true, Doc: "Public key file; repeat to build a keyring."},
+				{Name: "--anchor", Doc: "Chain head from an earlier verification, <seq>:sha256:<hex>; a log that ends before it is INVALID."},
 			},
 			Stdout: "one-line JSON verification result",
 			ExitCodes: []ExitCode{

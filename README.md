@@ -125,7 +125,7 @@ $ probavi evidence keygen --out /etc/probavi/ed25519.key
 $ probavi run --config drill.yaml
 {"outcome":"pass","seq":42,"evidence_path":"/var/lib/probavi/evidence.jsonl","checks_passed":3,"checks_total":3,"restore_ms":252400,"total_ms":259100}
 $ probavi evidence verify --log /var/lib/probavi/evidence.jsonl --key /etc/probavi/ed25519.key.pub
-{"status":"VALID","records":42,"damaged_lines":[],"failed_line":0,"reason":""}
+{"status":"VALID","records":42,"damaged_lines":[],"failed_line":0,"reason":"","head":{"seq":42,"hash":"sha256:92301f78dbd977ae6773f1c842abcaebf523f426b6fead984df34f6fc36007ae"}}
 ```
 
 Exit codes are the cron/CI contract: `0` backup proven restorable, `1` recoverability failure, `2` infrastructure error, `5` evidence record could not be written.
@@ -201,18 +201,20 @@ $ probavi evidence verify --log evidence.jsonl --key probavi.key.pub
 
 That `VALID` is the product: anyone holding only the log file and your public key can reproduce it, fully offline.
 
+The `head` it prints is the anchor for the next run. Keep it where the drill host cannot rewrite it — a ticket, a mail, a repository — and pass it back as `--anchor <seq>:sha256:<hex>`: a log with its newest records deleted then stops verifying. Without it that deletion is invisible, because a valid prefix of a log is itself a valid log ([the format specification](docs/evidence-schema.md) §9.1 states both halves).
+
 They do not have to take Probavi's word for it either. [`spec/evidence`](spec/evidence) is a second, independent verifier — written from [the format specification](docs/evidence-schema.md) alone, no dependencies, and in a separate Go module so it *cannot* import Probavi's own evidence code. Install it without installing Probavi:
 
 ```console
 $ go install github.com/probavi/probavi/spec/evidence/cmd/probavi-evidence-verify@latest
 $ probavi-evidence-verify --log evidence.jsonl --key probavi.key.pub
-{"status":"VALID","records":1,"damaged_lines":[]}
+{"status":"VALID","records":1,"damaged_lines":[],"head":{"seq":1,"hash":"sha256:4d4e1e16bf3b5b25acbb941048c302d1c4491a0466fc741952bf7119a5e6fbc9"}}
 ```
 
 The verifier is versioned independently of the `probavi` binary, with its own `spec/evidence/vX.Y.Z` tags. Pin one when the verification itself has to be reproducible — an audit that records which verifier accepted a log has to be able to name it, and `@latest` moves:
 
 ```console
-$ go install github.com/probavi/probavi/spec/evidence/cmd/probavi-evidence-verify@v0.4.0
+$ go install github.com/probavi/probavi/spec/evidence/cmd/probavi-evidence-verify@v0.5.0
 ```
 
 Verification is free permanently and is never part of a commercial offering — paywalling it would destroy the thing the evidence is for.

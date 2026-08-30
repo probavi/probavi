@@ -83,6 +83,7 @@ Commands:
       configuration or I/O error.
 
   evidence verify --log <file> --key <pubkey> [--key <pubkey> ...]
+                  [--anchor <seq>:sha256:<hex>]
       Verify an evidence log offline against one or more public keys.
       Prints a one-line JSON result on stdout.
       Exit codes: 0 VALID, 1 VALID_WITH_DAMAGE, 2 INVALID,

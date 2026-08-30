@@ -111,11 +111,20 @@ func dispatch(table map[string]handler, m cli.Match, stdout, stderr io.Writer, t
 
 // verifyOutput is the machine-readable verify result printed on stdout.
 type verifyOutput struct {
-	Status       string `json:"status"`
-	Records      int    `json:"records"`
-	DamagedLines []int  `json:"damaged_lines"`
-	FailedLine   int    `json:"failed_line"`
-	Reason       string `json:"reason"`
+	Status       string     `json:"status"`
+	Records      int        `json:"records"`
+	DamagedLines []int      `json:"damaged_lines"`
+	FailedLine   int        `json:"failed_line"`
+	Reason       string     `json:"reason"`
+	Head         headOutput `json:"head"`
+}
+
+// headOutput is the chain head evidence-schema.md §9.1 requires on every
+// run: the anchor for the next verification, printed whether or not one was
+// given this time.
+type headOutput struct {
+	Seq  int64  `json:"seq"`
+	Hash string `json:"hash"`
 }
 
 func runEvidenceVerify(args []string, stdout, stderr io.Writer, tr *i18n.T) int {
@@ -124,11 +133,19 @@ func runEvidenceVerify(args []string, stdout, stderr io.Writer, tr *i18n.T) int 
 	logPath := fs.String("log", "", "path to the evidence log file (required)")
 	var keyPaths stringList
 	fs.Var(&keyPaths, "key", "public key file; repeat to build a keyring (required)")
+	anchorText := fs.String("anchor", "", "chain head from an earlier verification, <seq>:sha256:<hex>; a log that ends before it is INVALID")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 	if *logPath == "" || len(keyPaths) == 0 {
 		tr.Fprintf(stderr, msgVerifyFlagsRequired)
+		return exitUsage
+	}
+	// An unreadable anchor is a usage error and never a verdict: a value
+	// that cannot be parsed says nothing about the log (§9.1).
+	anchor, err := parseAnchorFlag(*anchorText)
+	if err != nil {
+		fmt.Fprintf(stderr, "probavi evidence verify: %v\n", err)
 		return exitUsage
 	}
 
@@ -144,7 +161,7 @@ func runEvidenceVerify(args []string, stdout, stderr io.Writer, tr *i18n.T) int 
 	}
 	defer closeQuietly(f, stderr)
 
-	res, err := evidence.Verify(f, keyring)
+	res, err := evidence.Verify(f, keyring, anchor)
 	if err != nil {
 		fmt.Fprintf(stderr, "probavi evidence verify: %v\n", err)
 		return exitUsage
@@ -155,6 +172,7 @@ func runEvidenceVerify(args []string, stdout, stderr io.Writer, tr *i18n.T) int 
 		DamagedLines: res.DamagedLines,
 		FailedLine:   res.FailedLine,
 		Reason:       res.Reason,
+		Head:         headOutput{Seq: res.Head.Seq, Hash: res.Head.Hash},
 	}
 	if out.DamagedLines == nil {
 		out.DamagedLines = []int{}
@@ -178,6 +196,20 @@ func runEvidenceVerify(args []string, stdout, stderr io.Writer, tr *i18n.T) int 
 	default:
 		return exitInvalid
 	}
+}
+
+// parseAnchorFlag turns the --anchor value into the optional §9.1 input.
+// An empty flag means no anchor, which leaves verification exactly as §9
+// defines it.
+func parseAnchorFlag(text string) (*evidence.Head, error) {
+	if text == "" {
+		return nil, nil
+	}
+	anchor, err := evidence.ParseAnchor(text)
+	if err != nil {
+		return nil, err
+	}
+	return &anchor, nil
 }
 
 // keygenOutput is the machine-readable keygen result printed on stdout.

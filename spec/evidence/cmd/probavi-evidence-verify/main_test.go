@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -127,6 +128,54 @@ func TestTornTailExitsOne(t *testing.T) {
 	}
 }
 
+// TestTheHeadIsPrintedAndAcceptedBack drives the §9.1 loop through the
+// command an auditor actually runs: verify, keep the printed head, hand it
+// back. Removing the newest record then turns exit 0 into exit 2, which is
+// the only way this tool can answer for a deletion past the end of the file.
+func TestTheHeadIsPrintedAndAcceptedBack(t *testing.T) {
+	key := examplePath("signer.pub")
+	full := examplePath("log_v2.jsonl")
+
+	code, stdout, stderr := runCLI(t, "--log", full, "--key", key)
+	if code != exitValid {
+		t.Fatalf("exit = %d, want %d (stderr: %s)", code, exitValid, stderr)
+	}
+	var res struct {
+		Head struct {
+			Seq  int64  `json:"seq"`
+			Hash string `json:"hash"`
+		} `json:"head"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("stdout is not JSON (%q): %v", stdout, err)
+	}
+	if res.Head.Seq != 3 || !strings.HasPrefix(res.Head.Hash, "sha256:") {
+		t.Fatalf("head = %+v, want seq 3 with a sha256 reference", res.Head)
+	}
+	anchor := strconv.FormatInt(res.Head.Seq, 10) + ":" + res.Head.Hash
+
+	if code, _, stderr = runCLI(t, "--log", full, "--key", key, "--anchor", anchor); code != exitValid {
+		t.Fatalf("anchored verify of the whole log: exit = %d, want %d (stderr: %s)", code, exitValid, stderr)
+	}
+
+	// Drop the newest record: the file alone still verifies, which is the
+	// gap, and the anchor is what closes it.
+	short := copyExample(t, "log_v2.jsonl", func(data []byte) []byte {
+		lines := bytes.SplitAfter(data, []byte("\n"))
+		return bytes.Join(lines[:2], nil)
+	})
+	if code, _, _ = runCLI(t, "--log", short, "--key", key); code != exitValid {
+		t.Fatalf("truncated log without an anchor: exit = %d, want %d — the removal must be invisible without one", code, exitValid)
+	}
+	code, stdout, _ = runCLI(t, "--log", short, "--key", key, "--anchor", anchor)
+	if code != exitInvalid {
+		t.Fatalf("truncated log with its anchor: exit = %d, want %d (stdout: %s)", code, exitInvalid, stdout)
+	}
+	if !strings.Contains(stdout, "truncated") {
+		t.Errorf("stdout = %q, want a reason naming truncation", stdout)
+	}
+}
+
 func TestUsageErrorsExitThree(t *testing.T) {
 	key := examplePath("signer.pub")
 	cases := []struct {
@@ -139,6 +188,8 @@ func TestUsageErrorsExitThree(t *testing.T) {
 		{"unknown flag", []string{"--nope"}},
 		{"missing log file", []string{"--log", "does-not-exist.jsonl", "--key", key}},
 		{"missing key file", []string{"--log", examplePath("log_v1.jsonl"), "--key", "does-not-exist.pub"}},
+		{"malformed anchor", []string{"--log", examplePath("log_v1.jsonl"), "--key", key, "--anchor", "not-an-anchor"}},
+		{"anchor with a short hash", []string{"--log", examplePath("log_v1.jsonl"), "--key", key, "--anchor", "2:sha256:beef"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -307,12 +307,12 @@ all secrets it holds; truncation limits (§3) apply after redaction.
 
 ## 9. Verification
 
-`probavi evidence verify --log <file> --key <pub> [--key <pub>…]`
-implements exactly this algorithm; independent implementations need nothing
-else. That claim is not left as an assertion: `spec/evidence` is a second
-implementation written from this document alone (§12). §9.1 adds one
-optional input to the algorithm below, and is specified ahead of both
-implementations.
+`probavi evidence verify --log <file> --key <pub> [--key <pub>…]
+[--anchor <seq>:sha256:<hex>]` implements exactly this algorithm; independent
+implementations need nothing else. That claim is not left as an assertion:
+`spec/evidence` is a second implementation written from this document alone
+(§12). The algorithm below is the whole of verification; §9.1 adds the one
+optional input.
 
 ```text
 expected_prev ← "sha256:" + 64×"0"
@@ -374,9 +374,7 @@ the schema version does not move (§10). Without one, §1 stands exactly
 as written — the log file and the public key remain sufficient for
 everything the chain itself can prove. Both verifiers of §12 take an
 anchor as one optional flag, `--anchor <seq>:sha256:<hex>`, beside the
-`--log` and `--key` flags they already have; the flag is specified here
-before it is built, so this section leads the implementations by one
-change.
+`--log` and `--key` flags they already have.
 
 **The anchor is the chain head.** When the algorithm above finishes,
 `expected_seq − 1` is the highest verified `seq` and `expected_prev` is
@@ -386,6 +384,10 @@ is the head:
 ```text
 <seq>:sha256:<64 lowercase hex digits>
 ```
+
+`<seq>` is decimal digits with no sign and no leading zeros, so that one
+head has exactly one spelling: what a verifier printed parses back, and a
+value dressed differently is refused rather than quietly reinterpreted.
 
 Because §5 chains over the same bytes, the head at `seq` is the value
 record `seq + 1` carries as its `prev_hash` — an anchor can be read out
@@ -611,8 +613,14 @@ notes are collected in `spec/evidence/README.md`.
   already-published example logs. No field, record byte, or serialization
   rule is affected and the schema version stays at `probavi-evidence/2`
   (§10): an anchor is an input to verification rather than a part of the
-  format, and §1 stands unchanged without one. Specified ahead of the two
-  implementations, which follow in the next change.
+  format, and §1 stands unchanged without one.
+- Anchored verification implemented (2026-08-30, no format change): both
+  verifiers of §12 now print `head` and take `--anchor`, and the spelling
+  of the sequence number is pinned here — decimal digits, no sign, no
+  leading zeros — so the two cannot disagree about a value either of them
+  printed. The chain's test list grows from four attacks to five: a log
+  truncated at its end, verified with an anchor. Nothing about a record
+  changed.
 - Editorial (2026-08-29, no format change): §8 names engine diagnostics
   among the things a record must not carry. The rule was already there in
   substance — "result rows or any per-row data" and "adapter stderr

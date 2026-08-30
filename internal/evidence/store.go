@@ -143,11 +143,11 @@ func (s *Store) resume() error {
 	if _, err := s.f.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("seek evidence log: %w", err)
 	}
-	w, err := walk(s.f, nil)
+	w, err := walk(s.f, nil, nil)
 	if err != nil {
 		return err
 	}
-	if w.failedLine != 0 {
+	if w.failed {
 		return fmt.Errorf("%w: line %d: %s", ErrChainState, w.failedLine, w.reason)
 	}
 	if len(w.damaged) > 0 {

@@ -9,6 +9,11 @@
 // Usage:
 //
 //	probavi-evidence-verify --log <file> --key <pubkey> [--key <pubkey> ...]
+//	                        [--anchor <seq>:sha256:<hex>]
+//
+// Every run prints the log's chain head, which is the anchor for the next
+// one; passing an earlier head back as --anchor is what detects records
+// removed from the end of the log (§9.1).
 //
 // Exit codes follow §9: 0 VALID, 1 VALID_WITH_DAMAGE, 2 INVALID, 3 usage or
 // I/O error.
@@ -24,6 +29,39 @@ import (
 
 	evidence "github.com/probavi/probavi/spec/evidence"
 )
+
+// loadKeys reads every --key file into the keyring, reporting the offending
+// path on the way out: a bad key file must never be mistaken for a bad log.
+func loadKeys(paths keyList, stderr io.Writer) ([]ed25519.PublicKey, error) {
+	keys := make([]ed25519.PublicKey, 0, len(paths))
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			fmt.Fprintf(stderr, "probavi-evidence-verify: read key %s: %v\n", p, err)
+			return nil, err
+		}
+		pub, err := evidence.ParsePublicKey(data)
+		if err != nil {
+			fmt.Fprintf(stderr, "probavi-evidence-verify: %s: %v\n", p, err)
+			return nil, err
+		}
+		keys = append(keys, pub)
+	}
+	return keys, nil
+}
+
+// parseAnchor turns the --anchor value into the optional §9.1 input; an
+// empty flag means none, which leaves verification as §9 defines it.
+func parseAnchor(text string) (*evidence.Head, error) {
+	if text == "" {
+		return nil, nil
+	}
+	head, err := evidence.ParseAnchor(text)
+	if err != nil {
+		return nil, err
+	}
+	return &head, nil
+}
 
 // keyList collects repeated --key flags.
 type keyList []string
@@ -52,6 +90,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	logPath := fs.String("log", "", "path to the evidence log (JSONL)")
 	var keyPaths keyList
 	fs.Var(&keyPaths, "key", "path to an ed25519 public key file (repeatable)")
+	anchorText := fs.String("anchor", "", "chain head from an earlier run, <seq>:sha256:<hex>; a log ending before it is INVALID")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -60,25 +99,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fs.Usage()
 		return exitUsage
 	}
-
-	keys := make([]ed25519.PublicKey, 0, len(keyPaths))
-	for _, p := range keyPaths {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			fmt.Fprintf(stderr, "probavi-evidence-verify: read key %s: %v\n", p, err)
-			return exitUsage
-		}
-		pub, err := evidence.ParsePublicKey(data)
-		if err != nil {
-			fmt.Fprintf(stderr, "probavi-evidence-verify: %s: %v\n", p, err)
-			return exitUsage
-		}
-		keys = append(keys, pub)
-	}
-
-	f, err := os.Open(*logPath)
+	// An anchor that cannot be read is a usage error, never a verdict: it
+	// says nothing about the log (§9.1).
+	anchor, err := parseAnchor(*anchorText)
 	if err != nil {
 		fmt.Fprintf(stderr, "probavi-evidence-verify: %v\n", err)
+		return exitUsage
+	}
+
+	keys, err := loadKeys(keyPaths, stderr)
+	if err != nil {
+		return exitUsage
+	}
+
+	f, ferr := os.Open(*logPath)
+	if ferr != nil {
+		fmt.Fprintf(stderr, "probavi-evidence-verify: %v\n", ferr)
 		return exitUsage
 	}
 	defer func() {
@@ -87,7 +123,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	}()
 
-	res, err := evidence.Verify(f, evidence.NewKeyring(keys...))
+	res, err := evidence.VerifyAnchored(f, evidence.NewKeyring(keys...), anchor)
 	if err != nil {
 		fmt.Fprintf(stderr, "probavi-evidence-verify: %v\n", err)
 		return exitUsage

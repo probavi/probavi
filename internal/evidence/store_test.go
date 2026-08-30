@@ -55,7 +55,7 @@ func verifyFile(t *testing.T, path string, kr Keyring) *Result {
 			t.Fatalf("close log: %v", err)
 		}
 	}()
-	res, err := Verify(f, kr)
+	res, err := Verify(f, kr, nil)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestFrozenLogsVerify(t *testing.T) {
 					t.Fatalf("close: %v", err)
 				}
 			}()
-			res, err := Verify(f, testKeyring())
+			res, err := Verify(f, testKeyring(), nil)
 			if err != nil {
 				t.Fatalf("Verify: %v", err)
 			}
@@ -165,7 +165,7 @@ func TestWorkedExampleVerifiesWithCommittedKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("open %s: %v", golden, err)
 		}
-		res, verr := Verify(f, NewKeyring(pub))
+		res, verr := Verify(f, NewKeyring(pub), nil)
 		if cerr := f.Close(); cerr != nil {
 			t.Fatalf("close %s: %v", golden, cerr)
 		}
@@ -320,7 +320,7 @@ func TestTamperDetection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tampered := strings.Join(tt.tamper(logLines(t, path)), "\n") + "\n"
-			res, err := Verify(strings.NewReader(tampered), testKeyring())
+			res, err := Verify(strings.NewReader(tampered), testKeyring(), nil)
 			if err != nil {
 				t.Fatalf("Verify: %v", err)
 			}
@@ -340,14 +340,16 @@ func TestTamperDetection(t *testing.T) {
 // TestTamperDetection's "removed record" case covers removal from within
 // the sequence, which does break continuity — this is the one member of
 // that family the file cannot answer for. The independent verifier pins
-// the same property from the specification alone (spec/evidence). If
-// either implementation ever starts reporting this, it is because the
-// format gained an anchor outside the file, and both documents must say
-// so before either test changes.
+// the same property from the specification alone (spec/evidence). What
+// closes it is an input rather than an algorithm: hand the verifier the
+// anchor of §9.1 and the same file is INVALID, which is what
+// TestATruncatedLogFailsItsAnchor covers. This test must keep passing
+// unchanged, because the anchor is only worth having while the file alone
+// still cannot tell.
 func TestTailTruncationVerifiesValid(t *testing.T) {
 	lines := logLines(t, buildLog(t))
 	truncated := strings.Join(lines[:2], "\n") + "\n"
-	res, err := Verify(strings.NewReader(truncated), testKeyring())
+	res, err := Verify(strings.NewReader(truncated), testKeyring(), nil)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -362,7 +364,7 @@ func TestTornTailIsDamageNotTampering(t *testing.T) {
 		t.Fatalf("read log: %v", err)
 	}
 	torn := string(raw) + `{"partial":`
-	res, err := Verify(strings.NewReader(torn), testKeyring())
+	res, err := Verify(strings.NewReader(torn), testKeyring(), nil)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -377,7 +379,7 @@ func TestTornTailIsDamageNotTampering(t *testing.T) {
 func TestMidFileFragmentSkippedWithoutChainBreak(t *testing.T) {
 	lines := logLines(t, buildLog(t))
 	withGarbage := strings.Join([]string{lines[0], lines[1], "not json at all", lines[2]}, "\n") + "\n"
-	res, err := Verify(strings.NewReader(withGarbage), testKeyring())
+	res, err := Verify(strings.NewReader(withGarbage), testKeyring(), nil)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -496,7 +498,7 @@ func TestAppendRejections(t *testing.T) {
 }
 
 func TestVerifyEdgeCases(t *testing.T) {
-	res, err := Verify(strings.NewReader(""), testKeyring())
+	res, err := Verify(strings.NewReader(""), testKeyring(), nil)
 	if err != nil {
 		t.Fatalf("Verify empty: %v", err)
 	}
@@ -504,11 +506,11 @@ func TestVerifyEdgeCases(t *testing.T) {
 		t.Errorf("empty log: %s with %d records, want VALID with 0", res.Status, res.Records)
 	}
 
-	if _, err := Verify(iotest.ErrReader(errors.New("disk gone")), testKeyring()); err == nil {
+	if _, err := Verify(iotest.ErrReader(errors.New("disk gone")), testKeyring(), nil); err == nil {
 		t.Error("Verify must surface I/O errors as errors, not verdicts")
 	}
 
-	res, err = Verify(strings.NewReader(""), nil)
+	res, err = Verify(strings.NewReader(""), nil, nil)
 	if err != nil || res.Status != StatusValid {
 		t.Errorf("nil keyring must behave as empty keyring: res=%v err=%v", res, err)
 	}
