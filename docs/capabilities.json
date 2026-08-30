@@ -120,6 +120,55 @@
       "docs": "adapters/clickhouse/README.md"
     },
     {
+      "id": "couchdb",
+      "name": "CouchDB",
+      "status": "experimental",
+      "since": null,
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "couchdb",
+        "name": "Apache CouchDB"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "3.5.2",
+          "image": "couchdb:3.5.2"
+        },
+        {
+          "engine_version": "3.4.3",
+          "image": "couchdb:3.4.3"
+        }
+      ],
+      "sources": [
+        {
+          "id": "couchbackup",
+          "name": "One `couchbackup` file: its header line, then one JSON batch of documents per line",
+          "pitr": false
+        },
+        {
+          "id": "couchbackup_dir",
+          "name": "A directory of them; the newest by file time is restored (no CouchDB artifact records when it was taken)",
+          "pitr": false
+        },
+        {
+          "id": "couchdb_data",
+          "name": "One copy of CouchDB's data directory — the tree holding `_dbs.couch`, `_nodes.couch` and `shards/`",
+          "pitr": false
+        },
+        {
+          "id": "couchdb_data_tar",
+          "name": "A tar of CouchDB's data directory",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/couchdb/README.md"
+    },
+    {
       "id": "duckdb",
       "name": "DuckDB",
       "status": "experimental",

@@ -54,6 +54,8 @@
 /adapters/*/firebird
 /h2
 /adapters/*/h2
+/couchdb
+/adapters/*/couchdb
 
 # Test and coverage artifacts
 *.test

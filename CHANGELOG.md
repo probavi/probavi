@@ -11,6 +11,55 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **CouchDB is the twenty-third engine** (`adapters/couchdb` 0.1.0), rank 58
+  of the DB-Engines lens and the highest-ranked reachable system left
+  uncovered. It restores a `couchbackup` file (`couchbackup`,
+  `couchbackup_dir`) and a copy of CouchDB's own data directory
+  (`couchdb_data`, `couchdb_data_tar`). The official image needs no
+  wrapper — it already carries a POSIX shell and `curl`, which is all the
+  adapter drives the engine with — and a drill runs under `--network none`
+  with nothing published. Conformance 15/15, zero core changes.
+
+  **The sandbox must start idle**, and that is a measured requirement
+  rather than a preference: CouchDB reads its database registry once at
+  startup and caches it, so a data directory placed under a *running*
+  server is invisible — the shards sit on disk and the database answers
+  HTTP 404. The adapter therefore places the artifact first and starts the
+  engine itself, supplying the administrator account at that moment. The
+  password is a documented public constant, the CouchDB equivalent of the
+  postgres adapter's `pg_hba` trust overwrite: CouchDB 3.x refuses to run
+  without an administrator, and the core's ephemeral secret cannot be used
+  for one, because its value would have to cross the protocol (§2.5).
+
+  **Checks are written in what CouchDB answers to**: a path with a query
+  string, relative to the restored database — `_all_docs?limit=0` for a
+  document count, a view or a keyed range for anything else. The runner
+  takes the HTTP status as the verdict, because `curl` exits 0 for a 404
+  as readily as for a 200, and reduces the body to the one number CouchDB
+  states where it states one.
+
+  **No CouchDB artifact declares how much it should hold**, and the
+  adapter says so rather than implying a fence it lacks. A `.couch` shard
+  truncated at its tail is opened without complaint — its header sits at
+  the end, so the engine falls back to the last valid one and serves an
+  older database: measured at HTTP 200 with 280 documents of 500. A
+  `couchbackup` file cut between two lines is simply a shorter backup. So
+  the restore's verdict is the restored document count and a well-formed
+  zero is refused, and the README points at the drill's own row-count
+  check for the rest. Two gaps do close: a `couchbackup` cut *inside* a
+  line has no final newline, so the batches are counted before the
+  transfer and the replay is held to that number, and a data directory
+  without `_dbs.couch` is refused because CouchDB serves nothing from one.
+
+  **Issue #166 is the suspend shape**: CouchDB's compactor (`smoosh`) runs
+  unbidden, and compaction is exactly what drops old revisions and the
+  bodies of deleted documents. Every engine start empties its `db_channels`
+  and `view_channels`. It is a suspension and not a rewrite — an explicit
+  `_compact` still works, because what a drill must not do is let the
+  engine decide.
+
 ## [0.22.0] - 2026-08-30
 
 ### Added
