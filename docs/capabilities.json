@@ -285,6 +285,57 @@
       "docs": "adapters/firebird/README.md"
     },
     {
+      "id": "h2",
+      "name": "H2",
+      "status": "experimental",
+      "since": null,
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "h2",
+        "name": "H2"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "2.4.240",
+          "image": "eclipse-temurin:21-jre",
+          "engine_artifact": "https://repo1.maven.org/maven2/com/h2database/h2/2.4.240/h2-2.4.240.jar"
+        },
+        {
+          "engine_version": "2.3.232",
+          "image": "eclipse-temurin:21-jre",
+          "engine_artifact": "https://repo1.maven.org/maven2/com/h2database/h2/2.3.232/h2-2.3.232.jar"
+        }
+      ],
+      "sources": [
+        {
+          "id": "h2_backup",
+          "name": "One `BACKUP TO` archive — H2's own online backup, consistent by construction",
+          "pitr": false
+        },
+        {
+          "id": "h2_backup_dir",
+          "name": "A directory of archives; the newest by file time is restored",
+          "pitr": false
+        },
+        {
+          "id": "h2_db",
+          "name": "One `<database>.mv.db` file, copied while the database was closed",
+          "pitr": false
+        },
+        {
+          "id": "h2_db_dir",
+          "name": "A directory of database files; the newest by file time is restored (no H2 artifact records when it was taken)",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/h2/README.md"
+    },
+    {
       "id": "influxdb",
       "name": "InfluxDB",
       "status": "experimental",

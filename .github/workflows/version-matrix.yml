@@ -128,4 +128,9 @@ jobs:
         # so the runner, not the test binary, reports the overrun.
         env:
           PROBAVI_IT_IMAGE: ${{ matrix.target.image }}
+          # A library-shipped engine's versions share one base image, so
+          # the image alone cannot say which artifact this job meant
+          # (docs/engine-versions.md §1). The suite resolves the pair from
+          # the manifest, and only for a version the manifest lists.
+          PROBAVI_IT_ENGINE_VERSION: ${{ matrix.target.engine_version }}
         run: go test -race -tags integration -timeout 25m ./adapters/${{ matrix.target.adapter }}/...

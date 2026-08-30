@@ -53,6 +53,7 @@ the exact instant proven.
 | [Elasticsearch](adapters/elasticsearch/README.md) | 8.19.20, 9.5.2 | 0.17.0 | `elasticsearch_repo`, `elasticsearch_repo_zip` |
 | [etcd](adapters/etcd/README.md) | 3.5, 3.6, 3.7 | 0.7.0 | `etcd_snapshot`, `etcd_snapshot_dir` |
 | [Firebird](adapters/firebird/README.md) | 5.0.4, 4.0.7 | 0.21.0 | `firebird_gbak`, `firebird_gbak_dir` |
+| [H2](adapters/h2/README.md) | 2.4.240, 2.3.232 | unreleased | `h2_backup`, `h2_backup_dir`, `h2_db`, `h2_db_dir` |
 | [InfluxDB](adapters/influxdb/README.md) | 2.7, 2.8, 2.9 | 0.15.0 | `influx_backup`, `influx_backup_dir`, `influx_backup_tar` |
 | [MariaDB](adapters/mariadb/README.md) | 10.11, 11.4, 11.8, 12.3 | 0.7.0 | `mariadb_backup`, `mariadb_dump`, `mariadb_dump_dir` |
 | [MongoDB](adapters/mongodb/README.md) | 7.0, 8.0 | 0.2.0 | `mongodump`, `mongodump_dir`, `mongodump_with_oplog`, `mongodump_with_users` |

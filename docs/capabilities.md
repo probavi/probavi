@@ -27,7 +27,10 @@ the things they describe; on any disagreement, those documents win.
 3. **Verified, not "supported".** `adapters[].verified` lists the engine
    versions and images this repository's integration suite actually
    restores from — the suite reads those images from the same manifests,
-   so a listed version is one CI exercises. Render it as *"verified
+   so a listed version is one CI exercises. An engine that ships as a
+   library rather than as an image carries `engine_artifact` beside
+   `image`: the base is what CI pulls, the artifact is the engine itself,
+   and the version is held against the artifact. Render it as *"verified
    against PostgreSQL 16"*. Do **not** render it as a supported-version
    range: this project makes no such claim, and inventing one is exactly
    the drift this file exists to prevent. How versions get on the list,
@@ -122,7 +125,8 @@ that also drives the behavior, so the two cannot disagree:
 
 The generator refuses to produce a file when these disagree: an adapter
 whose probe declares a source kind its manifest does not name, a manifest
-whose engine version does not appear in the image CI pulls, a `docs` path
+whose engine version does not appear in the image CI pulls — or in the
+artifact it fetches, where the engine ships as a library — a `docs` path
 that no longer exists, an unknown maturity value — each is a build
 failure, not a silently wrong claim.
 

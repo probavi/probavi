@@ -121,6 +121,12 @@ func (r Release) Published() *string {
 type ManifestTarget struct {
 	EngineVersion string `json:"engine_version"`
 	Image         string `json:"image"`
+	// EngineArtifact names the engine itself for an engine that ships as a
+	// library rather than as an image — the URL a sandbox build fetches,
+	// whose path carries the version (docs/engine-versions.md §1). Where
+	// it is set, Image names only the base the sandbox is built from, and
+	// the version is held against this field instead of the image tag.
+	EngineArtifact string `json:"engine_artifact,omitempty"`
 	// Baseline marks the one version every run restores from. The rest are
 	// exercised by the scheduled version matrix and before a release tag
 	// (docs/engine-versions.md §3).
@@ -168,6 +174,29 @@ func (m *AdapterManifest) SandboxImage(requested string) (string, error) {
 	}
 	return "", fmt.Errorf("adapter %s: image %q is not one of its verified entries — "+
 		"add it to %s before testing against it", m.ID, requested, ManifestFile)
+}
+
+// SandboxEngine resolves what an integration run builds its sandbox from:
+// the base image, and — for an engine that ships as a library — the
+// artifact to add to it (docs/engine-versions.md §1).
+//
+// An empty version selects the baseline, the everyday case. A non-empty
+// one comes from PROBAVI_IT_ENGINE_VERSION, which the version-matrix
+// workflow sets per job, and it is accepted only if the manifest lists
+// it. Resolving by version rather than by image is what makes a
+// library-shipped engine testable at all: several of its versions share
+// one base, so the image alone cannot say which jar a job meant.
+func (m *AdapterManifest) SandboxEngine(requestedVersion string) (image, artifact string, err error) {
+	for _, v := range m.Verified {
+		if requestedVersion == "" && v.Baseline || requestedVersion != "" && v.EngineVersion == requestedVersion {
+			return v.Image, v.EngineArtifact, nil
+		}
+	}
+	if requestedVersion == "" {
+		return "", "", fmt.Errorf("adapter %s: manifest marks no verified entry as the baseline", m.ID)
+	}
+	return "", "", fmt.Errorf("adapter %s: engine version %q is not one of its verified entries — "+
+		"add it to %s before testing against it", m.ID, requestedVersion, ManifestFile)
 }
 
 // probeGolden is the committed probe response of an adapter, in the shape
@@ -286,7 +315,7 @@ func buildAdapter(root, dir string) (Adapter, error) {
 func publishedTargets(targets []ManifestTarget) []VerifiedTarget {
 	out := make([]VerifiedTarget, 0, len(targets))
 	for _, t := range targets {
-		out = append(out, VerifiedTarget{EngineVersion: t.EngineVersion, Image: t.Image})
+		out = append(out, VerifiedTarget{EngineVersion: t.EngineVersion, Image: t.Image, EngineArtifact: t.EngineArtifact})
 	}
 	return out
 }
@@ -405,7 +434,7 @@ func checkVerified(dirName string, m *AdapterManifest) error {
 	}
 	baselines := 0
 	seenVersion := make(map[string]bool, len(m.Verified))
-	seenImage := make(map[string]bool, len(m.Verified))
+	seenEngine := make(map[string]bool, len(m.Verified))
 	for _, v := range m.Verified {
 		if v.EngineVersion == "" || v.Image == "" {
 			return fmt.Errorf("adapter %s: verified entry needs both engine_version and image", dirName)
@@ -415,24 +444,29 @@ func checkVerified(dirName string, m *AdapterManifest) error {
 				"YYYY-MM-DD date; state null where the vendor publishes no end date",
 				dirName, v.EngineVersion, *v.SupportedUntil)
 		}
-		tag := v.Image
-		if i := strings.LastIndex(v.Image, ":"); i >= 0 {
-			tag = v.Image[i+1:]
+		// Whichever field carries the engine is the one the version must
+		// agree with and the one that must be unique: the image tag for an
+		// engine shipped as an image, the artifact URL for one shipped as
+		// a library, where several versions share a base
+		// (docs/engine-versions.md §1).
+		field, engine := "image tag", imageTag(v.Image)
+		if v.EngineArtifact != "" {
+			field, engine = "engine_artifact", v.EngineArtifact
 		}
-		if !strings.Contains(tag, v.EngineVersion) {
-			return fmt.Errorf("adapter %s: verified engine_version %q does not appear in image tag %q",
-				dirName, v.EngineVersion, v.Image)
+		if !strings.Contains(engine, v.EngineVersion) {
+			return fmt.Errorf("adapter %s: verified engine_version %q does not appear in %s %q",
+				dirName, v.EngineVersion, field, engine)
 		}
 		// Two entries for one version would make a matrix job's result
-		// ambiguous, and two entries for one image would run the same
-		// job twice under different claims.
+		// ambiguous, and two for one engine would run the same job twice
+		// under different claims.
 		if seenVersion[v.EngineVersion] {
 			return fmt.Errorf("adapter %s: engine version %q is listed twice", dirName, v.EngineVersion)
 		}
-		if seenImage[v.Image] {
-			return fmt.Errorf("adapter %s: image %q is listed twice", dirName, v.Image)
+		if seenEngine[engine] {
+			return fmt.Errorf("adapter %s: %s %q is listed twice", dirName, field, engine)
 		}
-		seenVersion[v.EngineVersion], seenImage[v.Image] = true, true
+		seenVersion[v.EngineVersion], seenEngine[engine] = true, true
 		if v.Baseline {
 			baselines++
 		}
@@ -444,4 +478,13 @@ func checkVerified(dirName string, m *AdapterManifest) error {
 		return fmt.Errorf("adapter %s: %d verified entries marked baseline, want exactly 1", dirName, baselines)
 	}
 	return nil
+}
+
+// imageTag returns the tag half of an image reference, or the whole
+// reference when it carries none.
+func imageTag(image string) string {
+	if i := strings.LastIndex(image, ":"); i >= 0 {
+		return image[i+1:]
+	}
+	return image
 }

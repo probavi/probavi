@@ -13,6 +13,61 @@ always called out explicitly.
 
 ### Added
 
+- **H2 is the twenty-second engine** (`adapters/h2` 0.1.0), and the first
+  whose engine is a library rather than an image. It restores what H2's own
+  `BACKUP TO` writes (`h2_backup`, `h2_backup_dir`) and a copy of a closed
+  database file (`h2_db`, `h2_db_dir`), embedded — no server, no port, no
+  password prompt, no listener, the SQLite and DuckDB pattern with a real
+  relational engine. Conformance 15/15, zero core changes to the adapter
+  protocol.
+
+  **The measurement day moved the plan three times, and one of the moves
+  removed a source kind the catalogue had promised.** A `SCRIPT TO` SQL
+  artifact truncated *at a statement boundary* replays with exit 0, no
+  error of any kind, and an arbitrary amount of data missing — measured at
+  162 rows of 1000 — and H2 writes no end-of-script marker to fence it
+  with. SQLite's `.dump` is fenceable because it ends in `COMMIT;`; this
+  does not, so the kind is refused and the adapter README says why. A
+  truncated archive is refused by its own zip container, host-side before
+  a byte moves.
+
+  Two more measured facts shaped the code. H2's `Shell` **does not exit
+  non-zero on a SQL error** — it prints `Error: ...` on stdout, mid-stream,
+  and returns 0 — so the declared check runner is a script that turns the
+  tool's own words into an exit code and strips its decoration, which is
+  the only way it meets the runner contract of adapter protocol §6.1. And
+  pointed at a path holding no database, H2 **creates one** and answers
+  queries against it, so every URL the adapter builds carries
+  `IFEXISTS=TRUE`: without it, a drill whose restore silently produced
+  nothing would check a fresh empty database and pass.
+
+  The storage format is the version fence. The MVStore header states it
+  (`format:1` for 1.4, `format:3` for every 2.x), so an H2 1.x database is
+  refused by name rather than by the engine's own message, which names
+  neither side; within the 2.x line a database written by 2.2, 2.3 or 2.4
+  opens in any of the others, both directions (measured).
+
+  The `.mv.db` form needed a verdict the host-side measurements had not
+  suggested, and the integration suite is what found it: **MVStore does not
+  refuse a damaged file.** It reconstructs whatever consistent state the
+  remaining bytes describe and opens that one, so a truncated database
+  opens as an older database — at every truncation of the suite's fixture,
+  one with no tables at all, while the engine reported success and a
+  `SELECT 1` passed against it. The restore's verdict is therefore the
+  restored table count, and a well-formed zero is refused, which is the
+  victoriametrics precedent applied to a second engine.
+
+  What that cannot catch is a truncation that leaves the tables and loses
+  rows — and that is the same property a copy of a running database has,
+  measured at 0 rows against a real 3,000,000. Nothing distinguishes either
+  from a sound backup: no lock file, `clean:1` in both headers, a valid
+  chunk footer in both, exit 0 from the engine for both. The README states
+  that in those words and points at `BACKUP TO`, which is consistent by
+  construction and whose archive *is* fenceable. Nothing in the issue #166 class:
+  an H2 trigger needs a Java class on the classpath, the sandbox's
+  classpath is the jar alone, so a backup's own trigger fails the checks
+  against its table instead of quietly deleting rows.
+
 - **PostGIS joins the verified list — as a variant of the PostgreSQL
   adapter, not as a twenty-second engine.** `postgis/postgis:17-3.5`
   (PostGIS 3.5.2 on PostgreSQL 17.5) gets its own matrix job beside the
@@ -107,6 +162,26 @@ always called out explicitly.
   keeps its two-argument shape and delegates, so nothing that already called
   it breaks. The schema is untouched: a v0.4.0 verifier still accepts every
   log a v0.5.0 one does, it simply cannot be asked the anchored question.
+
+### Changed
+
+- **The verified list can name an engine that ships as a library.**
+  `docs/engine-versions.md` §1 held every engine version against the tag of
+  an image CI pulls, which is right for an engine distributed as an image
+  and impossible for one distributed as a jar: H2 is not inside any image
+  until somebody puts it there, and the only versioned community image was
+  measured and rejected (two release lines behind, Java 11, and carrying
+  neither `grep` nor `sed`, which the check runner needs).
+
+  Such an entry now states the two facts separately — `image` names the
+  base a sandbox is built from, `engine_artifact` the engine itself as the
+  URL the build fetches — and the generator holds the version against the
+  artifact, with uniqueness moving to whichever field carries the engine so
+  that several versions may share one base. `AdapterManifest.SandboxEngine`
+  resolves a run by version rather than by image, because for a
+  library-shipped engine the image alone cannot say which jar a job meant.
+  Additive within `probavi-capabilities/1` (§2 permits added fields), so no
+  contract version moves, and every other adapter's entries are unchanged.
 
 ### Security
 

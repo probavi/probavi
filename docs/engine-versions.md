@@ -64,15 +64,41 @@ string carries the variant's own version exactly as the image tag states
 it, and the `image` column is what tells a consumer which flavour a row
 is; the three rules above apply to the variant's vendor unchanged.
 
+An **engine that ships as a library** rather than as an image has no image
+whose tag could carry its version, because the engine is not inside any
+image until somebody puts it there: H2 is a jar on Maven Central, and
+Derby and HyperSQL are the same shape. Such an entry states the two facts
+separately. `image` names the base a drill's sandbox is built from — what
+CI pulls — and `engine_artifact` names the engine itself, as the URL the
+build fetches, whose path carries the version.
+
+None of the obligations soften, and one of them gets stronger:
+
+- The version must appear in `engine_artifact` exactly as `engine_version`
+  spells it, which is the same agreement the image tag provides for every
+  other entry.
+- Uniqueness moves to whichever field carries the engine. Two entries may
+  share a base image — the same JRE hosts every H2 version — but never an
+  artifact, because that is the thing being claimed.
+- The suite builds its sandbox from that pairing and no other, so a green
+  run proves the artifact the manifest names rather than whatever the base
+  happened to contain.
+- A consumer can fetch exactly what CI fetched, which is more than an
+  image tag offers: a tag can be moved, a versioned artifact URL cannot.
+
+Where an engine does ship as an image, listing one remains the rule. This
+is for engines that do not, and an entry may not carry both.
+
 ## 2. Listed means exercised
 
 `adapters/<id>/adapter.json` is the single source. Two mechanisms keep the
 claim and the run in step, in both directions:
 
 - The generator refuses a manifest whose `engine_version` does not appear
-  in the tag of the image beside it, whose entries repeat a version or an
-  image, or which marks anything other than exactly one entry as the
-  `baseline`.
+  in the tag of the image beside it — or, where the engine ships as a
+  library, in the `engine_artifact` beside it — whose entries repeat a
+  version or the field that carries the engine, or which marks anything
+  other than exactly one entry as the `baseline`.
 - `internal/tools/versionmatrix` turns every entry into one CI job, and
   `TestMatrixCoversEveryClaimedVersion` fails when the jobs and
   `docs/capabilities.json` disagree either way — a claimed version with no
@@ -81,7 +107,11 @@ claim and the run in step, in both directions:
 The integration suites resolve their sandbox image through
 `AdapterManifest.SandboxImage`, which accepts `PROBAVI_IT_IMAGE` **only**
 when the manifest already lists it. A workflow cannot point the suite at
-an arbitrary image and publish the resulting green run.
+an arbitrary image and publish the resulting green run. A library-shipped
+engine resolves the same way and one step further: the matrix job also
+names the version it is running, and `AdapterManifest.SandboxEngine`
+returns the base and the artifact the manifest pairs with it — so the jar
+under test is the manifest's, never the job's.
 
 `baseline` is a fact about this repository's pipeline, not a capability, so
 it stays out of `docs/capabilities.json`. A consumer is told which versions
