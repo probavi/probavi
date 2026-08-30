@@ -165,8 +165,8 @@ Work planned in this repository:
   - [ ] Apache Druid — rank 73; segments live in deep storage and the catalog in a metadata database, so a drill needs both alongside the services — the Milvus shape.
 
   Recommended against:
-  - [ ] The structurally unreachable classes the DB-Engines lens names above — cloud-only services, query engines without storage, caches and embedded libraries, desktop products — are refused as classes rather than one by one: an adapter needs an engine that runs in a sandbox from an artifact the operator holds, and none of them has one. Recorded so that a request for, say, a DynamoDB or Snowflake drill gets the architectural answer instead of a backlog entry.
-  - [ ] Apache Greenplum — open development stopped after 7.x, new releases are closed and registration-gated, and only stale community images remain. Record the refusal so the gap in the catalog is a decision rather than an oversight.
+  - The structurally unreachable classes the DB-Engines lens names above — cloud-only services, query engines without storage, caches and embedded libraries, desktop products — are refused as classes rather than one by one: an adapter needs an engine that runs in a sandbox from an artifact the operator holds, and none of them has one. Recorded so that a request for, say, a DynamoDB or Snowflake drill gets the architectural answer instead of a backlog entry.
+  - Apache Greenplum — open development stopped after 7.x, new releases are closed and registration-gated, and only stale community images remain. The refusal is recorded so the gap in the catalog is a decision rather than an oversight.
 - [ ] Evaluate hosted/managed offering (business decision, out of scope for the OSS core).
 
 ## Deliberate non-goals (all phases)
