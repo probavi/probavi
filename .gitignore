@@ -85,3 +85,7 @@ cover.out
 # qdrant adapter binary
 /qdrant
 /adapters/*/qdrant
+
+# weaviate adapter binary
+/weaviate
+/adapters/*/weaviate

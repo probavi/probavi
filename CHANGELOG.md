@@ -11,6 +11,80 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **Weaviate is the twenty-fifth engine** (`adapters/weaviate` 0.1.0),
+  rank 67 of the DB-Engines lens under the September 2026 reading — the
+  first uncovered system that reading found held by nothing. It restores
+  filesystem-backend backups as one directory (`weaviate_backup`), a tar
+  archive of one (`weaviate_backup_tar`), or the newest of a directory of
+  them (`weaviate_backup_dir`, ranked by the completion instant each
+  backup's own metadata claims — never file times). Conformance 15/15 on
+  the first run, zero core changes, and the fifth engine in a row whose
+  measurement day ran before a line of it was written.
+
+  **The stock image cannot idle, and that is a measured fact rather than
+  an entrypoint quirk**: the image pins `/bin/weaviate` as its entrypoint
+  and the binary ignores unknown positional arguments, so
+  `command: sleep infinity` starts a serving engine on defaults — no
+  backup module, telemetry on. The drill sandbox therefore runs the
+  two-line wrapper the adapter README documents (`ENTRYPOINT []`, nothing
+  else changed), the Prometheus precedent, and the integration suite
+  builds the same wrapper from the manifest's listed image. Inside it the
+  adapter owns the engine's whole lifetime: the backup tree is placed
+  under the filesystem backend's root, the engine starts with the module
+  enabled, and the engine's own restore API is driven with busybox
+  `wget` — the HTTP client the Alpine image actually carries (no `bash`,
+  no `curl`). Two environment pins came out of measurement: under
+  `--network none` the memberlist layer finds no private IP and refuses
+  to start, so `CLUSTER_ADVERTISE_ADDR` is pinned to loopback; and the
+  engine refuses another node's backup outright (HTTP 500), so
+  `CLUSTER_HOSTNAME` is pinned to the node the backup's own metadata
+  names.
+
+  **The artifact is fenced end to end, half by the engine and half by its
+  own manifest.** The engine judges content: a chunk truncated anywhere,
+  a flipped byte and a missing file all fail the restore with the
+  engine's own words, and a failed restore leaves the class absent rather
+  than short (measured). The backup's node manifest names every chunk, so
+  a file lost in a copy is refused on the host before a byte moves, and a
+  `backup_config.json` reporting `FAILED` or an in-progress status is
+  refused as what it is — not yet an artifact; a directory of backups
+  refuses a newer failed or in-progress attempt by name rather than
+  silently proving an older backup. What remains is the well-formed zero
+  — an empty class restores green with count 0 (measured) — so the
+  restore's verdict is the restored class's object count, with zero
+  refused. `backup.created_at` is exact: the backup states its completion
+  instant in RFC 3339 UTC with the zone attached, so no timezone
+  declaration exists here, and passing one is refused rather than
+  ignored.
+
+  Issue #166 lands in the **guard** shape, the qdrant and OpenSearch
+  precedent: no TTL, no expiry, and the vector index's tombstone cleanup
+  reclaims only what was already deleted — measured stable across several
+  cleanup windows with the cleanup demonstrably running, and proven by a
+  test rather than assumed. `DISABLE_TELEMETRY=true` on every start (ADR
+  0018 as an environment variable): without it the engine POSTs to
+  telemetry.weaviate.io at startup (measured) — the drill's
+  `--network none` would stop the packet, but an environment that states
+  it is worth more than a network that happens to prevent it. Checks are
+  written in what the engine answers to: bare GraphQL text, or a path
+  with an optional JSON body, with the HTTP status as the verdict and a
+  200 carrying a GraphQL `errors` array refused (measured; Weaviate
+  answers semantic errors that way).
+
+  All nine cross-version combinations of {1.37.15, 1.38.13, 1.39.2}
+  backup × engine restored the fixture completely, downgrades included;
+  the manifest still records only what CI restores from. Verified against
+  1.39.2 (baseline) and 1.38.13; the vendor supports the latest three
+  minor lines as a rolling policy and publishes no end-of-life dates, so
+  `supported_until` is null. Deliberately not shipped, reasons in the
+  README: copies of the persistence directory (refused by the absence of
+  the one file every real backup has, with a message naming the backup
+  API), the cloud backup backends (staging stays the operator's job), and
+  multi-node backups (refused by name — the filesystem backend and a
+  drill sandbox are both single-node). Restores at `--memory 128m`.
+
 ## [0.24.0] - 2026-08-30
 
 ### Added

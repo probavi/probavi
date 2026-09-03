@@ -1163,6 +1163,50 @@
       "pitr": false,
       "conformance_verified": true,
       "docs": "adapters/victoriametrics/README.md"
+    },
+    {
+      "id": "weaviate",
+      "name": "Weaviate",
+      "status": "experimental",
+      "since": null,
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "weaviate",
+        "name": "Weaviate"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "1.39.2",
+          "image": "semitechnologies/weaviate:1.39.2"
+        },
+        {
+          "engine_version": "1.38.13",
+          "image": "semitechnologies/weaviate:1.38.13"
+        }
+      ],
+      "sources": [
+        {
+          "id": "weaviate_backup",
+          "name": "One backup directory, from `POST /v1/backups/filesystem`",
+          "pitr": false
+        },
+        {
+          "id": "weaviate_backup_dir",
+          "name": "A directory of them; the one whose own metadata claims the newest completion is restored",
+          "pitr": false
+        },
+        {
+          "id": "weaviate_backup_tar",
+          "name": "One tar archive (plain or gzip) of a filesystem-backend backup directory",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/weaviate/README.md"
     }
   ],
   "sandbox_providers": [
