@@ -1,0 +1,29 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The official semitechnologies/weaviate images pin /bin/weaviate as their entrypoint AND the binary ignores unknown positional arguments (measured 2026-09-03), so under `command: sleep infinity` the stock image starts a serving engine on defaults instead of idling; the suite runs the two-line wrapper the adapter README documents, built FROM the listed image, so the server exercised is exactly the listed version's. The image is Alpine with busybox sh, wget and nc — no bash, no curl — which is what the check runner speaks. Under --network none the engine needs CLUSTER_ADVERTISE_ADDR pinned to loopback (measured: the memberlist layer otherwise finds no private IP and refuses to start), and without DISABLE_TELEMETRY=true it POSTs to telemetry.weaviate.io at startup (measured). The vendor supports the latest three minor lines with a rolling policy and publishes no per-version end-of-life dates, so supported_until is null and versions_checked records the reading. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "weaviate",
+  "name": "Weaviate",
+  "status": "experimental",
+  "since": null,
+  "engine_name": "Weaviate",
+  "conformance_verified": true,
+  "docs": "adapters/weaviate/README.md",
+  "versions_checked": "2026-09-03",
+  "verified": [
+    {
+      "engine_version": "1.39.2",
+      "image": "semitechnologies/weaviate:1.39.2",
+      "supported_until": null,
+      "baseline": true
+    },
+    {
+      "engine_version": "1.38.13",
+      "image": "semitechnologies/weaviate:1.38.13",
+      "supported_until": null
+    }
+  ],
+  "sources": {
+    "weaviate_backup_tar": "One tar archive (plain or gzip) of a filesystem-backend backup directory",
+    "weaviate_backup": "One backup directory, from `POST /v1/backups/filesystem`",
+    "weaviate_backup_dir": "A directory of them; the one whose own metadata claims the newest completion is restored"
+  }
+}

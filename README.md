@@ -71,6 +71,7 @@ the exact instant proven.
 | [SQLite](adapters/sqlite/README.md) | 3.46, 3.49, 3.50, 3.51, 3.53 | 0.10.0 | `sqlite_db`, `sqlite_db_dir`, `sqlite_dump`, `sqlite_dump_dir` |
 | [Valkey](adapters/valkey/README.md) | 7.2, 8.0, 8.1, 9.0, 9.1 | 0.9.0 | `valkey_aof`, `valkey_rdb`, `valkey_rdb_dir` |
 | [VictoriaMetrics](adapters/victoriametrics/README.md) | 1.150 | 0.16.0 | `victoriametrics_backup`, `victoriametrics_backup_dir`, `victoriametrics_backup_tar` |
+| [Weaviate](adapters/weaviate/README.md) | 1.39.2, 1.38.13 | unreleased | `weaviate_backup`, `weaviate_backup_dir`, `weaviate_backup_tar` |
 <!-- capabilities:engines:end -->
 
 The table is generated from [docs/capabilities.json](docs/capabilities.json) by
@@ -149,7 +150,7 @@ $ tar -xzf "probavi-adapter-postgres_${tag#v}_${os}_${arch}.tar.gz" ./probavi-ad
 $ sudo install -m0755 probavi probavi-adapter-postgres /usr/local/bin/
 ```
 
-Adapters ship for `postgres`, `mysql`, `mariadb`, `mongodb`, `mssql`, `clickhouse`, `etcd`, `redis`, `valkey`, `sqlite`, `duckdb`, `prometheus`, `cassandra`, `opensearch`, `influxdb`, `victoriametrics`, `elasticsearch`, `oracle`, `neo4j`, `solr`, `firebird`, `h2`, `couchdb`, and `qdrant`. Both binaries must sit on the same `PATH`: the core launches the adapter as a child process and finds it by name. Each adapter carries its own version — the one it reports through the protocol and that every evidence record stores as `adapter.version` — which moves independently of the release tag; the compatibility contract between core and adapter is the adapter protocol version, negotiated at handshake. The release notes list both.
+Adapters ship for `postgres`, `mysql`, `mariadb`, `mongodb`, `mssql`, `clickhouse`, `etcd`, `redis`, `valkey`, `sqlite`, `duckdb`, `prometheus`, `cassandra`, `opensearch`, `influxdb`, `victoriametrics`, `elasticsearch`, `oracle`, `neo4j`, `solr`, `firebird`, `h2`, `couchdb`, `qdrant`, and `weaviate`. Both binaries must sit on the same `PATH`: the core launches the adapter as a child process and finds it by name. Each adapter carries its own version — the one it reports through the protocol and that every evidence record stores as `adapter.version` — which moves independently of the release tag; the compatibility contract between core and adapter is the adapter protocol version, negotiated at handshake. The release notes list both.
 
 Verifying an evidence log needs nothing else: `probavi evidence verify` reads a log and a public key, so an auditor installs the core alone.
 
