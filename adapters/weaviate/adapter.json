@@ -3,7 +3,7 @@
   "id": "weaviate",
   "name": "Weaviate",
   "status": "experimental",
-  "since": null,
+  "since": "0.25.0",
   "engine_name": "Weaviate",
   "conformance_verified": true,
   "docs": "adapters/weaviate/README.md",
