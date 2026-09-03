@@ -63,9 +63,9 @@ Also installed:
 ## 3. Install
 
 ```console
-$ docker pull ghcr.io/probavi/probavi:0.24.0
-$ docker run --rm ghcr.io/probavi/probavi:0.24.0 version
-probavi 0.24.0 linux/amd64
+$ docker pull ghcr.io/probavi/probavi:0.25.0
+$ docker run --rm ghcr.io/probavi/probavi:0.25.0 version
+probavi 0.25.0 linux/amd64
 adapter protocol: probavi-adapter/0
 evidence schema:  probavi-evidence/2 (verifies all published versions)
 ```
@@ -108,7 +108,7 @@ in a config value (AGENTS.md §3.3).
 ```console
 $ mkdir -p keys evidence
 $ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/keys:/keys" \
-    ghcr.io/probavi/probavi:0.24.0 evidence keygen --out /keys/probavi.key
+    ghcr.io/probavi/probavi:0.25.0 evidence keygen --out /keys/probavi.key
 {"key_id":"…","key_file":"/keys/probavi.key","public_key_file":"/keys/probavi.key.pub"}
 ```
 
@@ -152,7 +152,7 @@ $ docker run --rm \
     -v "$PWD/keys:/keys:ro" \
     -v "$PWD/evidence:/evidence" \
     -v "$PWD/drill.yaml:/etc/probavi/drill.yaml:ro" \
-    ghcr.io/probavi/probavi:0.24.0 run --config /etc/probavi/drill.yaml
+    ghcr.io/probavi/probavi:0.25.0 run --config /etc/probavi/drill.yaml
 {"outcome":"pass","seq":1,"evidence_path":"/evidence/evidence.jsonl","checks_passed":2,"checks_total":2,"restore_ms":77,"total_ms":1739}
 ```
 
@@ -169,7 +169,7 @@ verifier that shares no code with the writer:
 ```console
 $ docker run --rm --user "$(id -u):$(id -g)" \
     -v "$PWD/evidence:/evidence:ro" -v "$PWD/keys:/keys:ro" \
-    ghcr.io/probavi/probavi:0.24.0 \
+    ghcr.io/probavi/probavi:0.25.0 \
     evidence verify --log /evidence/evidence.jsonl --key /keys/probavi.key.pub
 {"status":"VALID","records":1,"damaged_lines":[],"failed_line":0,"reason":"","head":{"seq":1,"hash":"sha256:4f79ebba9fbc598b7fd48bbe3bdc0058c870a7cd545ce65838878a9dd1f644ec"}}
 ```
@@ -179,7 +179,7 @@ $ docker run --rm --user "$(id -u):$(id -g)" \
 ```yaml
 services:
   drill:
-    image: ghcr.io/probavi/probavi:0.24.0
+    image: ghcr.io/probavi/probavi:0.25.0
     user: "${UID}:${GID}"
     group_add:
       - "${DOCKER_GID}"          # stat -c %g /var/run/docker.sock
@@ -214,7 +214,7 @@ no entrypoint wrapper, so those codes survive:
               -v /srv/backups:/backups:ro -v /srv/probavi/keys:/keys:ro \
               -v /srv/probavi/evidence:/evidence \
               -v /srv/probavi/drill.yaml:/etc/probavi/drill.yaml:ro \
-              ghcr.io/probavi/probavi:0.24.0 run --config /etc/probavi/drill.yaml
+              ghcr.io/probavi/probavi:0.25.0 run --config /etc/probavi/drill.yaml
 ```
 
 `flock` matters: two drills writing one evidence log collide on its
@@ -238,7 +238,7 @@ with the same flags as the release archives (`CGO_ENABLED=0`,
 one from the matching tarball are identical bytes:
 
 ```console
-$ docker build --build-arg VERSION=0.24.0 -t probavi:local .
+$ docker build --build-arg VERSION=0.25.0 -t probavi:local .
 $ docker run --rm --entrypoint sha256sum probavi:local /usr/local/bin/probavi
 ```
 
@@ -255,7 +255,7 @@ mount the CA certificate and rebuild the trust store before the drill:
 ```console
 $ docker run --rm --user root \
     -v "$PWD/corp-ca.crt:/usr/local/share/ca-certificates/corp-ca.crt:ro" \
-    --entrypoint sh ghcr.io/probavi/probavi:0.24.0 \
+    --entrypoint sh ghcr.io/probavi/probavi:0.25.0 \
     -c 'update-ca-certificates && exec su probavi -s /usr/local/bin/probavi -- run --config …'
 ```
 
@@ -263,7 +263,7 @@ For anything beyond a one-off, build a small image on top instead — it
 keeps the drill itself running unprivileged:
 
 ```dockerfile
-FROM ghcr.io/probavi/probavi:0.24.0
+FROM ghcr.io/probavi/probavi:0.25.0
 USER root
 COPY corp-ca.crt /usr/local/share/ca-certificates/
 RUN update-ca-certificates
