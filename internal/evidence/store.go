@@ -44,7 +44,7 @@ func Open(path string, signer *Signer, logger *slog.Logger) (*Store, error) {
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("open evidence log: %w", err), lock.Close())
 	}
-	if err := syncDir(path); err != nil {
+	if err := syncDir(path, "evidence log"); err != nil {
 		return nil, errors.Join(err, f.Close(), lock.Close())
 	}
 	st := &Store{f: f, lock: lock, signer: signer, logger: logger}
@@ -183,30 +183,35 @@ func (s *Store) closeTornTail() error {
 	return nil
 }
 
-// syncDir flushes the directory that holds the log, once, at open.
+// syncDir flushes the directory that holds path, once, after the file
+// itself is durable. what names the file for the error messages.
 //
-// Appending fsyncs the file, which promises its bytes reached the disk —
-// but the name pointing at those bytes lives in the parent directory, and
-// on a new log that entry may still be in cache. A crash there loses the
-// whole file, fsynced record and all, which for an append-only evidence
-// log means losing the proof that a drill ran at all.
+// Fsyncing a file promises its bytes reached the disk — but the name
+// pointing at those bytes lives in the parent directory, and for a file
+// that has just been created that entry may still be in cache. A crash
+// there loses the whole file, fsynced content and all.
+//
+// Both callers lose something they cannot reconstruct. For an append-only
+// evidence log it is the proof that a drill ran at all. For a signing key
+// it is worse: the records naming that key id already exist, so the key
+// cannot be rotated away from, and nobody can verify what it signed.
 //
 // EINVAL means the filesystem does not support syncing a directory. That
 // is not a reason to refuse to run a drill, so it is the one error passed
-// over; anything else is a durability guarantee this store cannot make and
-// says so rather than pretending.
-func syncDir(path string) error {
+// over; anything else is a durability guarantee this package cannot make
+// and says so rather than pretending.
+func syncDir(path, what string) error {
 	d, err := os.Open(filepath.Dir(path))
 	if err != nil {
-		return fmt.Errorf("open evidence log directory: %w", err)
+		return fmt.Errorf("open %s directory: %w", what, err)
 	}
 	serr := d.Sync()
 	cerr := d.Close()
 	if serr != nil && !errors.Is(serr, syscall.EINVAL) {
-		return errors.Join(fmt.Errorf("sync evidence log directory: %w", serr), cerr)
+		return errors.Join(fmt.Errorf("sync %s directory: %w", what, serr), cerr)
 	}
 	if cerr != nil {
-		return fmt.Errorf("close evidence log directory: %w", cerr)
+		return fmt.Errorf("close %s directory: %w", what, cerr)
 	}
 	return nil
 }
