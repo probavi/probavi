@@ -281,6 +281,8 @@ jobs:
             echo
             echo "Built with \`$(go version | cut -d' ' -f3)\` (pinned by go.mod). To reproduce a binary bit for bit:"
             echo
+            echo "The core builds for any Unix-like \`GOOS\` Go supports that provides \`flock\`; Windows, Solaris and AIX stop with a message saying why. The independent verifier builds everywhere."
+            echo
             echo '```sh'
             echo "git checkout ${GITHUB_REF_NAME}"
             echo

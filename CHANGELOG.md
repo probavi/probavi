@@ -13,6 +13,31 @@ always called out explicitly.
 
 ### Fixed
 
+- **A build for a platform without `flock` now says why**, and the README
+  says which platforms the build instructions cover. `internal/evidence`
+  took the evidence log's single-writer lock with `syscall.Flock` and no
+  build constraint, so a cross-compile stopped at `undefined:
+  syscall.Flock` — a symbol the reader never wrote — while the release
+  notes offered `GOOS=<os> GOARCH=<arch>` without qualification.
+
+  The lock moved behind a constraint that matches where the primitive
+  actually exists, measured platform by platform: every Unix-like `GOOS`
+  Go supports builds, including illumos (which needed the constraint
+  written carefully, since its build tag implies solaris), while Windows,
+  Solaris, AIX and plan9 stop with a named reason pointing at the file
+  that explains it.
+
+  Not made to compile with a no-op lock, deliberately. Two processes
+  appending to one log interleave records and break the hash chain, so a
+  build that could not take the lock would be one that cannot honestly
+  write evidence — removing the guarantee without removing the claim. A
+  test now pins that a second writer is refused.
+
+  None of this restricts verifying: the independent verifier in
+  `spec/evidence` has no dependencies, takes no lock, and builds
+  everywhere Go does, Windows included — which is what an auditor handed
+  a log and a public key uses, and the README now says so.
+
 - **The signing key is read through one open descriptor, and a generated
   key's directory entry is made durable.** Two gaps in the same handful of
   lines, both in the path that decides what signs every record.

@@ -216,18 +216,24 @@ func syncDir(path, what string) error {
 	return nil
 }
 
+// errLockHeld is the one lock failure with a meaning of its own: another
+// writer has the log. It is declared here rather than beside the platform
+// implementation so that a platform without one fails on the missing
+// function and its stated reason, not on a missing sentinel.
+var errLockHeld = errors.New("evidence log lock held by another writer")
+
 // acquireLock takes the advisory single-writer lock next to the log file.
 func acquireLock(lockPath string) (*os.File, error) {
 	lock, err := os.OpenFile(filepath.Clean(lockPath), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open lock file: %w", err)
 	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := tryLockExclusive(lock); err != nil {
 		cerr := lock.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
+		if errors.Is(err, errLockHeld) {
 			return nil, errors.Join(fmt.Errorf("%w: %s", ErrLocked, lockPath), cerr)
 		}
-		return nil, errors.Join(fmt.Errorf("flock %s: %w", lockPath, err), cerr)
+		return nil, errors.Join(fmt.Errorf("lock %s: %w", lockPath, err), cerr)
 	}
 	return lock, nil
 }

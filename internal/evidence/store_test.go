@@ -558,3 +558,25 @@ func TestOpenSurvivesAnUnsyncableDirectory(t *testing.T) {
 		t.Errorf("Close: %v", err)
 	}
 }
+
+// TestLockIsHeldByOneWriter pins what the platform split exists to
+// preserve. The lock is not a convenience: two processes appending to one
+// log interleave records and break the hash chain, so a platform that
+// cannot take it does not build (lock_unsupported.go) rather than running
+// without it.
+func TestLockIsHeldByOneWriter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "evidence.jsonl")
+	first, err := Open(path, testSigner(), nil)
+	if err != nil {
+		t.Fatalf("open first store: %v", err)
+	}
+	defer first.Close() //nolint:errcheck // the assertion below is the point
+
+	_, err = Open(path, testSigner(), nil)
+	if !errors.Is(err, ErrLocked) {
+		t.Fatalf("second open = %v, want ErrLocked", err)
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("error = %q, want it to name the log it could not take", err)
+	}
+}
