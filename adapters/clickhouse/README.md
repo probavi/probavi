@@ -190,6 +190,27 @@ If a server cannot answer, the documented default is used, and if that
 server also overrides `backups.allowed_path`, the restore fails with the
 engine's own message about it — which is a better diagnosis than a guess.
 
+
+## The empty restore
+
+An archive that holds no table is refused, and the refusal comes from
+counting what came back rather than from what the engine said.
+
+`RESTORE ALL` prints `RESTORED` for such an archive — for both passes —
+and leaves a server with nothing in it (measured on ClickHouse 26.3:
+`BACKUP` of a database with no tables, restored, `RESTORED` twice, zero
+tables afterwards). The status word is the engine reporting that it did
+what it was asked; it says nothing about there having been anything to do.
+
+So the restore script finishes by counting the non-system tables the
+server holds. The sandbox starts empty, so everything it counts came out
+of the archive; `default` is deliberately not excluded, because a backup
+may legitimately restore into it, and the image ships it holding nothing.
+A count of zero fails the drill with the number on stderr.
+
+A drill exists to catch a backup job that has been writing nothing while
+succeeding every night. This is that gate.
+
 ## Errors it reports
 
 | Situation | Code |
