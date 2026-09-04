@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "mariadb"
-	adapterVersion = "0.3.0"
+	adapterVersion = "0.4.0"
 
 	defaultUser     = "root"
 	defaultDatabase = "probavi"

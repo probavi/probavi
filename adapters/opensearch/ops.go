@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "opensearch"
-	adapterVersion = "0.3.0"
+	adapterVersion = "0.4.0"
 
 	// workDirName is created under the provider's scratch directory —
 	// the official images run as the opensearch user (uid 1000,
@@ -240,6 +240,14 @@ func checkEngine(ctx context.Context, c *core) *protoError {
 	return nil
 }
 
+// startScript launches the node detached. $1 is the snapshot repository
+// directory and $2 the log to write, positional rather than folded into
+// the script because both are built from the sandbox's scratch directory,
+// which the bare-host provider derives from the operator's
+// workspace_root. The elasticsearch adapter passes its paths the same way.
+const startScript = `(opensearch -E discovery.type=single-node -E plugins.security.disabled=true ` +
+	`-E node.store.allow_mmap=false -E path.repo="$1" > "$2" 2>&1 &)`
+
 // startEngine launches a single node in the loopback dev mode the
 // sysctl decision measured: bootstrap checks not enforced, mmap
 // disabled by setting, the repository path allowed from the start
@@ -247,9 +255,8 @@ func checkEngine(ctx context.Context, c *core) *protoError {
 // successful start (measured), so the node is detached by the shell and
 // judged by readiness alone.
 func startEngine(ctx context.Context, c *core, repoDir, logPath string) (readySeconds float64, engineVersion string, perr *protoError) {
-	script := fmt.Sprintf(`(opensearch -E discovery.type=single-node -E plugins.security.disabled=true `+
-		`-E node.store.allow_mmap=false -E path.repo=%s > %s 2>&1 &)`, repoDir, logPath)
-	start, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", script}})
+	start, _, stderr, perr := c.exec(ctx, execArgs{
+		Argv: []string{"bash", "-c", startScript, "bash", repoDir, logPath}})
 	if perr != nil {
 		return 0, "", perr
 	}

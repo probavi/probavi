@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -804,5 +805,46 @@ func TestFirstLine(t *testing.T) {
 	}
 	if firstLine(nil) != "" {
 		t.Error("empty input must yield an empty line")
+	}
+}
+
+// TestStartPassesPathsPositionally covers a scratch directory the
+// operator chose the spelling of.
+//
+// The bare-host provider builds scratch_dir from workspace_root, which is
+// only checked for a leading slash, so folding the repository and log
+// paths into the launch script made a space break the start and a
+// metacharacter reach the shell as script. They are positional
+// parameters now, which is how the elasticsearch adapter has always
+// passed its own.
+func TestStartPassesPathsPositionally(t *testing.T) {
+	const hostile = `/var/lib/probavi drills/$(touch pwned) 'x'`
+	var got []string
+	repo := writeRepo(t, t.TempDir())
+	req := map[string]any{
+		"source":  map[string]any{"kind": "opensearch_repo", "path": repo, "params": map[string]string{}},
+		"sandbox": map[string]any{"scratch_dir": hostile},
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	payload := string(raw)
+
+	var sequence []string
+	handler := provisionHandler(t, &sequence, defaultSimulated())
+	driveOp(t, "provision", payload, func(call verbCall) (any, *protoError) {
+		if call.Verb == "exec" {
+			argv := argvOf(t, call)
+			if len(argv) > 2 && argv[0] == "bash" && strings.Contains(argv[2], "(opensearch ") {
+				got = argv
+			}
+		}
+		return handler(call)
+	})
+	want := []string{"bash", "-c", startScript, "bash",
+		hostile + "/" + workDirName + "/repo", hostile + "/" + workDirName + "/opensearch.log"}
+	if !slices.Equal(got, want) {
+		t.Errorf("start argv = %q,\nwant %q", got, want)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/probavi/probavi/internal/evidence"
@@ -207,5 +208,80 @@ func TestWriteTextfilePublishFailure(t *testing.T) {
 	dir := t.TempDir()
 	if err := WriteTextfile(dir, sampleRecord(evidence.OutcomePass), nil); err == nil {
 		t.Error("renaming over a directory must fail loudly")
+	}
+}
+
+// TestWriteTextfileConcurrentWritersDoNotShareATempFile covers what the
+// fixed "<path>.tmp" name allowed.
+//
+// Nothing stops two drills naming one prometheus_textfile: the game-day
+// config guards a shared evidence log and says nothing about this. With
+// one temporary name they wrote it at the same time and published
+// whichever finished last, with the other's bytes possibly still in it.
+// Each writer needs a name of its own, and the published file has to be
+// one writer's whole output.
+func TestWriteTextfileConcurrentWritersDoNotShareATempFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "probavi.prom")
+
+	const writers = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := range writers {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			rec := sampleRecord(evidence.OutcomePass)
+			rec.Drill.Name = fmt.Sprintf("drill-%d", n)
+			errs <- WriteTextfile(path, rec, nil)
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("WriteTextfile: %v", err)
+		}
+	}
+
+	// The published file is exactly one writer's output: every metric
+	// line carries the same drill label, not a mixture.
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read published file: %v", err)
+	}
+	labels := map[string]bool{}
+	for _, line := range strings.Split(string(body), "\n") {
+		_, rest, found := strings.Cut(line, `drill="`)
+		if !found {
+			continue
+		}
+		if name, _, closed := strings.Cut(rest, `"`); closed {
+			labels[name] = true
+		}
+	}
+	if len(labels) != 1 {
+		t.Errorf("published file mixes %d drills (%v) — a writer must publish its own whole output", len(labels), labels)
+	}
+
+	// And nothing is left behind for the collector to scrape.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("temporary file %q survived", e.Name())
+		}
+	}
+
+	// The collector usually runs as somebody else; CreateTemp would have
+	// left this 0600.
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o644 {
+		t.Errorf("published mode = %04o, want 0644", perm)
 	}
 }

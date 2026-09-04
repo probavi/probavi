@@ -8,6 +8,7 @@ package metrics
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -101,12 +102,43 @@ func WriteTextfile(path string, rec *evidence.Record, trend *Trend) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
-		return fmt.Errorf("write metrics tempfile: %w", err)
+	path = filepath.Clean(path)
+
+	// A name of its own, created in the destination's own directory so
+	// the rename stays inside one filesystem. The fixed "<path>.tmp" this
+	// replaces was the same name for every drill writing the same file,
+	// and nothing stops two: the game-day config guards a shared evidence
+	// log and says nothing about a shared textfile. Two drills then wrote
+	// one temporary file at once and published whichever finished last,
+	// with the other's bytes possibly still in it.
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("create metrics tempfile: %w", err)
 	}
-	if err := os.Rename(tmp, filepath.Clean(path)); err != nil {
-		return fmt.Errorf("publish metrics file: %w", err)
+	name := tmp.Name()
+	// Every failure from here removes the temporary file. A leftover is
+	// not harmless: the collector scrapes a directory, and a name ending
+	// in .tmp that it decides to read is a metric nobody wrote on purpose.
+	if _, err := tmp.WriteString(content); err != nil {
+		return errors.Join(fmt.Errorf("write metrics tempfile: %w", err), tmp.Close(), os.Remove(name))
+	}
+	// CreateTemp makes the file 0600; the collector usually runs as
+	// somebody else. The mode is set before the rename so the file is
+	// never briefly readable at the published name and not by the reader.
+	if err := tmp.Chmod(0o644); err != nil {
+		return errors.Join(fmt.Errorf("set metrics file mode: %w", err), tmp.Close(), os.Remove(name))
+	}
+	if err := tmp.Close(); err != nil {
+		return errors.Join(fmt.Errorf("close metrics tempfile: %w", err), os.Remove(name))
+	}
+	// No fsync, and that is a decision rather than an omission. The
+	// rename is what the collector's contract needs — a reader never sees
+	// a half-written file — and this file is an observability artifact
+	// that the next drill rewrites, not a record anybody has to be able
+	// to reconstruct. Losing it to a crash costs one scrape of staleness.
+	// The evidence log, which cannot be rewritten, does fsync.
+	if err := os.Rename(name, path); err != nil {
+		return errors.Join(fmt.Errorf("publish metrics file: %w", err), os.Remove(name))
 	}
 	return nil
 }

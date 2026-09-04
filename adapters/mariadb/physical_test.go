@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -186,7 +187,7 @@ func physicalHandler(t *testing.T, sequence *[]string) func(verbCall) (any, *pro
 		case args.Argv[0] == "mariadb-backup":
 			*sequence = append(*sequence, "backup-tool-version")
 			return okExec(0), nil
-		case strings.Contains(stmt, "--copy-back"):
+		case strings.Contains(shellScript(args), "--copy-back"):
 			*sequence = append(*sequence, "restore")
 			return execValue{ExitCode: 0, DurationSeconds: 3.5}, nil
 		case strings.Contains(stmt, "mariadbd"):
@@ -263,11 +264,11 @@ func restoreFails(t *testing.T) func(verbCall) (any, *protoError) {
 		if call.Verb == "put_file" {
 			return putFileValue{}, nil
 		}
-		args, stmt := lastArg(t, call)
+		args, _ := lastArg(t, call)
 		switch {
 		case args.Argv[0] == "mariadb":
 			return okExec(1), nil
-		case strings.Contains(stmt, "--copy-back"):
+		case strings.Contains(shellScript(args), "--copy-back"):
 			return errExec(1, "mariadb-backup: Error: cannot open ./xtrabackup_logfile"), nil
 		default:
 			return okExec(0), nil
@@ -395,4 +396,59 @@ func TestPhysicalVersionPrecheckPasses(t *testing.T) {
 			t.Error("no version in the backup — the engine must not be queried")
 		}
 	})
+}
+
+// TestPhysicalRestorePassesPathsPositionally covers a scratch directory
+// the operator chose the spelling of.
+//
+// The bare-host provider builds scratch_dir from workspace_root, which is
+// only checked for a leading slash — so a space in it used to break the
+// restore, and a metacharacter used to reach the shell as script rather
+// than as a path. Folding paths into the script text is what made that
+// possible; passing them as positional parameters is what the sandbox
+// providers already do.
+func TestPhysicalRestorePassesPathsPositionally(t *testing.T) {
+	const hostile = `/var/lib/probavi drills/$(touch pwned) 'x'`
+	backup := writeBackupFixture(t)
+	var got []string
+	payload := fmt.Sprintf(
+		`{"source":{"kind":"mariadb_backup","path":%q,"params":{}},"sandbox":{"scratch_dir":%q},"options":{}}`,
+		backup, hostile)
+
+	// A handler of its own rather than the shared one: that asserts the
+	// transfer lands under /scratch, which is the very thing this test
+	// changes.
+	started := false
+	line, _, _ := driveOp(t, "provision", payload, func(call verbCall) (any, *protoError) {
+		if call.Verb == "put_file" {
+			return putFileValue{BytesCopied: 42, DurationSeconds: 0.5}, nil
+		}
+		args, stmt := lastArg(t, call)
+		script := shellScript(args)
+		switch {
+		case stmt == pinnedQuery:
+			return pinnedExec(), nil
+		case args.Argv[0] == "mariadb" && !started:
+			return okExec(1), nil
+		case args.Argv[0] == "mariadb":
+			return okExec(0), nil
+		case args.Argv[0] == "mariadb-backup":
+			return okExec(0), nil
+		case strings.Contains(script, "--copy-back"):
+			got = args.Argv
+			return execValue{ExitCode: 0, DurationSeconds: 3.5}, nil
+		case strings.Contains(stmt, "mariadbd"):
+			started = true
+			return execValue{ExitCode: 0, DurationSeconds: 2.0}, nil
+		default:
+			return okExec(0), nil
+		}
+	})
+	if f := parseFinal(t, line); !f.OK {
+		t.Fatalf("final = %+v", f)
+	}
+	want := []string{"sh", "-c", physicalRestoreScript, "sh", hostile + "/probavi-mariadb-backup", "/var/lib/mysql"}
+	if !slices.Equal(got, want) {
+		t.Errorf("restore argv = %q,\nwant %q", got, want)
+	}
 }
