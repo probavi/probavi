@@ -13,6 +13,39 @@ always called out explicitly.
 
 ### Fixed
 
+- **Two drills writing one Prometheus textfile no longer share a temporary
+  file.** `WriteTextfile` wrote `<path>.tmp` — the same name for every
+  drill writing the same file, and nothing stops two: the game-day config
+  guards a shared evidence log and says nothing about a shared textfile.
+  They wrote that one temporary at once and published whichever finished
+  last, possibly still holding the other's bytes. Each writer now creates
+  its own name in the destination's directory, and every failure removes
+  it rather than leaving a `.tmp` in a directory the collector scrapes.
+
+  The published mode stays 0644: `os.CreateTemp` makes a file 0600, and
+  the collector usually runs as somebody else, so the mode is set before
+  the rename and the file is never briefly published unreadable.
+
+  Deliberately still no fsync. The rename is what the collector's contract
+  needs — a reader never sees a half-written file — and this is an
+  observability artifact the next drill rewrites, not a record anybody has
+  to reconstruct: losing it to a crash costs one scrape of staleness. The
+  evidence log, which cannot be rewritten, does fsync.
+
+- **Three adapters pass sandbox paths as arguments rather than as script
+  text** (`adapters/mysql` 0.14.0, `adapters/mariadb` 0.4.0,
+  `adapters/opensearch` 0.4.0). They folded a path into a shell script
+  with `Sprintf`. For the docker and k8s providers that path is a
+  constant and nothing came of it, but the bare-host provider builds
+  `scratch_dir` from the operator's `workspace_root`, which is checked
+  only for a leading slash: a space there broke the restore, and a shell
+  metacharacter reached the shell as script rather than as a path.
+
+  The paths are positional parameters now, which is how the sandbox
+  providers have always passed them and how the elasticsearch adapter
+  passes its own. Each adapter has a test driving a provision whose
+  scratch directory carries a space, a quote and a command substitution.
+
 - **A build for a platform without `flock` now says why**, and the README
   says which platforms the build instructions cover. `internal/evidence`
   took the evidence log's single-writer lock with `syscall.Flock` and no
