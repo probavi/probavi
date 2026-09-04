@@ -7,9 +7,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // Signer signs evidence records with an ed25519 private key.
@@ -18,19 +20,45 @@ type Signer struct {
 	keyID string
 }
 
+// maxKeyFileBytes bounds what a key file may be read into memory as. A
+// seed is 64 hex characters and a newline; the rest of the allowance is
+// so a file with trailing whitespace still reaches the format error that
+// names the real problem, rather than a size error that does not.
+const maxKeyFileBytes = 4 << 10
+
 // LoadSigner reads a signing key from a file holding the 32-byte seed as 64
 // lowercase hex characters. It refuses key files readable by group or
 // other (evidence-schema.md §6).
+//
+// The file is opened once and every question asked of the descriptor. A
+// stat followed by a read is two lookups of one name, and what is
+// permission-checked need not be what is read; the difference matters
+// here more than most places, because what is read becomes the key that
+// signs every record.
+//
+// The open is non-blocking and the mode is checked, so a path that is not
+// a regular file is refused rather than obeyed. Both failures are
+// reachable by a typo: a FIFO makes a plain read wait for a writer that
+// never comes, and a character device like /dev/zero makes it read until
+// the host runs out of memory. Neither is a key.
 func LoadSigner(path string) (*Signer, error) {
 	path = filepath.Clean(path)
-	info, err := os.Stat(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open key file: %w", err)
+	}
+	defer f.Close() //nolint:errcheck // read-only descriptor
+	info, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat key file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: %s is not a regular file", ErrKeyFormat, path)
 	}
 	if perm := info.Mode().Perm(); perm&0o077 != 0 {
 		return nil, fmt.Errorf("%w: %s has mode %04o, want 0600 or stricter", ErrKeyPermissions, path, perm)
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := io.ReadAll(io.LimitReader(f, maxKeyFileBytes))
 	if err != nil {
 		return nil, fmt.Errorf("read key file: %w", err)
 	}
@@ -146,6 +174,12 @@ func writeExclusive(path, content string, mode os.FileMode) error {
 	}
 	if cerr != nil {
 		return errors.Join(fmt.Errorf("close %s: %w", path, cerr), os.Remove(path))
+	}
+	// The bytes are durable; the name pointing at them may not be. See
+	// syncDir — for a key, losing that name loses the ability to verify
+	// records that already name its id.
+	if serr := syncDir(path, "key"); serr != nil {
+		return errors.Join(serr, os.Remove(path))
 	}
 	return nil
 }

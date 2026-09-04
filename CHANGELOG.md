@@ -13,6 +13,30 @@ always called out explicitly.
 
 ### Fixed
 
+- **The signing key is read through one open descriptor, and a generated
+  key's directory entry is made durable.** Two gaps in the same handful of
+  lines, both in the path that decides what signs every record.
+
+  Loading stat'd the path and then read it — two lookups of one name, so
+  what was permission-checked need not be what was read. The file is
+  opened once now and every question asked of the descriptor. The open is
+  non-blocking and the mode is checked, which also closes two failures
+  reachable by a typo in one config field: a FIFO made the read wait for a
+  writer that never comes (measured — ten seconds and still waiting,
+  where the drill would have waited forever), and a character device like
+  `/dev/zero` made it read until the host ran out of memory. Neither is a
+  key, and both are now refused by name. What is read is bounded.
+
+  Generating a key pair fsynced the key file and not the directory holding
+  its name. A crash between the two loses the whole file, fsynced bytes
+  and all — and for a signing key that is worse than losing a log: the
+  records naming that key id already exist, so it cannot be rotated away
+  from and nobody can verify what it signed. The store had solved this for
+  the evidence log, with a comment explaining why; that function now
+  serves both callers and names which one failed.
+
+  No record, schema or canonical byte changes.
+
 - **The orphan sweep separates drill hosts by machine id as well as
   hostname**, so two hosts sharing a runtime no longer risk removing each
   other's running sandboxes. The sweep decides "mine" by comparing a host
