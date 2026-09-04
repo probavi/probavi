@@ -1263,11 +1263,13 @@
       "constraints": [
         "Requires a reachable Docker daemon; the docker CLI is driven directly, never the SDK.",
         "Remote daemons work unchanged through the CLI's native SSH transport (DOCKER_HOST=ssh://user@host). The endpoint stays in the environment: sandbox params are recorded verbatim in signed evidence, and connection details must never appear there.",
-        "Publishing ports is not expressible: the provider never emits -p."
+        "Publishing ports is not expressible: the provider never emits -p.",
+        "Podman answers this provider through its docker-compatible CLI, which is what the packaged podman-docker suggestion installs. CI runs the provider suite against it rootless, on cgroup v2 with the systemd cgroup manager, where --memory and --cpus apply as they do under docker; a host without that delegation is outside what is measured. What is verified is the provider, not every adapter: engine images are exercised under docker only."
       ],
       "verified_against": [
         "local Docker daemon (CI integration suite)",
-        "remote daemon over the docker CLI SSH transport (CI integration suite)"
+        "remote daemon over the docker CLI SSH transport (CI integration suite)",
+        "rootless podman through its docker-compatible CLI (CI integration suite)"
       ],
       "docs": null
     },

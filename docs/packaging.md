@@ -86,7 +86,12 @@ names, not to the binary. `apt` installs `Recommends` by default, which
 is why a container engine sits in `Suggests` — otherwise it would be a
 hard dependency wearing a different hat. Docker CE is not in the Debian
 archive at all, so the alternatives listed are the ones the archive can
-actually satisfy.
+actually satisfy. The podman alternative is offered because it is
+measured, not assumed: `.github/workflows/podman.yml` runs the docker
+provider's integration suite against rootless podman through that
+package's docker-compatible CLI, and the docker descriptor's
+`verified_against` records it. The Arch recipe offers `podman-docker`
+on the same evidence.
 
 `apk` has no weak dependencies, so `ca-certificates` is required there.
 Alpine's base is the most likely to lack it, and that is exactly where an

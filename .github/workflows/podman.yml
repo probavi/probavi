@@ -1,0 +1,82 @@
+# Probavi podman gate — the docker sandbox provider, driven by podman.
+#
+# The packaged Arch optional dependency and Debian suggestion both tell an
+# operator that podman satisfies the docker provider. Until this workflow
+# existed nothing verified either, so the claim sat outside the manifest
+# that is supposed to be the only source of capability claims (#233).
+#
+# It is a separate workflow rather than a job in ci.yml for the same reason
+# the version matrix is: it re-earns a claim about an environment this
+# repository does not otherwise run in, so it belongs on the paths that can
+# invalidate it and on a schedule that catches the runner image drifting
+# under it — not on the wall clock of every pull request.
+name: Podman
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, offset from the other scheduled workflows.
+    - cron: "53 4 * * 4"
+  pull_request:
+    paths:
+      - '.github/workflows/podman.yml'
+      - 'internal/sandbox/docker/**'
+      - 'internal/sandbox/cli/**'
+      - 'packaging/aur/PKGBUILD.tmpl'
+      - 'packaging/nfpm/probavi.yaml.tmpl'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: podman-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  podman:
+    name: Docker provider through the podman shim
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: install podman and put its docker shim on PATH
+        # podman-docker installs one thing that matters here: a
+        # /usr/bin/docker that execs podman. Its Debian package cannot be
+        # installed on this runner, because it conflicts with the docker
+        # the image already carries, so the shim is written directly —
+        # the same substitution the package performs, and it leaves the
+        # runner's own docker available to steps that need it.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq podman
+          mkdir -p "$RUNNER_TEMP/shim"
+          printf '#!/bin/sh\nexec podman "$@"\n' > "$RUNNER_TEMP/shim/docker"
+          chmod +x "$RUNNER_TEMP/shim/docker"
+          echo "$RUNNER_TEMP/shim" >> "$GITHUB_PATH"
+
+      - name: report the runtime under measurement
+        # Printed on every run, because the claim this workflow carries is
+        # about a specific shape: rootless, cgroup v2, systemd manager. A
+        # green run against some other shape would prove something else,
+        # and the log is where a reader checks which one it was.
+        run: |
+          podman version --format '{{.Client.Version}}'
+          podman info --format 'rootless={{.Host.Security.Rootless}} cgroups={{.Host.CgroupsVersion}} manager={{.Host.CgroupManager}}'
+          command -v docker
+
+      - name: docker provider integration suite, driven through podman
+        # The suite is unchanged and the provider resolves its binary from
+        # PATH, so this is the shipped code against a different runtime —
+        # which is exactly what the packaging lines promise. Included by
+        # name rather than by running the package: the SSH test needs a
+        # loopback daemon this job does not set up, and a remote podman is
+        # a separate transport question.
+        run: |
+          go test -race -tags integration -v ./internal/sandbox/docker/... \
+            -run 'TestDockerLifecycle|TestSweepOrphansReal|TestResourceCapsApply'

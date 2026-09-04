@@ -322,6 +322,9 @@ func TestDestroyIdempotent(t *testing.T) {
 	p, _ := testProvider(t,
 		response{exit: 0},
 		response{exit: 1, stderr: "Error response from daemon: No such container: abc123"},
+		// The same refusal in podman's wording. Its own rm -f exits 0, so
+		// this arrives only from a runtime that words it lower case.
+		response{exit: 1, stderr: `Error: no such container "abc123"`},
 		response{exit: 1, stderr: "permission denied"},
 	)
 	sbx := &Sandbox{id: "abc123", p: p}
@@ -331,6 +334,9 @@ func TestDestroyIdempotent(t *testing.T) {
 	if err := sbx.Destroy(context.Background()); err != nil {
 		t.Errorf("Destroy of removed container must succeed (idempotent), got: %v", err)
 	}
+	if err := sbx.Destroy(context.Background()); err != nil {
+		t.Errorf("Destroy must read a lower-cased refusal the same way, got: %v", err)
+	}
 	if err := sbx.Destroy(context.Background()); err == nil {
 		t.Error("genuine removal failure must surface")
 	}
@@ -339,8 +345,8 @@ func TestDestroyIdempotent(t *testing.T) {
 func TestSweepOrphans(t *testing.T) {
 	livePID := strconv.Itoa(os.Getpid())
 	p, fake := testProvider(t,
-		response{stdout: "dead1\nlive2\nbroken3\ngone4\nforeign5\nlegacy6\n"}, // docker ps
-		response{stdout: testHostID + "|999999999\n"},                         // inspect dead1: mine, pid long gone
+		response{stdout: "dead1\nlive2\nbroken3\ngone4\nforeign5\nlegacy6\ngone7\n"}, // docker ps
+		response{stdout: testHostID + "|999999999\n"},                                // inspect dead1: mine, pid long gone
 		response{exit: 0}, // rm dead1
 		response{stdout: testHostID + "|" + livePID + "\n"}, // inspect live2: mine, this process
 		response{stdout: "|\n"},                             // inspect broken3: labels lost
@@ -356,6 +362,12 @@ func TestSweepOrphans(t *testing.T) {
 		// the dead pid makes it an orphan.
 		response{stdout: "|999999998\n"},
 		response{exit: 0}, // rm legacy6
+		// gone7 vanished the same way gone4 did, refused in podman's
+		// wording (measured: `Error: no such object: "…"`, exit 125). The
+		// sweep runs at every drill start, so reading this as an error
+		// would fail the drill rather than skip a container that is
+		// already gone.
+		response{exit: 125, stderr: `Error: no such object: "gone7"`},
 	)
 	removed, err := p.SweepOrphans(context.Background())
 	if err != nil {
@@ -389,7 +401,10 @@ func TestSweepOrphansErrorPaths(t *testing.T) {
 	t.Run("inspect nonzero exit", func(t *testing.T) {
 		p, _ := testProvider(t,
 			response{stdout: "id1\n"},
-			response{exit: 1, stderr: "no such object"},
+			// Anything but the vanished-container refusal: that one is
+			// read as "already gone" in either runtime's casing, so a
+			// fixture spelling it would assert the opposite of this case.
+			response{exit: 1, stderr: "permission denied while trying to connect to the daemon socket"},
 		)
 		if _, err := p.SweepOrphans(context.Background()); err == nil {
 			t.Error("inspect exit failure must surface")
