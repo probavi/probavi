@@ -100,14 +100,42 @@ func (g *GameDay) loadMembers(base string, tr *i18n.T) error {
 			continue
 		}
 		if g.Parallelism() > 1 {
-			if first, taken := logOwner[cfg.Evidence.Path]; taken {
+			key := evidenceLogKey(cfg.Evidence.Path)
+			if first, taken := logOwner[key]; taken {
 				p.add(msgSharedEvidenceLog, first, m.Name, cfg.Evidence.Path, g.MaxParallel)
 			} else {
-				logOwner[cfg.Evidence.Path] = m.Name
+				logOwner[key] = m.Name
 			}
 		}
 	}
 	return errors.Join(p.errs...)
+}
+
+// evidenceLogKey is what decides whether two members name one log.
+//
+// The guard exists to move a collision from the store's single-writer
+// lock, mid-exercise, to config load — so it has to compare files rather
+// than spellings: `/var/lib/evidence.jsonl` and `/var/lib/./evidence.jsonl`
+// are one file and would otherwise both start.
+//
+// filepath.Abs is the right resolution and not merely a tidy-up, because
+// it is the same one the log will get: an evidence path is never resolved
+// against the drill file's directory, it is handed to evidence.Open as
+// written, and every member of a game-day runs in one process. So the
+// working directory this reads is the working directory that will open
+// the file. Abs fails only when that directory cannot be determined, and
+// cleaning alone is still better than nothing there.
+//
+// A symlinked directory still slips through. Following those would mean
+// touching the filesystem to validate a config, which nothing else in
+// this package does, and the collision it hides fails safely — at the
+// lock, with the diagnostic that says so.
+func evidenceLogKey(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return abs
 }
 
 func (g *GameDay) validate(tr *i18n.T) error {

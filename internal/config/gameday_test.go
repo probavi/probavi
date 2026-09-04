@@ -106,6 +106,49 @@ func TestLoadGameDayRejects(t *testing.T) {
 	}
 }
 
+// TestLoadGameDaySharedLogRuleComparesFilesNotSpellings covers the way
+// two members reach one log without writing it the same way. The guard
+// exists to move that collision off the store's single-writer lock and
+// into config load; keyed on the string as written, the two spellings
+// below both start and meet at the lock instead.
+func TestLoadGameDaySharedLogRuleComparesFilesNotSpellings(t *testing.T) {
+	for name, spelling := range map[string]string{
+		"a dot segment":       "/var/lib/probavi/./evidence.jsonl",
+		"a doubled separator": "/var/lib/probavi//evidence.jsonl",
+		"a parent step":       "/var/lib/probavi/logs/../evidence.jsonl",
+		"a trailing dot":      "/var/lib/probavi/evidence.jsonl/.",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "alpha.yaml"), []byte(validYAML), 0o600); err != nil {
+				t.Fatalf("write alpha: %v", err)
+			}
+			other := strings.Replace(validYAML, "/var/lib/probavi/evidence.jsonl", spelling, 1)
+			if other == validYAML {
+				t.Fatal("fixture did not change: the evidence path in validYAML moved")
+			}
+			if err := os.WriteFile(filepath.Join(dir, "beta.yaml"), []byte(other), 0o600); err != nil {
+				t.Fatalf("write beta: %v", err)
+			}
+			gd := strings.Replace(validGameDayYAML, "timeout: 1h", "timeout: 1h\nmax_parallel: 2", 1)
+			path := filepath.Join(dir, "gameday.yaml")
+			if err := os.WriteFile(path, []byte(gd), 0o600); err != nil {
+				t.Fatalf("write game-day: %v", err)
+			}
+			_, err := LoadGameDay(path, nil)
+			if err == nil {
+				t.Fatalf("LoadGameDay accepted %q and %q as different logs — they are one file",
+					"/var/lib/probavi/evidence.jsonl", spelling)
+			}
+			// The operator's own spelling belongs in the message, so the
+			// line they have to go and change is the line they wrote.
+			if !strings.Contains(err.Error(), spelling) {
+				t.Errorf("error %q does not carry the path as written, %q", err, spelling)
+			}
+		})
+	}
+}
+
 func TestLoadGameDayRejectsInvalidMemberConfig(t *testing.T) {
 	path := writeGameDay(t, validGameDayYAML)
 	broken := strings.Replace(validYAML, "provider: docker", `provider: ""`, 1)
