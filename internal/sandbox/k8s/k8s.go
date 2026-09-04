@@ -29,7 +29,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,8 +37,6 @@ import (
 	"github.com/probavi/probavi/internal/sandbox"
 	"github.com/probavi/probavi/internal/sandbox/cli"
 )
-
-var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 const (
 	// LabelSandbox marks every Job and pod this provider creates; the orphan
@@ -363,7 +360,7 @@ func (p *Provider) manifest(d sandbox.Descriptor, params map[string]string) (*jo
 			limits["cpu"] = v
 		case "env.":
 			name := strings.TrimPrefix(k, "env.")
-			if !envNamePattern.MatchString(name) {
+			if !sandbox.ValidEnvName(name) {
 				return nil, "", fmt.Errorf("%w: %q is not a valid environment variable name", sandbox.ErrInvalidParams, name)
 			}
 			env = append(env, envVar{Name: name, Value: v})
