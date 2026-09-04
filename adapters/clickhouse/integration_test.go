@@ -289,6 +289,64 @@ func TestCorruptArchiveVerdict(t *testing.T) {
 	}
 }
 
+// TestEmptyBackupIsRefused proves the drill will not report success for an
+// archive that holds nothing.
+//
+// The artifact is a genuine BACKUP of a genuine database — one that
+// happens to have no table in it — so the engine is entirely happy with
+// it: both restore passes print RESTORED and the server comes up serving
+// nothing. Only the count says otherwise, which is why the count is the
+// last thing the restore script does.
+func TestEmptyBackupIsRefused(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	provider := docker.New(nil)
+
+	empty := filepath.Join(t.TempDir(), "empty.zip")
+	makeEmptyFixture(t, ctx, provider, empty)
+
+	sbx, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("clickhouse", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	_, err = runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "clickhouse_backup", Path: empty},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	var aerr *adapter.Error
+	if err == nil || !errors.As(err, &aerr) || aerr.Code != "restore_failed" {
+		t.Fatalf("provision error = %v, want restore_failed", err)
+	}
+	if !strings.Contains(aerr.Message, "no table") {
+		t.Errorf("message = %q, want it to say the restore produced nothing", aerr.Message)
+	}
+}
+
+// makeEmptyFixture extracts a real BACKUP archive of a database holding no
+// table — the same statement and the same format as the populated fixture,
+// minus the content.
+func makeEmptyFixture(t *testing.T, ctx context.Context, provider *docker.Provider, dest string) {
+	t.Helper()
+	seed, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+
+	awaitReady(t, ctx, seed)
+	mustQuery(t, ctx, seed, "CREATE DATABASE shop")
+	mustQuery(t, ctx, seed, "BACKUP DATABASE shop TO File('empty.zip')")
+	extract(t, ctx, seed, "/var/lib/clickhouse/backups/empty.zip", dest)
+}
+
 // TestDirectoryDrillPicksTheNewestBackup proves the directory kind end to
 // end, and proves it ranks by what each archive says about itself: the
 // archive holding the data is written first and therefore has the older

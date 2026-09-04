@@ -30,6 +30,8 @@ done
 printf '%s\n' "$q" >> "$STUB_LOG"
 case "$q" in
   *"STOP TTL MERGES"*) exit ${STUB_PIN_EXIT:-0} ;;
+  *system.tables*)     [ "${STUB_CENSUS_EXIT:-0}" = 0 ] || exit "$STUB_CENSUS_EXIT"
+                       printf '%s\n' "${STUB_CENSUS_OUT-1}" ;;
   *structure_only*)    [ "${STUB_STRUCTURE_EXIT:-0}" = 0 ] || exit "$STUB_STRUCTURE_EXIT"
                        printf '%s\n' "$STUB_STRUCTURE_OUT" ;;
   *)                   [ "${STUB_DATA_EXIT:-0}" = 0 ] || exit "$STUB_DATA_EXIT"
@@ -63,9 +65,9 @@ func runRestoreScript(t *testing.T, env map[string]string) (exit int, seen []str
 	log := filepath.Join(t.TempDir(), "statements")
 	ctx, cancel := context.WithTimeout(context.Background(), scriptRunBudget)
 	defer cancel()
-	structure, pin, data := restoreStatements()
+	structure, pin, data, census := restoreStatements()
 	cmd := exec.CommandContext(ctx, "sh", "-c", restoreScript, "sh",
-		defaultUser, defaultDatabase, structure, pin, data)
+		defaultUser, defaultDatabase, structure, pin, data, census)
 	cmd.Env = []string{"PATH=" + binDir, "STUB_LOG=" + log,
 		"STUB_STRUCTURE_OUT=" + restored, "STUB_DATA_OUT=" + restored}
 	for k, v := range env {
@@ -99,9 +101,9 @@ func TestRestoreScriptPinsRetentionBetweenTheTwoPasses(t *testing.T) {
 	if exit != 0 {
 		t.Fatalf("exit = %d, want 0", exit)
 	}
-	structure, pin, data := restoreStatements()
-	if !slices.Equal(seen, []string{structure, pin, data}) {
-		t.Fatalf("statements = %q, want the structure pass, the pin, then the data pass", seen)
+	structure, pin, data, census := restoreStatements()
+	if !slices.Equal(seen, []string{structure, pin, data, census}) {
+		t.Fatalf("statements = %q, want the structure pass, the pin, the data pass, then the census", seen)
 	}
 }
 
@@ -111,7 +113,7 @@ func TestRestoreScriptPinsRetentionBetweenTheTwoPasses(t *testing.T) {
 // clock, and one that carried on past a structure pass the engine never
 // confirmed would pin nothing.
 func TestRestoreScriptStopsWhereItMustStop(t *testing.T) {
-	structure, pin, data := restoreStatements()
+	structure, pin, data, census := restoreStatements()
 	tests := []struct {
 		name     string
 		env      map[string]string
@@ -141,6 +143,28 @@ func TestRestoreScriptStopsWhereItMustStop(t *testing.T) {
 			env:      map[string]string{"STUB_DATA_EXIT": "60"},
 			wantExit: 60,
 			wantSeen: []string{structure, pin, data},
+		},
+		{
+			// The archive restored, and held nothing. Both passes print
+			// RESTORED for it (measured), so only the count says so.
+			name:     "the restore produced no table",
+			env:      map[string]string{"STUB_CENSUS_OUT": "0"},
+			wantExit: emptyRestoreExit,
+			wantSeen: []string{structure, pin, data, census},
+		},
+		{
+			// A census that cannot be read is not a pass: the script has
+			// no number to stand on either way.
+			name:     "the census answers something that is not a count",
+			env:      map[string]string{"STUB_CENSUS_OUT": "Ok."},
+			wantExit: emptyRestoreExit,
+			wantSeen: []string{structure, pin, data, census},
+		},
+		{
+			name:     "the census itself fails",
+			env:      map[string]string{"STUB_CENSUS_EXIT": "60"},
+			wantExit: 60,
+			wantSeen: []string{structure, pin, data, census},
 		},
 		{
 			name:     "the data pass says nothing about restoring",
@@ -176,8 +200,8 @@ func TestProvisionSendsTheRestoreStatementsVerbatim(t *testing.T) {
 	payload := provisionPayload(t, "clickhouse_backup", archive, nil)
 	_, calls, _ := driveOp(t, "provision", payload, restoreSandbox(t, restored+"\n", 0, ""))
 
-	structure, pin, data := restoreStatements()
-	want := []string{"sh", "-c", restoreScript, "sh", defaultUser, defaultDatabase, structure, pin, data}
+	structure, pin, data, census := restoreStatements()
+	want := []string{"sh", "-c", restoreScript, "sh", defaultUser, defaultDatabase, structure, pin, data, census}
 	for _, c := range calls {
 		if c.Verb != "exec" {
 			continue
@@ -194,6 +218,29 @@ func TestProvisionSendsTheRestoreStatementsVerbatim(t *testing.T) {
 		}
 	}
 	t.Fatal("provision never ran the restore script")
+}
+
+// TestProvisionRefusesARestoreThatProducedNoTable is the other thing the
+// status word cannot say. `RESTORE ALL` prints RESTORED for an archive
+// holding no table, for both passes, and leaves a server with nothing in
+// it (measured on ClickHouse 26.3), so only the count catches it — and a
+// drill exists to catch a backup job that has been writing nothing.
+func TestProvisionRefusesARestoreThatProducedNoTable(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "shop.zip")
+	writeArchive(t, archive, "2026-08-14 14:37:45")
+
+	payload := provisionPayload(t, "clickhouse_backup", archive, nil)
+	line, _, _ := driveOp(t, "provision", payload,
+		restoreSandbox(t, "", emptyRestoreExit, "restored tables: 0"))
+	f := parseFinal(t, line)
+	if f.OK || f.Error.Code != "restore_failed" {
+		t.Fatalf("final = %+v, want restore_failed when the restore produced nothing", f)
+	}
+	for _, want := range []string{"no table", "restored tables: 0"} {
+		if !strings.Contains(f.Error.Message, want) {
+			t.Errorf("message = %q, want it to carry %q", f.Error.Message, want)
+		}
+	}
 }
 
 // TestProvisionRefusesASandboxThatWillNotStopExpiringData is the loud half

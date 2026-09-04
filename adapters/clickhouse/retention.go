@@ -56,6 +56,10 @@ const (
 	// would not stop its TTL merges. No clickhouse-client produces it —
 	// the client's own codes are engine error codes, and none is 92.
 	pinRefusedExit = 92
+	// emptyRestoreExit is what the restore script exits with when the
+	// engine said RESTORED and produced no table. No clickhouse-client
+	// produces it either, for the reason given at notRestoredExit.
+	emptyRestoreExit = 93
 
 	// pinStatement is the lock. It takes no table, so it covers every
 	// table the structure pass has just created, in every restored
@@ -65,13 +69,35 @@ const (
 
 // restoreStatements returns the three statements the restore is made of,
 // in the order the script runs them.
-func restoreStatements() (structure, pin, data string) {
+func restoreStatements() (structure, pin, data, census string) {
 	restore := fmt.Sprintf("RESTORE ALL FROM File('%s')", restoreArchiveName)
-	return restore + " SETTINGS structure_only = true", pinStatement, restore
+	return restore + " SETTINGS structure_only = true", pinStatement, restore, censusStatement
 }
 
-// restoreScript replays the archive around the pin, and proves at each
-// step that the engine said what it did.
+// censusStatement counts what the restore produced.
+//
+// The sandbox starts empty, so every non-system table the server holds
+// afterwards came out of the archive — the databases named here are the
+// three the engine keeps for itself, and `default` is left in because a
+// backup may legitimately restore into it (measured: the image ships it
+// holding nothing).
+//
+// It answers a bare number, which is what the protocol's conformance
+// contract expects of a census: §10 drives an adapter against a simulated
+// sandbox where every exec answers `1`.
+const censusStatement = "SELECT count() FROM system.tables WHERE database NOT IN " +
+	"('system', 'INFORMATION_SCHEMA', 'information_schema')"
+
+// restoreScript replays the archive around the pin, proves at each step
+// that the engine said what it did, and finishes by counting what came
+// back.
+//
+// The count is there because the status word is not enough on its own:
+// an archive holding no table restores with `RESTORED` printed for both
+// passes and leaves a server with nothing in it (measured on ClickHouse
+// 26.3 — `BACKUP` of a database with no tables, then `RESTORE ALL`,
+// answering RESTORED twice and zero tables afterwards). A drill exists to
+// catch a backup job that has been writing nothing.
 //
 // The statements arrive as arguments rather than being written here so
 // that the adapter's Go code — where they are asserted in tests — remains
@@ -91,6 +117,8 @@ restored "$out" || exit 91
 run "$4" >/dev/null || exit 92
 out=$(run "$5") || exit $?
 restored "$out" || exit 91
+tables=$(run "$6") || exit $?
+[ "${tables:-0}" -gt 0 ] 2>/dev/null || { printf 'restored tables: %s\n' "$tables" >&2; exit 93; }
 `
 
 // refusedPin is the verdict when the engine will not stop expiring data.

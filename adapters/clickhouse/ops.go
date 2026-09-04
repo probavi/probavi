@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "clickhouse"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 
 	// defaultDatabase is ClickHouse's own default: it always exists, so the
 	// healthcheck and the sql_runner have a valid target before anything is
@@ -308,9 +308,10 @@ const notRestoredExit = 91
 // explains, with the engine's own retention policy pinned off between
 // them.
 func execRestore(ctx context.Context, c *core) (*execValue, []byte, *protoError) {
-	structure, pin, data := restoreStatements()
+	structure, pin, data, census := restoreStatements()
 	val, _, stderr, perr := c.exec(ctx, execArgs{
-		Argv: []string{"sh", "-c", restoreScript, "sh", defaultUser, defaultDatabase, structure, pin, data},
+		Argv: []string{"sh", "-c", restoreScript, "sh",
+			defaultUser, defaultDatabase, structure, pin, data, census},
 	})
 	if perr != nil {
 		return nil, nil, perr
@@ -329,6 +330,12 @@ func mapRestoreFailure(exitCode int, stderr []byte) *protoError {
 	}
 	if exitCode == pinRefusedExit {
 		return refusedPin(stderr)
+	}
+	if exitCode == emptyRestoreExit {
+		return protoErr("restore_failed", false,
+			"the restore reported RESTORED and produced no table — the archive holds nothing to "+
+				"drill, so a check would run against an empty server and prove nothing (%s)",
+			firstLine(stderr))
 	}
 	line := verdictLine(stderr)
 	switch {

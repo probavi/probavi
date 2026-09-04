@@ -13,6 +13,26 @@ always called out explicitly.
 
 ### Fixed
 
+- **The ClickHouse adapter refuses a restore that produced no table**
+  (`adapters/clickhouse` 0.3.0). `RESTORE ALL` prints `RESTORED` for an
+  archive holding nothing — for both the structure pass and the data pass
+  — and leaves a server with nothing in it, so the restore script's status
+  gate held twice and the drill reported success. Measured on ClickHouse
+  26.3: `BACKUP` of a database with no tables, restored, `RESTORED` twice,
+  zero tables afterwards.
+
+  The script now finishes by counting the non-system tables the server
+  holds, and fails the drill on zero with the number on stderr. The count
+  goes in the script rather than beside it for the reason the file already
+  gives about its other verdicts: one reached inside the sandbox cannot be
+  softened while reading output. `default` is deliberately not excluded —
+  a backup may restore into it, and the image ships it empty — and the
+  sandbox starts empty, so everything counted came out of the archive.
+
+  Proven end to end on both verified lines with a fixture that is a
+  genuine `BACKUP` of a genuine database that happens to hold no table, so
+  the engine is entirely happy with it and only the count is not.
+
 - **The etcd adapter refuses a restore whose keyspace came back empty**
   (`adapters/etcd` 0.3.0). A snapshot of a server holding no keys is a
   valid snapshot: `etcdctl snapshot save` writes it, the integrity hash
