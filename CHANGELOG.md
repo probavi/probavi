@@ -11,6 +11,51 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **The docker sandbox provider is verified against podman**, which the
+  packaged Arch optional dependency and Debian suggestion have told
+  operators all along without anything checking it — a capability claim
+  living outside the manifest that is supposed to be their only source.
+  `.github/workflows/podman.yml` now runs the provider's own integration
+  suite against rootless podman through the docker-compatible CLI that
+  `podman-docker` installs, so the docker descriptor's `verified_against`
+  states it and `docs/capabilities.json` carries it. It is a separate
+  workflow on the paths that can invalidate the claim plus a weekly run,
+  for the version matrix's reason: it re-earns a claim about an
+  environment this repository does not otherwise run in, and that does
+  not belong on every pull request's wall clock.
+
+  Measured, on podman 4.9.3, rootless, cgroup v2 with the systemd cgroup
+  manager: the full lifecycle, the orphan sweep, and both resource caps.
+  The caps were the open question, because a runtime that accepted
+  `--memory` and quietly dropped it would leave a signed record stating a
+  limit that never held; here `memory` and `cpus` reach the container's
+  cgroup exactly as they do under docker. What is verified is the
+  provider and not every engine: adapters are exercised under docker
+  only, and the descriptor says so rather than letting "verified against"
+  widen into "supports". A host without cgroup v2 delegation is outside
+  what is measured, and the constraint says that too.
+
+- **The integration suite asserts that configured resource caps are in
+  force** (`TestResourceCapsApply`), under whichever runtime answers the
+  docker CLI. Nothing checked this before, and it is an evidence question
+  rather than a scheduling one: sandbox parameters are copied verbatim
+  into the signed record, so a dropped cap would be a record claiming a
+  limit the drill never ran under.
+
+### Fixed
+
+- **The orphan sweep no longer fails a drill over a container that is
+  already gone**, when the runtime words its refusal in lower case.
+  A container can vanish between the sweep's list and its inspect — a
+  concurrent drill's teardown finishing first — and that is nothing to
+  sweep rather than an error. The test for it matched docker's
+  `No such object` literally, so podman's `no such object` (measured,
+  exit 125) fell through to the error path, and the sweep runs at every
+  drill start. Both that check and the teardown's own are now
+  case-insensitive.
+
 ## [0.25.0] - 2026-09-03
 
 ### Added

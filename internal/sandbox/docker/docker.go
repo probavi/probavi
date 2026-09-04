@@ -86,10 +86,12 @@ var Descriptor = sandbox.Descriptor{
 		"Requires a reachable Docker daemon; the docker CLI is driven directly, never the SDK.",
 		"Remote daemons work unchanged through the CLI's native SSH transport (DOCKER_HOST=ssh://user@host). The endpoint stays in the environment: sandbox params are recorded verbatim in signed evidence, and connection details must never appear there.",
 		"Publishing ports is not expressible: the provider never emits -p.",
+		"Podman answers this provider through its docker-compatible CLI, which is what the packaged podman-docker suggestion installs. CI runs the provider suite against it rootless, on cgroup v2 with the systemd cgroup manager, where --memory and --cpus apply as they do under docker; a host without that delegation is outside what is measured. What is verified is the provider, not every adapter: engine images are exercised under docker only.",
 	},
 	VerifiedAgainst: []string{
 		"local Docker daemon (CI integration suite)",
 		"remote daemon over the docker CLI SSH transport (CI integration suite)",
+		"rootless podman through its docker-compatible CLI (CI integration suite)",
 	},
 }
 
@@ -212,7 +214,7 @@ func (p *Provider) isOrphan(ctx context.Context, id string) (bool, error) {
 	if exit != 0 {
 		// Vanished between list and inspect: a concurrent drill's teardown
 		// finished first. Gone means nothing left to sweep — not an error.
-		if strings.Contains(string(stderr), "No such object") {
+		if alreadyGone(stderr, "object") {
 			return false, nil
 		}
 		return false, fmt.Errorf("inspect %s: docker inspect exited %d: %s", id, exit, firstLine(stderr))
@@ -339,10 +341,21 @@ func (p *Provider) remove(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if exit != 0 && !strings.Contains(string(stderr), "No such container") {
+	if exit != 0 && !alreadyGone(stderr, "container") {
 		return fmt.Errorf("docker rm exited %d: %s", exit, firstLine(stderr))
 	}
 	return nil
+}
+
+// alreadyGone reports whether the CLI refused because the container no
+// longer exists, which is success for a teardown and nothing to sweep for
+// a sweep. The wording belongs to whichever runtime answers the docker
+// CLI: docker writes "No such container" and "No such object", podman the
+// same words in lower case (measured, podman 4.9.3 — and its rm -f exits
+// 0 outright, so only inspect reaches here). Matching case-insensitively
+// keeps one rule instead of a literal per runtime.
+func alreadyGone(stderr []byte, what string) bool {
+	return strings.Contains(strings.ToLower(string(stderr)), "no such "+what)
 }
 
 // runArgs builds the docker run arguments from drill-config sandbox params.

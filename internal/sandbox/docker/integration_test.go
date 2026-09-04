@@ -263,3 +263,55 @@ func TestRemoteDockerOverSSH(t *testing.T) {
 		t.Fatalf("second Destroy must stay idempotent remotely: %v", err)
 	}
 }
+
+// TestResourceCapsApply proves that the caps a drill configures are really
+// in force. This is an evidence question rather than a scheduling one:
+// sandbox params are copied verbatim into the signed record, so a runtime
+// that accepted --memory and quietly dropped it would leave a record
+// stating a limit that never held. Nothing else in the suite checks that,
+// and the answer is runtime- and host-dependent — rootless podman applies
+// both only where cgroup v2 delegation exists.
+func TestResourceCapsApply(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	p := New(nil)
+
+	sbx, err := p.Create(ctx, map[string]string{
+		"image":  testImage,
+		"memory": "128m",
+		"cpus":   "0.5",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	defer func() {
+		dctx, dcancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer dcancel()
+		_ = sbx.Destroy(dctx)
+	}()
+
+	res, err := sbx.Exec(ctx, sandbox.ExecRequest{
+		Argv: []string{"sh", "-c", "cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/cpu.max"},
+	})
+	if err != nil {
+		t.Fatalf("Exec read cgroup: %v", err)
+	}
+	if res.ExitCode != 0 {
+		// cgroup v1 lays the controllers out elsewhere. Say so rather than
+		// asserting against a layout this host does not have.
+		t.Skipf("cgroup v2 files unreadable in the sandbox (exit %d) — this host is not the layout the assertion is written for", res.ExitCode)
+	}
+
+	lines := strings.Fields(strings.TrimSpace(string(res.Stdout)))
+	if len(lines) != 3 {
+		t.Fatalf("cgroup read = %q, want memory.max and cpu.max", res.Stdout)
+	}
+	// 128m as the provider passes it, in bytes.
+	if lines[0] != "134217728" {
+		t.Errorf("memory.max = %s, want 134217728 — the configured cap reaches the signed record, so it must be in force", lines[0])
+	}
+	// --cpus 0.5 is a quota of half the period.
+	if quota, period := lines[1], lines[2]; quota+" "+period != "50000 100000" {
+		t.Errorf("cpu.max = %s %s, want 50000 100000", quota, period)
+	}
+}
