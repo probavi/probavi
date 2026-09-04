@@ -15,7 +15,8 @@
 // endpoint stays in the environment on purpose — sandbox params are
 // recorded verbatim in evidence records, and connection details must
 // never appear there (evidence-schema.md §8). Sweeps are host-scoped (see
-// isOrphan), so several drill hosts may safely share one daemon.
+// isOrphan), so several drill hosts may safely share one daemon — which
+// holds exactly as far as the host id separates them (sandbox.HostID).
 package docker
 
 import (
