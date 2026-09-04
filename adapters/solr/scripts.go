@@ -93,20 +93,26 @@ mv "$src" "$1/$2/" || exit 92
 rm -rf "$stage"
 basename "$src"`
 
-// liveScript answers whether the named collection exists and is serving,
-// as a single count. It is the gate a restore has to pass before this
-// adapter calls it a success: the Collections API can answer 0 and leave
-// a collection that never came up.
+// liveScript answers whether the Collections API knows the named
+// collection, as a single count. It is not the gate a restore passes —
+// listing and serving are two different instants (see assertServing) —
+// but it is what separates a collection that is missing from one that is
+// merely not servable yet, which keeps a genuine failure fast.
 const liveScript = `set -u
 curl -s "` + serverURL + `/admin/collections?action=LIST&wt=json" |
   tr ',' '\n' | sed -n 's/.*"\(.*\)".*/\1/p' | grep -cx -- "$1"`
 
 // servedScript lists what the server does serve, for the message when the
-// gate above answers zero.
+// collection the restore named is not among them.
 const servedScript = `curl -s "` + serverURL + `/admin/collections?action=LIST&wt=json" |
   tr ',' '\n' | sed -n 's/.*"\(.*\)".*/\1/p' | grep -v '^$'`
 
-// healthScript proves the restored collection answers a query.
+// healthScript proves the restored collection answers a query. It is
+// both the healthcheck and the gate provision closes on (assertServing),
+// so the two agree by construction on what "serving" means: curl -sf
+// fails the 404 a node answers for a collection it does not serve, and
+// the count that comes back is what tells a Solr response from any other
+// 200.
 const healthScript = `set -u
 curl -sf "` + serverURL + `/$1/select?q=*:*&rows=0&omitHeader=true&wt=json" |
   sed -n 's/.*"numFound":\([0-9]*\).*/\1/p' | head -1`

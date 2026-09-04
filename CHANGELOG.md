@@ -11,6 +11,32 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Solr adapter's restore gate asks the collection to answer a query,
+  not the Collections API whether it is listed** (`adapters/solr` 0.3.0).
+  Those answer at two different instants: a collection appears in `LIST`
+  while a node is still answering Solr's 404 page for `/select`. The gate
+  read the listing, so provision could return while the collection was
+  not yet servable, and whatever ran first — a check, in a drill whose
+  config does not start with `service_healthy` — failed against a restore
+  that was perfectly good. Caught in CI on an unrelated pull request,
+  where the first check failed and the next three, against the same
+  collection, passed moments later.
+
+  The function was named `assertServing` and asserted listing; it asserts
+  serving now, using the query the healthcheck already made, so the two
+  agree by construction on what the word means. The listing keeps a job
+  that suits it better: a collection missing from it after a synchronous
+  `RESTORE` reported success is not late but absent, so that refusal stays
+  immediate and keeps its message. Only the newly understood window is
+  waited out, bounded by a minute — separate from the readiness budget
+  because the server is already answering by then, and what is left
+  measured sub-second everywhere it was looked at.
+
+  A false red rather than a false green, and still wrong: a drill is a
+  verdict, and a nondeterministic one is worth less than a slow one.
+
 ### Added
 
 - **The docker sandbox provider is verified against podman**, which the

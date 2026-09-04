@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "solr"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 	// defaultPort is where Solr listens inside the sandbox. Nothing is
 	// published: checks run in-sandbox through the runner below.
 	defaultPort = 8983
@@ -26,6 +26,13 @@ const (
 	// server that is not coming.
 	readinessBudget = 3 * time.Minute
 	readinessPoll   = 500 * time.Millisecond
+	// servingBudget bounds the wait for the restored collection to answer
+	// a query, after a RESTORE that already reported success and against
+	// a server awaitReady already found answering. That gap measured
+	// sub-second everywhere it was looked at, so a minute is headroom for
+	// a loaded host and still fails a collection that is never coming far
+	// sooner than the readiness budget would.
+	servingBudget = time.Minute
 )
 
 // collectionPattern is what Solr accepts as a collection name, and what
@@ -380,22 +387,75 @@ func mapRestoreFailure(diagnosis string) *protoError {
 // something to check". A restore can report success and leave a
 // collection that never came up, and every check would then run against
 // nothing.
+//
+// The gate is the query a check will make, not the Collections API
+// listing, because those answer at two different instants. LIST reports
+// the collection's presence in the cluster state; a node can begin
+// serving it a moment later. Measured in CI: the first check after a good
+// restore got Solr's 404 page and the next three, against the same
+// collection, answered correctly. Gating on the listing let a drill that
+// restored perfectly report a failed check, nondeterministically.
+//
+// The listing still has a job, and it is the one that keeps a genuine
+// failure fast. A collection absent from LIST after a synchronous RESTORE
+// reported success is not late, it is missing, and waiting on it would
+// only delay the refusal. So a query that does not answer is diagnosed
+// once: absent means refuse now, present means wait, bounded.
 func assertServing(ctx context.Context, c *core, collection string) *protoError {
+	start := time.Now()
+	for {
+		// The same two conditions the healthcheck applies, so "serving"
+		// means one thing in this adapter: the query succeeded, and what
+		// came back is a count rather than some other 200.
+		val, stdout, _, perr := c.exec(ctx, execArgs{
+			Argv: []string{"bash", "-c", healthScript, "bash", collection},
+		})
+		if perr != nil {
+			return perr
+		}
+		if val.ExitCode == 0 {
+			if _, err := strconv.Atoi(strings.TrimSpace(string(stdout))); err == nil {
+				return nil
+			}
+		}
+
+		listed, perr := isListed(ctx, c, collection)
+		if perr != nil {
+			return perr
+		}
+		if !listed {
+			return protoErr("restore_failed", false,
+				"the restore reported success but Solr does not serve collection %q%s",
+				collection, servedSuffix(ctx, c))
+		}
+		if time.Since(start) > servingBudget {
+			return protoErr("restore_failed", false,
+				"Solr lists collection %q but it did not answer a query within %s — the restore "+
+					"reported success, so the collection came up without becoming servable",
+				collection, servingBudget)
+		}
+		select {
+		case <-ctx.Done():
+			return protoErr("cancelled", true, "cancelled while waiting for the restored collection to serve")
+		case <-time.After(readinessPoll):
+		}
+	}
+}
+
+// isListed reports whether the Collections API knows the name at all.
+// It separates "missing" from "not yet servable" for the gate above; it
+// is never the gate itself.
+func isListed(ctx context.Context, c *core, collection string) (bool, *protoError) {
 	val, stdout, stderr, perr := c.exec(ctx, execArgs{
 		Argv: []string{"bash", "-c", liveScript, "bash", collection},
 	})
 	if perr != nil {
-		return perr
-	}
-	if val.ExitCode == 0 && strings.TrimSpace(string(stdout)) == "1" {
-		return nil
+		return false, perr
 	}
 	if val.ExitCode != 0 && len(stderr) > 0 {
-		return protoErr("restore_failed", false, "ask Solr what it serves: %s", firstLine(stderr))
+		return false, protoErr("restore_failed", false, "ask Solr what it serves: %s", firstLine(stderr))
 	}
-	return protoErr("restore_failed", false,
-		"the restore reported success but Solr does not serve collection %q%s",
-		collection, servedSuffix(ctx, c))
+	return strings.TrimSpace(string(stdout)) == "1", nil
 }
 
 // servedSuffix names what the server does serve, so the refusal above is

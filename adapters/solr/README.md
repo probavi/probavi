@@ -160,6 +160,16 @@ That last one is a gate, not a formality: the API can answer 0 and leave a
 collection that never came up, and every check would then run against
 nothing.
 
+The gate asks the collection to answer a query — the same thing a check
+does — rather than asking the Collections API whether the name is listed.
+Those answer at two different instants: a collection appears in `LIST`
+while a node is still answering 404 for `/select`, measured in CI where
+the first check after a good restore failed and the next three passed. So
+provision waits out that window, up to a minute, instead of handing it to
+whatever runs first. The listing still decides how long to wait: a
+collection missing from it after a synchronous `RESTORE` reported success
+is not late but absent, and is refused straight away.
+
 ## Drill config options
 
 | Option | Effect |
