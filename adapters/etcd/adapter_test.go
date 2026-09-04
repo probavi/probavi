@@ -199,26 +199,56 @@ func handlePut(t *testing.T, call verbCall) any {
 
 // classifyExec labels one exec call of the happy path and returns its
 // simulated result; an empty label means the call was not expected.
+//
+// The three helpers below split it by the binary the call runs, which is
+// how the adapter's own scripts group: the shell drives the engine, and
+// etcdctl and etcdutl each answer one side of the snapshot.
 func classifyExec(argv []string, started *bool) (string, any) {
-	joined := strings.Join(argv, " ")
+	switch argv[0] {
+	case "sh":
+		return classifyShell(strings.Join(argv, " "), started)
+	case "etcdctl":
+		return classifyEtcdctl(argv)
+	case "etcdutl":
+		return classifyEtcdutl(argv)
+	}
+	return "", nil
+}
+
+// classifyShell labels the calls the adapter wraps in a shell.
+func classifyShell(joined string, started *bool) (string, any) {
 	switch {
-	case argv[0] == "sh" && strings.Contains(joined, "true"):
-		return "shell-probe", okExec()
-	case argv[0] == "etcdctl" && len(argv) > 2 && argv[2] == "lease":
-		// A snapshot with no leases: the keeper is not started at all.
-		return "leases", okExec()
-	case argv[0] == "sh" && strings.Contains(joined, "--count-only"):
+	case strings.Contains(joined, "--count-only"):
 		// The served census answers a bare number.
 		return "census", outExec("42\n")
-	case argv[0] == "etcdctl":
-		return "health", okExec()
-	case argv[0] == "etcdutl" && argv[1] == "snapshot" && argv[2] == "status":
-		return "status", okExec()
-	case argv[0] == "etcdutl" && argv[1] == "snapshot" && argv[2] == "restore":
-		return "restore", execValue{ExitCode: 0, DurationSeconds: 1.5}
-	case argv[0] == "sh" && strings.Contains(joined, "etcd --data-dir"):
+	case strings.Contains(joined, "etcd --data-dir"):
 		*started = true
 		return "start", execValue{ExitCode: 0, DurationSeconds: 0.2}
+	case strings.Contains(joined, "true"):
+		return "shell-probe", okExec()
+	}
+	return "", nil
+}
+
+// classifyEtcdctl labels the calls against the running server.
+func classifyEtcdctl(argv []string) (string, any) {
+	if len(argv) > 2 && argv[2] == "lease" {
+		// A snapshot with no leases: the keeper is not started at all.
+		return "leases", okExec()
+	}
+	return "health", okExec()
+}
+
+// classifyEtcdutl labels the calls against the snapshot file.
+func classifyEtcdutl(argv []string) (string, any) {
+	if len(argv) < 3 || argv[1] != "snapshot" {
+		return "", nil
+	}
+	switch argv[2] {
+	case "status":
+		return "status", okExec()
+	case "restore":
+		return "restore", execValue{ExitCode: 0, DurationSeconds: 1.5}
 	}
 	return "", nil
 }
