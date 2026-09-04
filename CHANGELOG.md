@@ -26,16 +26,28 @@ always called out explicitly.
   environment this repository does not otherwise run in, and that does
   not belong on every pull request's wall clock.
 
-  Measured, on podman 4.9.3, rootless, cgroup v2 with the systemd cgroup
-  manager: the full lifecycle, the orphan sweep, and both resource caps.
-  The caps were the open question, because a runtime that accepted
-  `--memory` and quietly dropped it would leave a signed record stating a
-  limit that never held; here `memory` and `cpus` reach the container's
-  cgroup exactly as they do under docker. What is verified is the
-  provider and not every engine: adapters are exercised under docker
-  only, and the descriptor says so rather than letting "verified against"
-  widen into "supports". A host without cgroup v2 delegation is outside
-  what is measured, and the constraint says that too.
+  Measured on two independent shapes — podman 4.9.3 in CI and podman
+  5.8.2 on a maintainer's host, both rootless on cgroup v2 with the
+  systemd cgroup manager: the full lifecycle, the orphan sweep, and both
+  resource caps. The caps were the open question, because a runtime that
+  accepted `--memory` and quietly dropped it would leave a signed record
+  stating a limit that never held; here `memory` and `cpus` reach the
+  container's cgroup exactly as they do under docker. The two majors also
+  word their refusals identically, which is what the fix below relies on.
+  What is verified is the provider and not every engine: adapters are
+  exercised under docker only, and the descriptor says so rather than
+  letting "verified against" widen into "supports". A host without cgroup
+  v2 delegation is outside what is measured, and the constraint says that
+  too.
+
+  One difference is documented rather than absorbed, because absorbing it
+  would be worse: docker resolves an unqualified image reference against
+  Docker Hub, podman only through the host's short-name aliases or
+  `unqualified-search-registries`, and refuses it otherwise — measured on
+  a host carrying neither, where `image: nginx:1.27-alpine` fails at
+  sandbox creation. The provider passes `image` verbatim, and will keep
+  doing so: rewriting it would put a reference into the signed record
+  that the drill was never asked for.
 
 - **The integration suite asserts that configured resource caps are in
   force** (`TestResourceCapsApply`), under whichever runtime answers the
