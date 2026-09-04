@@ -526,11 +526,21 @@ func TestVerifyEdgeCases(t *testing.T) {
 
 func TestSyncDir(t *testing.T) {
 	dir := t.TempDir()
-	if err := syncDir(filepath.Join(dir, "evidence.jsonl")); err != nil {
+	if err := syncDir(filepath.Join(dir, "evidence.jsonl"), "evidence log"); err != nil {
 		t.Errorf("syncDir on a real directory: %v", err)
 	}
-	if err := syncDir(filepath.Join(dir, "no-such-dir", "evidence.jsonl")); err == nil {
-		t.Error("syncDir on a missing directory must report it — the log cannot be durable there")
+	err := syncDir(filepath.Join(dir, "no-such-dir", "evidence.jsonl"), "evidence log")
+	if err == nil {
+		t.Fatal("syncDir on a missing directory must report it — the log cannot be durable there")
+	}
+	// The label is what tells an operator which durability step failed,
+	// now that two callers share this one.
+	if !strings.Contains(err.Error(), "evidence log directory") {
+		t.Errorf("error = %q, want it to name the evidence log", err)
+	}
+	if err := syncDir(filepath.Join(dir, "no-such-dir", "key"), "key"); err == nil ||
+		!strings.Contains(err.Error(), "key directory") {
+		t.Errorf("error = %v, want it to name the key", err)
 	}
 }
 
