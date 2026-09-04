@@ -174,6 +174,89 @@ func TestCorruptSnapshotVerdict(t *testing.T) {
 	}
 }
 
+// TestEmptySnapshotIsRefused proves the drill will not report success for
+// a snapshot that carries nothing.
+//
+// The artifact is genuine, which is the point: it is written by
+// `etcdctl snapshot save` against a healthy server that simply holds no
+// keys, so it carries the appended integrity hash the adapter checks and
+// `etcdutl` calls it valid. Nothing before this gate said no, and a drill
+// of it would restore an empty keyspace and prove nothing about the
+// cluster it came from — for etcd, a cluster coming back empty.
+//
+// The verdict comes from the restored server rather than from the
+// snapshot's own key count, and this test is where that matters: on the
+// baseline image an empty snapshot reports totalKey 6, not 0 (measured —
+// 3.6 reports 0 for the same artifact), so a gate reading the artifact
+// would pass this fixture on one line and refuse it on the other.
+func TestEmptySnapshotIsRefused(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := wrapperImage(t, ctx)
+	provider := docker.New(nil)
+
+	empty := filepath.Join(t.TempDir(), "empty.db")
+	makeEmptySnapshotFixture(t, ctx, provider, image, empty)
+
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("etcd", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	_, err = runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "etcd_snapshot", Path: empty},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	var aerr *adapter.Error
+	if err == nil || !errors.As(err, &aerr) || aerr.Code != "restore_failed" {
+		t.Fatalf("provision error = %v, want restore_failed", err)
+	}
+	if !strings.Contains(aerr.Message, "holds no keys") {
+		t.Errorf("message = %q, want it to say the server holds nothing", aerr.Message)
+	}
+}
+
+// makeEmptySnapshotFixture takes a real snapshot of a healthy server that
+// holds nothing — the same tool and the same format as the populated
+// fixture, minus the keys.
+func makeEmptySnapshotFixture(t *testing.T, ctx context.Context, provider *docker.Provider, image, dest string) {
+	t.Helper()
+	seed, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+
+	seedScript := `set -e
+etcd --data-dir=/tmp/seed --listen-client-urls=http://127.0.0.1:2379 --advertise-client-urls=http://127.0.0.1:2379 >/tmp/etcd.log 2>&1 &
+i=0
+until etcdctl --dial-timeout=2s endpoint health >/dev/null 2>&1; do
+  i=$((i+1)); [ "$i" -gt 60 ] && { tail -n 5 /tmp/etcd.log >&2; exit 1; }
+  sleep 1
+done
+held=$(etcdctl get "" --prefix --keys-only | grep -c . || true)
+[ "$held" = "0" ] || { echo "fixture holds $held keys, want an empty server" >&2; exit 1; }
+etcdctl snapshot save /tmp/snap.db >/dev/null 2>&1`
+	res, err := seed.Exec(ctx, sandbox.ExecRequest{Argv: []string{"sh", "-c", seedScript}})
+	if err != nil {
+		t.Fatalf("seed exec: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("seed empty fixture: exit %d: %s", res.ExitCode, res.Stderr)
+	}
+	if out, err := exec.CommandContext(ctx, "docker", "cp",
+		seed.ID()+":/tmp/snap.db", dest).CombinedOutput(); err != nil {
+		t.Fatalf("copy snapshot out: %v: %s", err, out)
+	}
+}
+
 // TestDistrolessImageIsRefusedWithTheRecipe drives the preflight against
 // the real official image: no shell, so the drill must fail up front,
 // naming the problem and pointing at the documented wrapper. The

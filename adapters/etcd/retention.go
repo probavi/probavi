@@ -156,3 +156,18 @@ func refusedLeases(reason string) *protoError {
 			"every key attached to it (measured), so the drill would prove whatever survived the "+
 			"clock rather than what the backup holds", reason)
 }
+
+// keyCensusScript answers how many keys the restored server serves, as a
+// bare number.
+//
+// The extraction happens in the sandbox rather than in Go for two
+// reasons. Only `--write-out=fields` answers `--count-only` — the json
+// writer refuses the combination outright (measured) — and its output is
+// a labelled pair rather than a value. And a census that reads a bare
+// count is the shape the protocol's own conformance contract expects:
+// §10 drives an adapter against a simulated sandbox where every exec
+// answers `1`, so a provision that cannot read that is non-conformant by
+// construction. Every other census in this repository has the same shape.
+var keyCensusScript = fmt.Sprintf(
+	`etcdctl --endpoints=%s get "" --prefix --count-only -w fields | sed -n 's/^"Count" : //p'`,
+	clientEndpoint)

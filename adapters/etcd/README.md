@@ -171,6 +171,28 @@ guard the other directory kinds share (see `settle.go`).
 
 `checksum` is SHA-256 over the snapshot file's bytes, exactly as stored.
 
+
+## The empty restore
+
+A snapshot that carries no keys is refused, and the refusal comes from the
+restored server rather than from the snapshot.
+
+`etcdutl snapshot status` prints a key count and the temptation is to gate
+on it. It is not the same number across the versions this adapter restores
+from: a snapshot of a server holding nothing reports `totalKey` **6** on
+etcd 3.5.21 — keys the store keeps for itself — and **0** on 3.6.0
+(measured, same artifact shape, both with an intact integrity hash). A
+threshold tuned on one line would be a magic number on the other.
+
+So after the restore, once the leases are held open, the drill asks the
+server what it serves (`etcdctl get "" --prefix --count-only`) and refuses
+a keyspace that came back empty. That number is the one a check would
+read, it does not move between versions, and it catches both an artifact
+that carried nothing and a restore that lost what it did carry.
+
+Only `--write-out=fields` answers `--count-only`; the json writer refuses
+the combination outright (measured).
+
 ## Errors it reports
 
 | Situation | Code |
