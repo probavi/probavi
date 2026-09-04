@@ -13,6 +13,39 @@ always called out explicitly.
 
 ### Fixed
 
+- **The orphan sweep separates drill hosts by machine id as well as
+  hostname**, so two hosts sharing a runtime no longer risk removing each
+  other's running sandboxes. The sweep decides "mine" by comparing a host
+  label and then asks the *local* kernel whether the owner pid is alive;
+  two hosts sharing that label ask the wrong kernel about the wrong pid.
+  Measured: with the owner id written by another host, the answer is
+  `alive=false` whether or not the pid exists locally, so the sandbox is
+  swept — and the start-token work made that likelier rather than less,
+  because a coincidental pid match used to spare it (`alive=true` without
+  a token against `alive=false` with a foreign one, same live pid).
+
+  Both halves of the identity are needed, and both were measured. A
+  hostname alone collides on cloned virtual machines and on minimal
+  images defaulting to `localhost`; a machine id alone collides inside
+  containers, where `/etc/machine-id` is empty in every image tried while
+  the hostname is a distinct container id. Together they separate both,
+  and both survive a reboot — which a boot id would not, leaving the
+  orphans of a crashed run unreclaimable.
+
+  What remains is a virtual machine cloned without regenerating its
+  machine id, which keeps the hostname too; systemd requires regenerating
+  it on clone, and the README says what to do if yours has not.
+
+  Two consequences worth stating. Sandboxes created before this release
+  carry the old label, so the first sweep after upgrading leaves them
+  behind rather than reclaiming them — the safe direction, and the k8s
+  and bare-host providers have target-side backstops that still collect
+  them; a docker host with orphans from before the upgrade can clear them
+  with `docker rm -f $(docker ps -aq --filter label=com.probavi.sandbox=1)`
+  while no drill is running. And an evidence record's `env.host_id` is
+  **unchanged**: it is specified as SHA-256 of the hostname and is signed,
+  the two derivations only ever looked alike, and a test now says so.
+
 - **The ClickHouse adapter refuses a restore that produced no table**
   (`adapters/clickhouse` 0.3.0). `RESTORE ALL` prints `RESTORED` for an
   archive holding nothing — for both the structure pass and the data pass
