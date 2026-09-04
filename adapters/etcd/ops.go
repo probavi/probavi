@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const (
 	adapterName    = "etcd"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 
 	// clientEndpoint is where the restored server serves inside the
 	// sandbox. No TLS and no auth: a Probavi sandbox is zero-ingress
@@ -147,6 +148,12 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	readySeconds += holdSeconds
 	logger.Info("leases held open for the drill", "leases", leases, "seconds", holdSeconds)
 
+	censusSeconds, perr := assertKeysServed(ctx, c)
+	if perr != nil {
+		return nil, perr
+	}
+	readySeconds += censusSeconds
+
 	return map[string]any{
 		"connection": map[string]any{
 			"scheme": "etcd", "host": "127.0.0.1", "port": defaultPort,
@@ -210,6 +217,50 @@ func checkSnapshot(ctx context.Context, c *core, path string) *protoError {
 			"etcdutl rejected the snapshot: %s", firstLine(stderr))
 	}
 	return nil
+}
+
+// Only the exit code is read here, and the key count this command also
+// prints is deliberately not the gate: it is not the same number across
+// the versions this adapter restores from. Measured on a snapshot of a
+// server holding nothing — etcd 3.5.21 reports totalKey 6, counting keys
+// the store keeps for itself, while 3.6.0 reports 0. A threshold that
+// worked on one line would be a magic number on the other, and a gate
+// nobody could read. What the restored server serves is the same question
+// asked where the answer does not move (assertKeysServed).
+
+// assertKeysServed reads what the restored server actually holds.
+//
+// This is the whole empty-restore gate, for the reason above: the
+// snapshot's own key count is not portable across etcd minors, and it
+// would answer the weaker question anyway — what the artifact carried,
+// never what came back. Keys can be lost between the two, and the lease
+// keeper above bounds that rather than removing it, by its own
+// documentation. A drill whose keyspace ended up empty proved nothing,
+// whichever way it got there.
+//
+// It runs after the leases are held so that the number is the one a check
+// will see, not one taken while a lease was still expiring.
+func assertKeysServed(ctx context.Context, c *core) (float64, *protoError) {
+	val, stdout, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"sh", "-c", keyCensusScript, "sh"}})
+	if perr != nil {
+		return 0, perr
+	}
+	if val.ExitCode != 0 {
+		return 0, protoErr("restore_failed", false,
+			"the restored server would not count its keys: %s", firstLine(stderr))
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(stdout)))
+	if err != nil {
+		return 0, protoErr("restore_failed", false,
+			"the restored server did not answer a key count: %s", firstLine(stderr))
+	}
+	if count == 0 {
+		return 0, protoErr("restore_failed", false,
+			"the restore reported success but the server holds no keys — nothing a check reads "+
+				"could prove the backup, so the drill refuses rather than passing on an empty "+
+				"keyspace")
+	}
+	return val.DurationSeconds, nil
 }
 
 // startEngine launches the restored server in the background and waits for

@@ -13,6 +13,28 @@ always called out explicitly.
 
 ### Fixed
 
+- **The etcd adapter refuses a restore whose keyspace came back empty**
+  (`adapters/etcd` 0.3.0). A snapshot of a server holding no keys is a
+  valid snapshot: `etcdctl snapshot save` writes it, the integrity hash
+  this adapter checks is intact, `etcdutl` restores it with exit 0, and
+  the drill reported success — for the engine whose line in ROADMAP.md is
+  that an unrestorable snapshot is a Kubernetes cluster that does not come
+  back. That cluster coming back empty was green.
+
+  After the restore, once the leases are held open, the drill now asks the
+  server what it serves and refuses a keyspace with nothing in it. The
+  number is taken there rather than from the snapshot for a measured
+  reason: `etcdutl snapshot status` reports `totalKey` **6** for an empty
+  snapshot on etcd 3.5.21, counting keys the store keeps for itself, and
+  **0** for the same thing on 3.6.0. A threshold tuned on one line would
+  be a magic number on the other, and the artifact's claim answers the
+  weaker question anyway — what the backup carried, never what came back,
+  which also leaves a restore that lost its keys uncaught.
+
+  Proven end to end on both verified lines, with a fixture that is a
+  genuine `snapshot save` of a healthy empty server, so the refusal is
+  earned rather than asserted.
+
 - **The Solr adapter's restore gate asks the collection to answer a query,
   not the Collections API whether it is listed** (`adapters/solr` 0.3.0).
   Those answer at two different instants: a collection appears in `LIST`

@@ -114,6 +114,12 @@ func parseFinal(t *testing.T, line []byte) finalResponse {
 
 func okExec() any { return execValue{ExitCode: 0} }
 
+// outExec answers an exec that the adapter reads rather than merely
+// checks the exit code of.
+func outExec(stdout string) any {
+	return execValue{ExitCode: 0, StdoutB64: base64.StdEncoding.EncodeToString([]byte(stdout))}
+}
+
 func errExec(exit int, stderr string) any {
 	return execValue{ExitCode: exit, StderrB64: base64.StdEncoding.EncodeToString([]byte(stderr))}
 }
@@ -201,6 +207,9 @@ func classifyExec(argv []string, started *bool) (string, any) {
 	case argv[0] == "etcdctl" && len(argv) > 2 && argv[2] == "lease":
 		// A snapshot with no leases: the keeper is not started at all.
 		return "leases", okExec()
+	case argv[0] == "sh" && strings.Contains(joined, "--count-only"):
+		// The served census answers a bare number.
+		return "census", outExec("42\n")
 	case argv[0] == "etcdctl":
 		return "health", okExec()
 	case argv[0] == "etcdutl" && argv[1] == "snapshot" && argv[2] == "status":
@@ -274,6 +283,35 @@ func runHost(t *testing.T, argv []string) error {
 	return execCommand(argv)
 }
 
+// TestProvisionRefusesARestoreThatServesNoKeys covers the empty-restore
+// gate. The snapshot's own key count is deliberately not used for it —
+// etcd 3.5 and 3.6 do not agree on what that number counts (measured) —
+// and it would answer the weaker question anyway: what the artifact
+// carried, never what came back.
+func TestProvisionRefusesARestoreThatServesNoKeys(t *testing.T) {
+	snap := writeSnapshot(t, t.TempDir())
+	var sequence []string
+	handler := provisionHandler(t, &sequence)
+	line, _, _ := driveOp(t, "provision", provisionPayload(t, "etcd_snapshot", snap, nil),
+		func(call verbCall) (any, *protoError) {
+			if call.Verb == "exec" {
+				argv := argvOf(t, call)
+				if argv[0] == "sh" && strings.Contains(strings.Join(argv, " "), "--count-only") {
+					sequence = append(sequence, "census")
+					return outExec("0\n"), nil
+				}
+			}
+			return handler(call)
+		})
+	f := parseFinal(t, line)
+	if f.OK || f.Error.Code != "restore_failed" {
+		t.Fatalf("final = %+v, want restore_failed", f)
+	}
+	if !strings.Contains(f.Error.Message, "holds no keys") {
+		t.Errorf("message = %q, want it to say the server holds nothing", f.Error.Message)
+	}
+}
+
 func TestProvisionRestoresSnapshot(t *testing.T) {
 	snap := writeSnapshot(t, t.TempDir())
 	var sequence []string
@@ -283,7 +321,7 @@ func TestProvisionRestoresSnapshot(t *testing.T) {
 	if exit != 0 || !f.OK {
 		t.Fatalf("exit=%d final=%+v", exit, f)
 	}
-	want := "shell-probe|put_file|status|restore|start|health|leases"
+	want := "shell-probe|put_file|status|restore|start|health|leases|census"
 	if got := strings.Join(sequence, "|"); got != want {
 		t.Errorf("sequence = %s, want %s", got, want)
 	}
