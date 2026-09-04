@@ -689,3 +689,47 @@ func TestBuildEnvDeduplicates(t *testing.T) {
 		t.Errorf("env = %v, want both variables present once", env)
 	}
 }
+
+// TestOversizedStderrLineDoesNotStallTheOperation is the reason stderr is
+// drained rather than scanned.
+//
+// A scanner stops at the first line past its cap and its goroutine
+// returns, leaving the pipe unread. The adapter then blocks writing to a
+// full pipe, never sends its final response, and the read loop waits out
+// the drill deadline — a hang, for what is only log material. Here the
+// adapter writes a line larger than the frame limit, keeps writing after
+// it, and then answers: the operation must complete, the oversized line
+// must be logged truncated, and what came after it must still be logged.
+func TestOversizedStderrLineDoesNotStallTheOperation(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	// Comfortably past the 4 MiB frame limit, written without holding it
+	// all in the shell: 8 blocks of 1 MiB, then the newline.
+	script := prelude +
+		`i=0; while [ $i -lt 8 ]; do dd if=/dev/zero bs=1048576 count=1 2>/dev/null | tr '\0' 'x'; i=$((i+1)); done >&2` + "\n" +
+		`echo "" >&2` + "\n" +
+		`echo "still here" >&2` + "\n" +
+		probeFinal(probePayload)
+
+	r := fakeRunner(t, script, logger, &Options{Grace: 500 * time.Millisecond})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	res, err := r.Probe(ctx)
+	if err != nil {
+		t.Fatalf("Probe: %v — an oversized stderr line must not stall the operation", err)
+	}
+	if res.Name != "fake" {
+		t.Errorf("Probe result = %+v", res)
+	}
+	logged := logBuf.String()
+	if !strings.Contains(logged, "truncated=true") {
+		t.Error("the oversized line must be logged as truncated rather than dropped")
+	}
+	if !strings.Contains(logged, "still here") {
+		t.Error("stderr written after the oversized line must still reach the log")
+	}
+	if len(logged) > 16<<20 {
+		t.Errorf("log grew to %d bytes — an over-long line must be capped, not buffered whole", len(logged))
+	}
+}
