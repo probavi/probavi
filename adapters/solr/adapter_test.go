@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -252,9 +253,9 @@ func happyHandler(t *testing.T, seen *[]string) func(verbCall) (any, *protoError
 			wantArgs(t, name, args, sandboxHome, transferDir, collection)
 			return outExec("1"), nil
 		case "live":
-			wantArgs(t, name, args, collection)
 			return outExec("1"), nil
 		case "health":
+			wantArgs(t, name, args, collection)
 			return outExec("250"), nil
 		default:
 			return okExec(0), nil
@@ -318,7 +319,7 @@ func TestProvisionHappyPath(t *testing.T) {
 	if !f.OK {
 		t.Fatalf("final = %+v", f)
 	}
-	want := []string{"home", "ready", "mode", "put_file", "restore", "live"}
+	want := []string{"home", "ready", "mode", "put_file", "restore", "health"}
 	if strings.Join(seen, ",") != strings.Join(want, ",") {
 		t.Errorf("steps = %v, want %v", seen, want)
 	}
@@ -419,6 +420,8 @@ func TestProvisionRefusesACollectionTheServerDoesNotServe(t *testing.T) {
 			if call.Verb == "exec" {
 				name, _ := step(t, call)
 				switch name {
+				case "health":
+					return okExec(22), nil
 				case "live":
 					return outExec("0"), nil
 				case "served":
@@ -435,6 +438,56 @@ func TestProvisionRefusesACollectionTheServerDoesNotServe(t *testing.T) {
 		if !strings.Contains(f.Error.Message, want) {
 			t.Errorf("message = %q, want it to carry %q", f.Error.Message, want)
 		}
+	}
+}
+
+// TestProvisionWaitsForACollectionThatIsListedButNotYetServing covers the
+// window that made a good restore report a failed check: the Collections
+// API lists the collection before a node answers a query against it, so a
+// gate on the listing returns while `/select` is still answering 404.
+// Measured in CI on solr:10, where the first check failed and the next
+// three, moments later, passed.
+//
+// Provision must absorb that rather than hand it to whatever runs first.
+func TestProvisionWaitsForACollectionThatIsListedButNotYetServing(t *testing.T) {
+	backup := writeBackup(t, nil)
+	var seen []string
+	handler := happyHandler(t, &seen)
+	queries := 0
+	line, _, exit := driveOp(t, "provision", provisionPayload(backup, ""),
+		func(call verbCall) (any, *protoError) {
+			if call.Verb == "exec" {
+				name, _ := step(t, call)
+				switch name {
+				case "health":
+					queries++
+					if queries < 3 {
+						// curl -sf against a collection no node serves
+						// yet: Solr answers its 404 page, curl exits 22.
+						seen = append(seen, "health")
+						return okExec(22), nil
+					}
+				case "live":
+					// Listed all along — the collection exists, it is the
+					// serving that lags.
+					seen = append(seen, "live")
+					return outExec("1"), nil
+				}
+			}
+			return handler(call)
+		})
+	if exit != 0 {
+		t.Fatalf("exit = %d", exit)
+	}
+	f := parseFinal(t, line)
+	if !f.OK {
+		t.Fatalf("final = %+v, want a successful provision once the collection answers", f)
+	}
+	if queries != 3 {
+		t.Errorf("health queries = %d, want 3 — the gate must retry until the collection answers", queries)
+	}
+	if !slices.Contains(seen, "live") {
+		t.Error("the listing was never consulted — it is what tells a late collection from a missing one")
 	}
 }
 
