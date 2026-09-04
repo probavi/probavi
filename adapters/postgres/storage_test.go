@@ -174,6 +174,11 @@ func TestPlainDumpClock(t *testing.T) {
 			strings.Replace(plainDumpBody, "2026-08-09 21:26:45 JST", "", 1), "", false},
 		{"an unparseable clock is refused rather than guessed",
 			strings.Replace(plainDumpBody, "2026-08-09 21:26:45", "yesterday afternoon", 1), "", false},
+		// Found by FuzzDumpClock: this clock ranks the candidates in a
+		// backup directory, so a year no backup was taken in must not
+		// outrank a real dump the way a far-future one would.
+		{"a date outside any backup's lifetime is not a date",
+			strings.Replace(plainDumpBody, "2026-08-09", "9999-12-31", 1), "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

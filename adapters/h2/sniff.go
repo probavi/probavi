@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -61,6 +62,13 @@ func isGzip(head []byte) bool {
 	return bytes.HasPrefix(head, gzipMagic)
 }
 
+// formatNumber is what the header's format field may be: the version
+// number this reader claims to have found. Anything else is not one, and
+// is dropped rather than quoted — the refusal built from this value tells
+// the operator their file "states MVStore format %s", and the file is
+// unvetted input at that point.
+var formatNumber = regexp.MustCompile(`^\d+$`)
+
 // storageFormat reads the MVStore header's format field, or "" when the
 // head does not carry one. The header is text, so this is a string scan
 // rather than a struct: H2 writes the fields in a fixed order but the set
@@ -75,7 +83,11 @@ func storageFormat(head []byte) string {
 	if j := strings.IndexByte(rest, ','); j >= 0 {
 		rest = rest[:j]
 	}
-	return strings.TrimSpace(rest)
+	rest = strings.TrimSpace(rest)
+	if !formatNumber.MatchString(rest) {
+		return ""
+	}
+	return rest
 }
 
 // zipHoldsDatabase reports whether the archive carries an MVStore file,

@@ -62,6 +62,19 @@ func TestReadBackupWallClock(t *testing.T) {
 			t.Errorf("err = %v, want errNoTimestamp", err)
 		}
 	})
+
+	// Found by FuzzScanManifestTimestamp: a timestamp that parses to the
+	// zero time would come back as a success carrying the value both
+	// callers read as "no timestamp at all".
+	t.Run("a timestamp that parses to the zero time is no timestamp", func(t *testing.T) {
+		path := filepath.Join(dir, "zero-ts.zip")
+		writeZipMembers(t, path, backupManifest,
+			"<config><timestamp>0001-01-01 00:00:00</timestamp></config>")
+		_, err := readBackupWallClock(path)
+		if !errors.Is(err, errNoTimestamp) {
+			t.Errorf("err = %v, want errNoTimestamp", err)
+		}
+	})
 }
 
 // TestManifestScanStopsAtTheHeader proves the reader does not decode the

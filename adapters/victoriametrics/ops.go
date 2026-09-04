@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "victoriametrics"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.2.1"
 
 	// workDirName is created under the provider's scratch directory — the
 	// one directory the provider guarantees writable.

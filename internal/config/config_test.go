@@ -337,3 +337,42 @@ func TestPITRRejectsAFutureTarget(t *testing.T) {
 		}
 	})
 }
+
+// TestLoadersReportAMalformedDocumentRatherThanCrashing pins the boundary
+// around the YAML decoder.
+//
+// Found by FuzzLoadGameDay and reproduced on the drill loader: on the
+// pinned decoder version a tag on an empty node where a sequence belongs
+// dereferences nil inside its own AST walk, and the process dies. That is
+// the worst shape a config error can take — no diagnostic, no record, and
+// an exit code that says the binary died rather than that the file is
+// wrong.
+func TestLoadersReportAMalformedDocumentRatherThanCrashing(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body string
+		load func(string) error
+	}{
+		"drill config, a tagged empty sequence": {
+			"drill:\n  name: x\nchecks: !000000 \n",
+			func(p string) error { _, err := Load(p, nil); return err },
+		},
+		"game-day, a tagged empty depends_on": {
+			"name: g\ntimeout: 1h\nmembers:\n  - name: A\n    depends_on: !000000 \n",
+			func(p string) error { _, err := LoadGameDay(p, nil); return err },
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+			err := tc.load(path)
+			if err == nil {
+				t.Fatal("a document the decoder cannot read must be an error")
+			}
+			if !strings.Contains(err.Error(), path) {
+				t.Errorf("error = %q, want it to name the file", err)
+			}
+		})
+	}
+}

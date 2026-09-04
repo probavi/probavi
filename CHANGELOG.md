@@ -13,6 +13,72 @@ always called out explicitly.
 
 ### Fixed
 
+- **A malformed config file no longer kills the process.** A YAML tag on an
+  empty node — `checks: !000000 ` in a drill config, `depends_on: !000000 `
+  in a game-day — made the decoder dereference a nil node and take the
+  binary down with a SIGSEGV. What an operator saw was a stack trace and an
+  exit code that says the program died, where the whole point of that read
+  is to name the file and the mistake in it.
+
+  The bug is in `goccy/go-yaml` v1.19.2, which is the newest release, so
+  both loaders now decode behind a boundary that turns a panic into the
+  error the caller was going to get anyway: `parse config <path>: …`. The
+  boundary also covers our own unmarshalers, which is where the next one
+  of these would come from.
+
+  Found by `FuzzLoadGameDay` within four seconds of first running, and
+  reproduced on `config.Load` immediately afterwards — the loaders had no
+  fuzz target until this release.
+
+- **Five adapters' host-side artifact readers fail closed on a file that
+  states the impossible.** All five read an operator's backup on the drill
+  host, before anything is transferred, and each acted on what it read; a
+  backup file is unvetted input by this repository's own threat model, and
+  every one of these was found by a fuzz target asserting what the reader
+  promises its caller rather than merely that it survived.
+
+  `adapters/postgres` 0.13.1 — a plain-SQL dump's `-- Started on` line was
+  parsed with no plausibility gate, while the custom-format header path had
+  one. That clock ranks the candidates in a directory drill, so a corrupt
+  line dated in the year 9999 outranked every real dump present and chose
+  what the drill restored; with `backup_timezone` declared it also reached
+  the record as `backup.created_at`. Both paths now apply the same gate,
+  and the first *plausible* match wins.
+
+  `adapters/victoriametrics` 0.2.1 — two. The artifact's own `created_at`
+  was ungated although this adapter acts on it three times: it ranks the
+  candidates, dates the record, and is the instant the series census
+  evaluates the restored engine at. The epoch is the sharpest case, because
+  every caller spells "this artifact does not date itself" as zero, and
+  `1970-01-01T00:00:00Z` parses to exactly that. Separately, the names in
+  `parts.json` were joined onto the partition directory and stat'ed without
+  checking that they name something inside it — so a truncated copy could
+  satisfy the completeness fence by pointing at a directory the backup does
+  not contain, the fence talked past by the thing it fences.
+
+  `adapters/opensearch` 0.4.1 — the version parser accumulated digits into
+  an `int` without bound, so a version long enough to overflow compared as
+  a small one. That parse gates the refusal of a snapshot written by a
+  server newer than the sandbox's, which is the one direction it must not
+  be wrong in. A component is now refused whole, and a refused parse
+  returns nothing rather than the fields it had filled so far.
+
+  `adapters/h2` 0.1.1 — the MVStore header's `format` field was quoted
+  verbatim into a refusal telling the operator their file "states MVStore
+  format %s", whatever bytes followed the key, terminal escapes included.
+  It reads a format number or nothing, which is what the sentence claims —
+  the sibling `adapters/duckdb` had already settled the rule, in a comment
+  saying header noise must not reach a refusal message.
+
+  `adapters/clickhouse` 0.3.1 — a manifest timestamp that parsed to the
+  zero time came back as a success, and both callers read a zero time as
+  "this archive says nothing about when it was taken". No server writes
+  year 1; a manifest that does is corrupt, which is what the reader's own
+  error already means.
+
+  No evidence schema, canonical byte or protocol change; each adapter
+  carries its version bump into `docs/capabilities.json`.
+
 - **Two drills writing one Prometheus textfile no longer share a temporary
   file.** `WriteTextfile` wrote `<path>.tmp` — the same name for every
   drill writing the same file, and nothing stops two: the game-day config
@@ -195,6 +261,32 @@ always called out explicitly.
   verdict, and a nondeterministic one is worth less than a slow one.
 
 ### Added
+
+- **Fuzz targets for the config loaders and every adapter reader that
+  decodes an artifact** — 24 of them, across `internal/config` and fifteen
+  adapters. The suite had them for evidence verification, canonicalization
+  and the adapter message reader — the trust core — and nothing for the two
+  places that read what an operator hands the drill: the config it is
+  configured with, and the backup file itself.
+
+  Each asserts what the parser promises its caller, not that it survived
+  the input: that a refusal and a success stay distinguishable, that a
+  reported value is one the caller may act on, and that what a walk retains
+  out of an archive is bounded — a tar entry is a 512-byte header that
+  compresses to almost nothing, so without that last one a small file
+  chooses how much memory the drill host spends.
+
+  The weekly fuzz workflow discovers targets rather than listing them, so
+  these joined it by existing — and it now fans out one job per package
+  instead of looping over all of them in one, because a single job's wall
+  clock was on its way to deciding how much fuzzing each target is worth.
+  Every target keeps the same budget whatever the suite grows to.
+
+  Seven defects came out of writing them, listed under Fixed above. Two
+  further failures were the assertion being wrong rather than the code, and
+  the decoder behaviours behind them are kept as named cases rather than as
+  opaque corpus files: Go matches JSON object keys without regard to case,
+  and replaces invalid UTF-8 in a string with U+FFFD.
 
 - **The docker sandbox provider is verified against podman**, which the
   packaged Arch optional dependency and Debian suggestion have told

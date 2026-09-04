@@ -318,6 +318,12 @@ func splitTarName(name string) []string {
 	return strings.Split(name, "/")
 }
 
+// maxVersionComponent is the largest value a version component may reach
+// before another digit is refused. No engine numbers a release this high,
+// and the bound is what keeps the accumulator below the point where it
+// stops meaning the digits it read.
+const maxVersionComponent = 1 << 20
+
 // versionTriple parses an OpenSearch version string's numeric triple.
 func versionTriple(v string) (parts [3]int, ok bool) {
 	fields := strings.SplitN(strings.TrimSpace(v), ".", 3)
@@ -327,8 +333,12 @@ func versionTriple(v string) (parts [3]int, ok bool) {
 	for i, f := range fields {
 		n := 0
 		for _, r := range f {
-			if r < '0' || r > '9' {
-				return parts, false
+			// A component is refused whole: a digit run long enough to
+			// overflow the accumulator would compare as a small version,
+			// which is the one direction that matters — this parse gates
+			// the refusal of a snapshot written by a newer server.
+			if r < '0' || r > '9' || n > maxVersionComponent {
+				return [3]int{}, false
 			}
 			n = n*10 + int(r-'0')
 		}

@@ -11,7 +11,7 @@ import (
 
 const (
 	adapterName    = "h2"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.1.1"
 
 	// jarPath is where the sandbox image keeps the H2 jar. There is no
 	// official H2 image, so the drill runs a wrapper the operator builds —

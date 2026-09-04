@@ -85,7 +85,7 @@
       "name": "ClickHouse",
       "status": "experimental",
       "since": "0.7.0",
-      "adapter_version": "0.3.0",
+      "adapter_version": "0.3.1",
       "engine": {
         "id": "clickhouse",
         "name": "ClickHouse"
@@ -338,7 +338,7 @@
       "name": "H2",
       "status": "experimental",
       "since": "0.22.0",
-      "adapter_version": "0.1.0",
+      "adapter_version": "0.1.1",
       "engine": {
         "id": "h2",
         "name": "H2"
@@ -679,7 +679,7 @@
       "name": "OpenSearch",
       "status": "experimental",
       "since": "0.14.0",
-      "adapter_version": "0.4.0",
+      "adapter_version": "0.4.1",
       "engine": {
         "id": "opensearch",
         "name": "OpenSearch"
@@ -748,7 +748,7 @@
       "name": "PostgreSQL",
       "status": "experimental",
       "since": "0.1.0",
-      "adapter_version": "0.13.0",
+      "adapter_version": "0.13.1",
       "engine": {
         "id": "postgresql",
         "name": "PostgreSQL"
@@ -1129,7 +1129,7 @@
       "name": "VictoriaMetrics",
       "status": "experimental",
       "since": "0.16.0",
-      "adapter_version": "0.2.0",
+      "adapter_version": "0.2.1",
       "engine": {
         "id": "victoriametrics",
         "name": "VictoriaMetrics"
