@@ -53,11 +53,7 @@ func provisionPhysical(ctx context.Context, c *core, req *provisionRequest, src 
 
 	// prepare (redo apply) and copy-back are both restore work: one timed
 	// execution so restore_seconds is a single honest measurement.
-	restoreScript := fmt.Sprintf(`set -e
-xtrabackup --prepare --target-dir=%s
-xtrabackup --copy-back --target-dir=%s --datadir=%s
-chown -R mysql:mysql %s`, backupInSandbox, backupInSandbox, datadir, datadir)
-	restore, stderr, perr := execChecked(ctx, c, "sh", "-c", restoreScript)
+	restore, stderr, perr := execChecked(ctx, c, "sh", "-c", physicalRestoreScript, "sh", backupInSandbox, datadir)
 	if perr != nil {
 		return nil, perr
 	}
@@ -152,6 +148,20 @@ func checkEngineVersion(ctx context.Context, c *core, series string) *protoError
 // network exposure, so the empty password is confined to the disposable
 // container (same rationale as the postgres adapter's pg_hba overwrite).
 // All paths are adapter-controlled constants.
+// physicalRestoreScript prepares the backup in place and copies it back.
+//
+// $1 is the backup directory inside the sandbox and $2 the engine's data
+// directory. They are positional parameters rather than text folded into
+// the script because $1 comes from the sandbox's scratch directory, which
+// the bare-host provider derives from the operator's workspace_root: a
+// space there would break the restore and a shell metacharacter would be
+// read as script. The sandbox providers pass paths this way for the same
+// reason.
+const physicalRestoreScript = `set -e
+xtrabackup --prepare --target-dir="$1"
+xtrabackup --copy-back --target-dir="$1" --datadir="$2"
+chown -R mysql:mysql "$2"`
+
 func prepareRestore(ctx context.Context, c *core) *protoError {
 	script := fmt.Sprintf(`set -e
 rm -rf %s/* %s/.[!.]* 2>/dev/null || true

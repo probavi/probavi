@@ -146,6 +146,18 @@ func lastArg(t *testing.T, call verbCall) (execArgs, string) {
 	return args, args.Argv[len(args.Argv)-1]
 }
 
+// shellScript returns the program a `sh -c` call carries, or "" for a
+// call that is not one. Tests classify script steps with this rather than
+// with the last argument, because a script that takes its paths as
+// positional parameters has arguments after it — which is the point of
+// passing them that way.
+func shellScript(args execArgs) string {
+	if len(args.Argv) > 2 && (args.Argv[0] == "sh" || args.Argv[0] == "bash") && args.Argv[1] == "-c" {
+		return args.Argv[2]
+	}
+	return ""
+}
+
 func TestProbeGolden(t *testing.T) {
 	line, calls, exit := driveOp(t, "probe", "{}", func(verbCall) (any, *protoError) {
 		t.Fatal("probe must not touch the sandbox")

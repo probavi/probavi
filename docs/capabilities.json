@@ -437,7 +437,7 @@
       "name": "MariaDB",
       "status": "experimental",
       "since": "0.7.0",
-      "adapter_version": "0.3.0",
+      "adapter_version": "0.4.0",
       "engine": {
         "id": "mariadb",
         "name": "MariaDB"
@@ -591,7 +591,7 @@
       "name": "MySQL",
       "status": "experimental",
       "since": "0.1.0",
-      "adapter_version": "0.13.0",
+      "adapter_version": "0.14.0",
       "engine": {
         "id": "mysql",
         "name": "MySQL"
@@ -679,7 +679,7 @@
       "name": "OpenSearch",
       "status": "experimental",
       "since": "0.14.0",
-      "adapter_version": "0.3.0",
+      "adapter_version": "0.4.0",
       "engine": {
         "id": "opensearch",
         "name": "OpenSearch"
