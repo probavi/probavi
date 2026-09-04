@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -80,6 +81,7 @@ type session struct {
 	stdin        io.WriteCloser
 	stdout       *bufio.Scanner
 	rawStdout    io.ReadCloser
+	rawStderr    io.ReadCloser
 	stderrDone   chan struct{}
 	stopWatchdog chan struct{}
 	logger       *slog.Logger
@@ -111,21 +113,12 @@ func (r *Runner) start(ctx context.Context) (*session, error) {
 		return nil, fmt.Errorf("start adapter %s: %w", r.path, err)
 	}
 
-	// §1: stderr is captured verbatim into logs, never parsed.
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		sc := bufio.NewScanner(stderr)
-		sc.Buffer(make([]byte, 64*1024), maxLineBytes)
-		for sc.Scan() {
-			r.logger.Info("adapter stderr", "line", sc.Text())
-		}
-	}()
+	done := r.drainStderr(stderr)
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), maxLineBytes)
 	s := &session{
-		cmd: cmd, stdin: stdin, stdout: scanner, rawStdout: stdout,
+		cmd: cmd, stdin: stdin, stdout: scanner, rawStdout: stdout, rawStderr: stderr,
 		stderrDone: done, stopWatchdog: make(chan struct{}),
 		logger: r.logger, grace: r.opts.Grace,
 	}
@@ -235,22 +228,61 @@ func (s *session) closeStdin() {
 func (s *session) wait() error {
 	s.waited = true
 	close(s.stopWatchdog)
+
+	deadline := time.Now().Add(s.grace)
+	killed := s.awaitStderr(deadline)
+
 	done := make(chan error, 1)
 	go func() { done <- s.cmd.Wait() }()
 	select {
 	case err := <-done:
-		<-s.stderrDone
+		if err == nil && killed {
+			err = errors.New("adapter lingered past the grace period and was killed")
+		}
 		return err
-	case <-time.After(s.grace):
+	case <-time.After(time.Until(deadline)):
 		if kerr := s.cmd.Process.Kill(); kerr != nil {
 			s.logger.Debug("kill lingering adapter", "err", kerr)
 		}
 		err := <-done
-		<-s.stderrDone
 		if err == nil {
 			err = errors.New("adapter lingered past the grace period and was killed")
 		}
 		return err
+	}
+}
+
+// awaitStderr waits for the stderr drain to reach EOF and reports whether
+// the adapter had to be killed to get there.
+//
+// The drain has to finish before cmd.Wait rather than after it. Wait
+// closes the pipes it created as soon as the process is gone — os/exec
+// says so, and says it is therefore incorrect to call it before the reads
+// have completed — so reaping first cuts the drain short and loses the
+// adapter's last words. Those are the words that say why it failed, which
+// is when they matter most; measured, a build that reaped first dropped
+// everything written after a large stderr line about half the time.
+//
+// An adapter still holding the pipe open is the same pathology as one
+// that will not exit, so it gets the same deadline rather than one of its
+// own, and killing it closes the write end.
+func (s *session) awaitStderr(deadline time.Time) bool {
+	select {
+	case <-s.stderrDone:
+		return false
+	case <-time.After(time.Until(deadline)):
+		if kerr := s.cmd.Process.Kill(); kerr != nil {
+			s.logger.Debug("kill adapter holding stderr open", "err", kerr)
+		}
+		// Killing the adapter is not enough on its own: a grandchild it
+		// left behind holds the write end open and the drain would never
+		// see EOF. Closing our read end unblocks it, which is the same
+		// answer the watchdog already gives for stdout.
+		if cerr := s.rawStderr.Close(); cerr != nil {
+			s.logger.Debug("close adapter stderr", "err", cerr)
+		}
+		<-s.stderrDone
+		return true
 	}
 }
 
@@ -309,4 +341,64 @@ func mustMarshal(v any) json.RawMessage {
 		panic("adapter: marshal payload: " + err.Error())
 	}
 	return b
+}
+
+// drainStderr logs the adapter's stderr and reads the pipe to EOF,
+// closing the returned channel when it gets there.
+//
+// §1: stderr is captured verbatim into logs, never parsed.
+//
+// It drains rather than scans. A scanner stops at the first line past its
+// cap and its goroutine returns, leaving the pipe unread: the adapter
+// then blocks on a full one, never writes its final response, and the
+// read loop waits out the drill deadline. A chatty adapter must cost a
+// truncated log line, not a drill's wall clock.
+func (r *Runner) drainStderr(stderr io.Reader) chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		br := bufio.NewReaderSize(stderr, 64*1024)
+		for {
+			line, truncated, err := readCappedLine(br, maxLineBytes)
+			if line != "" || truncated {
+				r.logger.Info("adapter stderr", "line", line, "truncated", truncated)
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return done
+}
+
+// readCappedLine returns the next line from br without its terminator,
+// keeping at most limit bytes of it, and reports whether it was longer
+// than that. The remainder of an over-long line is read and discarded
+// rather than left in the pipe — that is the whole point: the reader must
+// reach EOF for the adapter to finish writing.
+//
+// The error is the reader's own, returned once the line in hand has been
+// assembled, so a final line with no terminator is still logged before
+// the loop ends.
+func readCappedLine(br *bufio.Reader, limit int) (line string, truncated bool, err error) {
+	var buf []byte
+	for {
+		chunk, rerr := br.ReadSlice('\n')
+		if room := limit - len(buf); room > 0 {
+			if len(chunk) > room {
+				buf, truncated = append(buf, chunk[:room]...), true
+			} else {
+				buf = append(buf, chunk...)
+			}
+		} else if len(chunk) > 0 {
+			truncated = true
+		}
+		if errors.Is(rerr, bufio.ErrBufferFull) {
+			// The line is longer than the reader's buffer. Keep going:
+			// what is past the cap is dropped, but it still has to be
+			// read out of the pipe.
+			continue
+		}
+		return string(bytes.TrimRight(buf, "\r\n")), truncated, rerr
+	}
 }

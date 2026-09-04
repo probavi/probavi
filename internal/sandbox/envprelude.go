@@ -2,9 +2,20 @@ package sandbox
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
+
+// envNamePattern is what a name has to look like before it may be
+// exported into a sandbox. It is the POSIX shell's own rule for a
+// portable variable name, and it lives here — beside the prelude that
+// consumes such names — so the providers that accept `env.` parameters
+// and the verb that carries them at run time cannot drift apart.
+var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ValidEnvName reports whether name may be exported into a sandbox.
+func ValidEnvName(name string) bool { return envNamePattern.MatchString(name) }
 
 // EnvPreludeScript returns a POSIX shell program that reads exactly n
 // "NAME=value" lines from stdin, exports each, and then execs the command
@@ -36,6 +47,16 @@ func EnvPreludeScript(n int) string {
 // Rather than silently truncating a credential — or worse, exporting its
 // tail as another variable — such a value is rejected: a caller that needs
 // one has hit a real limitation and deserves to be told.
+//
+// The name is held to the same line and rather more: it is checked before
+// it is written, because a name is not only data here. A newline in one
+// makes the rendered block longer than the count the prelude was told to
+// read, so the lines past that count stop being environment and become
+// the command's stdin — carrying, in the worst arrangement, the next
+// variable's value. Anything that is not a portable shell name is refused
+// rather than shaped into one: names reach this through the exec verb,
+// from an adapter, and an adapter that asks for something impossible
+// should be told so rather than have its request quietly altered.
 func EnvPreludeLines(env map[string]string) (string, error) {
 	names := make([]string, 0, len(env))
 	for k := range env {
@@ -45,6 +66,9 @@ func EnvPreludeLines(env map[string]string) (string, error) {
 
 	var b strings.Builder
 	for _, k := range names {
+		if !ValidEnvName(k) {
+			return "", fmt.Errorf("%w: %q is not a usable environment variable name for the sandbox", ErrInvalidParams, k)
+		}
 		if strings.ContainsAny(env[k], "\n\r") {
 			return "", fmt.Errorf("%w: environment value for %s contains a newline and cannot be passed to the sandbox", ErrInvalidParams, k)
 		}

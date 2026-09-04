@@ -79,3 +79,51 @@ func itoa(n int) string {
 	}
 	return string(b)
 }
+
+// TestEnvPreludeLinesRefusesAnUnusableName covers the half of the line
+// protocol the value check did not.
+//
+// A name is not only data here: the prelude is told how many lines to
+// read, so a newline inside one makes the block longer than that count
+// and everything past it stops being environment and becomes the
+// command's stdin — the next variable's value included. The rest are
+// refused on the same rule rather than on that consequence, because a
+// name the shell cannot export is a request the caller should hear about.
+func TestEnvPreludeLinesRefusesAnUnusableName(t *testing.T) {
+	for name, key := range map[string]string{
+		"a newline in the name": "PGPASSWORD\nEVIL",
+		"a carriage return":     "PG\rPASSWORD",
+		"an equals sign":        "PG=PASSWORD",
+		"a leading digit":       "1PGPASSWORD",
+		"a dash":                "PG-PASSWORD",
+		"a space":               "PG PASSWORD",
+		"empty":                 "",
+		"a shell metacharacter": "PG$(id)",
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, err := EnvPreludeLines(map[string]string{key: "secret"})
+			if err == nil {
+				t.Fatalf("EnvPreludeLines accepted %q, rendering %q", key, out)
+			}
+			if !errors.Is(err, ErrInvalidParams) {
+				t.Errorf("error = %v, want it to wrap ErrInvalidParams", err)
+			}
+			if strings.Contains(err.Error(), "secret") {
+				t.Errorf("error %q carries the value — a refusal must not leak what it refused", err)
+			}
+		})
+	}
+}
+
+// TestEnvPreludeLinesAcceptsPortableNames is the other side: the rule must
+// not refuse what a drill legitimately sets.
+func TestEnvPreludeLinesAcceptsPortableNames(t *testing.T) {
+	env := map[string]string{"PGPASSWORD": "s3cret", "_HIDDEN": "x", "MYSQL_PWD9": "y"}
+	out, err := EnvPreludeLines(env)
+	if err != nil {
+		t.Fatalf("EnvPreludeLines: %v", err)
+	}
+	if got := strings.Count(out, "\n"); got != len(env) {
+		t.Errorf("rendered %d lines, want %d — the prelude reads exactly that count", got, len(env))
+	}
+}

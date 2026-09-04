@@ -35,12 +35,9 @@ import (
 	"github.com/probavi/probavi/internal/sandbox/cli"
 )
 
-var (
-	envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	// ownerPattern pins the id output PutFile trusts before handing it to
-	// a root-run chown.
-	ownerPattern = regexp.MustCompile(`^[0-9]+:[0-9]+$`)
-)
+// ownerPattern pins the id output PutFile trusts before handing it to a
+// root-run chown.
+var ownerPattern = regexp.MustCompile(`^[0-9]+:[0-9]+$`)
 
 const (
 	// LabelSandbox marks every container this provider creates; the orphan
@@ -397,7 +394,7 @@ func (p *Provider) runArgs(d sandbox.Descriptor, params map[string]string) ([]st
 			args = append(args, "--cpus", v)
 		case "env.":
 			name := strings.TrimPrefix(k, "env.")
-			if !envNamePattern.MatchString(name) {
+			if !sandbox.ValidEnvName(name) {
 				return nil, fmt.Errorf("%w: %q is not a valid environment variable name", sandbox.ErrInvalidParams, name)
 			}
 			args = append(args, "-e", name+"="+v)
