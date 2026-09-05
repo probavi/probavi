@@ -1,0 +1,28 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The images are the Aerospike project's own, and one of them is the whole sandbox: the server image already carries asbackup, asrestore, asinfo and aql, so no wrapper and no second image are needed (measured 2026-09-05). The sandbox starts idle and the adapter starts the engine on a configuration it writes, because the image's own asks for a cluster whose heartbeat seed does not exist and for 15000 file descriptors where a container is given 1024. The baseline is the 8.1 line, the current one, with 7.2 beside it; one configuration serves both. conformance_verified is false, and deliberately: the frozen §10 check 9 provisions 64 KiB of random bytes and expects a restore, which this format cannot honestly accept — an .asb file states its format version and its namespace on its first two lines, asrestore itself refuses a file without them (exit 1, nothing inserted, measured), and the namespace the sandbox must offer is read from that header. The other twelve checks pass; widening the harness so an adapter can hand it a fixture is a change to a frozen protocol section, not something to smuggle into an adapter. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "aerospike",
+  "name": "Aerospike",
+  "status": "experimental",
+  "since": null,
+  "engine_name": "Aerospike Database",
+  "conformance_verified": false,
+  "docs": "adapters/aerospike/README.md",
+  "versions_checked": "2026-09-05",
+  "verified": [
+    {
+      "engine_version": "8.1.2.4",
+      "image": "aerospike/aerospike-server:8.1.2.4",
+      "supported_until": null,
+      "baseline": true
+    },
+    {
+      "engine_version": "7.2.0.21",
+      "image": "aerospike/aerospike-server:7.2.0.21",
+      "supported_until": null
+    }
+  ],
+  "sources": {
+    "asbackup": "One `.asb` file, as `asbackup -o` writes it: the format version, the namespace, and the marker asbackup puts on the file it wrote first",
+    "asbackup_dir": "A directory `asbackup -d` filled; every `.asb` file in it belongs to the same backup, and asrestore reads the directory rather than any one file"
+  }
+}

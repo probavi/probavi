@@ -282,6 +282,73 @@ always called out explicitly.
 
 ### Added
 
+- **Aerospike is the twenty-sixth engine** (`adapters/aerospike` 0.1.0),
+  restoring what `asbackup` writes — one `.asb` file, or the directory
+  `asbackup -d` filled — into a sandbox the adapter starts and configures
+  itself. Measured before a line of it was written, and the measurement
+  corrected the roadmap entry that scheduled it: the tooling does not live
+  in a separate image, because `aerospike/aerospike-server` already carries
+  `asbackup`, `asrestore`, `asinfo` and `aql`.
+
+  **The drill is refused when a backup's data has expired, and that is the
+  headline.** A record's time to live travels inside the artifact as an
+  absolute instant rather than a duration, so a backup of data with a TTL
+  stops being restorable once that instant passes: `asrestore` drops every
+  such record and exits 0. Measured — three records backed up with a
+  20-second TTL and restored after it had gone by gave `Expired 3 :
+  inserted 0` against an empty namespace. Nothing on the engine did it, so
+  there is nothing to suspend, and the one switch that would restore them
+  moves the operator's own recorded expiry forward, which *suspend, never
+  rewrite* forbids. The adapter refuses on that counter and says how many
+  records were dropped.
+
+  For the drill's own duration the engine removes nothing: the namespace
+  runs with `nsup-period 0` and `allow-ttl-without-nsup true`, the second
+  because the server otherwise refuses every write carrying a TTL once its
+  reaper is off. It does not make an expired record readable, and nothing
+  does — Aerospike applies expiry when a record is *read*, so a namespace
+  can report `objects=1` while a scan returns nothing and a read by key
+  answers `AEROSPIKE_ERR_RECORD_NOT_FOUND`. That is why the restore's
+  verdict is a record a reader can see, never the count the engine reports.
+
+  **Readiness is not what it appears** either: `asinfo -v status` answers
+  `ok` 0.04 s after launch while a client is still refused, and
+  `cluster-stable:` turns over at the instant a client can work, 1.47 s.
+  Measuring the memory floor against the first signal gave 144 MiB; against
+  the real one, and requiring the restore to finish and the engine to
+  survive it, the floor is 384 MiB — at 352 MiB `asrestore` exits 0 while
+  the engine is OOM-killed and nothing is left.
+
+  The sandbox starts idle and the adapter writes the configuration, because
+  the image's own asks for a cluster whose heartbeat seed does not exist
+  and for 15000 file descriptors where a container is given 1024 — that
+  last one, and not any need of the server's, is what made the engine look
+  as though it needed a raised limit. Under `--network none` the node id
+  and a loopback address for fabric and heartbeat have to be pinned; with
+  them, one configuration serves 8.1 and 7.2 alike, and all four backup ×
+  restore combinations across those two majors restore completely.
+
+  An `.asb` header is three lines — the format version, the namespace, and
+  a marker on the file `asbackup` wrote first — with no timestamp, no
+  engine version and no record count. So `backup.created_at` is always
+  empty, `source.params.backup_timezone` is refused rather than ignored,
+  and a file without that marker is refused as one part of a split backup.
+  A well-formed zero is refused by name: an empty namespace backs up to a
+  valid 42-byte artifact that restores with a zero exit code.
+
+  Checks run through `aql`, with `info:` for the questions it cannot
+  answer: `SELECT count(*)` is not a statement it parses, so the core's
+  generating built-in checks have no form here and a count is asserted as
+  `info:sets/<ns>/<set> objects`. The runner is a wrapper rather than the
+  bare client because `aql` exits 0 for an invalid namespace and for a
+  statement it cannot parse at all.
+
+  `conformance_verified` is false, and stated rather than quietly omitted.
+  The frozen §10 check 9 provisions 64 KiB of random bytes and expects a
+  restore; `asrestore` refuses a file without the header this adapter
+  reads the namespace from, so that check cannot pass honestly. Twelve of
+  the fifteen do.
+
 - **Fuzz targets for the config loaders and every adapter reader that
   decodes an artifact** — 24 of them, across `internal/config` and fifteen
   adapters. The suite had them for evidence verification, canonicalization
