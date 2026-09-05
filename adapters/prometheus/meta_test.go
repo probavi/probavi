@@ -360,7 +360,7 @@ func snapshotTarEntries(wrap string, maxTimes ...int64) []tarEntry {
 	if wrap != "" {
 		prefix = wrap + "/"
 	}
-	entries := []tarEntry{}
+	entries := make([]tarEntry, 0, 4*len(maxTimes))
 	for i, maxTime := range maxTimes {
 		block := fmt.Sprintf("%s01BLOCK%019d", prefix, i)
 		entries = append(entries,

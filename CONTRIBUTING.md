@@ -72,6 +72,15 @@ golangci-lint run                           # zero warnings required
 go generate ./...                           # regenerates docs/capabilities.json
 ```
 
+`.golangci.yml` is in the v2 configuration format, so it needs
+**golangci-lint v2** — v1 refuses it with `unsupported version of the
+configuration` and then lints nothing, which looks like a clean run. CI
+pins v2.13.2 and installs it the way you can:
+
+```sh
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+```
+
 Every PR runs the full gate set in CI, and a red check blocks merge with
 no exceptions: `golangci-lint` with the strict committed config,
 `go test -race`, a coverage ratchet (coverage may not decrease, and

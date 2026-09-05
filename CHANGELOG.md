@@ -331,6 +331,32 @@ always called out explicitly.
   drill start. Both that check and the teardown's own are now
   case-insensitive.
 
+### Changed
+
+- **The lint configuration is in golangci-lint's v2 format**, and CI pins
+  v2.13.2. The committed `.golangci.yml` was v1-format against a pinned
+  v1.64.8, so a contributor with a current install got `can't load config:
+  unsupported version of the configuration` and then no lint at all —
+  which reads like a clean run. `CONTRIBUTING.md` names the version and
+  the install line now.
+
+  What the gate enforces was measured across the move rather than assumed.
+  A corpus carrying one deliberate violation per enabled linter reports the
+  same findings under both: all 21 of v1's linters still fire, with
+  gosimple's arriving under `staticcheck`, which is where v2 folds it. Two
+  of them are only visible with `uniq-by-line` off, because gocyclo lands
+  on the same line as gocognit and goimports on the same line as gofmt.
+
+  Stricter in two places, deliberately. `staticcheck` runs everything it
+  has except the QF category — so the six ST checks the tool disables by
+  default are on, and the repository passes them — while QF stays off: a
+  quickfix is something an editor offers, not something a gate demands, and
+  v1 never ran those either. The newer bundled gosec found a real traversal
+  in the Solr fence, fixed above, and one path it cannot see through in a
+  `go:generate` tool, suppressed at that site rather than in the config.
+  G703 stays enabled: it is the rule that would catch an archive entry's
+  own name joined onto a directory.
+
 ## [0.25.0] - 2026-09-03
 
 ### Added
