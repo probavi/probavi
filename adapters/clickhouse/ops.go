@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "clickhouse"
-	adapterVersion = "0.3.0"
+	adapterVersion = "0.3.1"
 
 	// defaultDatabase is ClickHouse's own default: it always exists, so the
 	// healthcheck and the sql_runner have a valid target before anything is

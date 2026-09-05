@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "opensearch"
-	adapterVersion = "0.4.0"
+	adapterVersion = "0.4.1"
 
 	// workDirName is created under the provider's scratch directory —
 	// the official images run as the opensearch user (uid 1000,

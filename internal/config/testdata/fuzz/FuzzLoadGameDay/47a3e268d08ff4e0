@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("name: 0-\ntimeout: 1h\nmembers:\n  - name: 0\n    config: .\n  - name: A\n    00000008: .000A\n    depends_on: !000000 ")

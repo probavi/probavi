@@ -99,7 +99,13 @@ func scanManifestTimestamp(r io.Reader) (time.Time, error) {
 			return time.Time{}, err
 		}
 		ts, err := time.Parse(manifestTimeLayout, text)
-		if err != nil {
+		// A zero time is how every caller spells "this archive says
+		// nothing about when it was taken" (the candidate in source.go,
+		// createdAt in zone.go), so returning one as a success would make
+		// a dated backup and an undated one the same value. No ClickHouse
+		// server writes year 1 — a manifest that does is corrupt, and
+		// corrupt is what errNoTimestamp already means here.
+		if err != nil || ts.IsZero() {
 			return time.Time{}, errNoTimestamp
 		}
 		return ts, nil

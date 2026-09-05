@@ -11,7 +11,10 @@
 #
 # The targets are discovered rather than listed. A target added to a package
 # joins this run by existing, which is the same rule the version matrix
-# follows for engine versions.
+# follows for engine versions — and, like that matrix, the discovery decides
+# the jobs rather than the work inside one: every target gets the same
+# budget whatever the suite grows to, instead of a single job's wall clock
+# deciding how much fuzzing each one is worth.
 
 name: Fuzz
 
@@ -34,19 +37,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  fuzz:
-    name: Fuzz ${{ matrix.module }}
+  discover:
+    name: Discover fuzz targets
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      # A crasher in one module says nothing about the other, and the run
-      # exists to learn about both.
-      fail-fast: false
-      matrix:
-        # The two modules of this repository. spec/evidence is separate on
-        # purpose — it is the independent verifier — so it needs its own
-        # invocation here exactly as it does for every other gate.
-        module: [".", "spec/evidence"]
+    timeout-minutes: 15
+    outputs:
+      packages: ${{ steps.list.outputs.packages }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,27 +51,67 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: fuzz every target
-        working-directory: ${{ matrix.module }}
+      - name: list the packages that carry targets
+        id: list
+        run: |
+          set -euo pipefail
+          entries=()
+          # The two modules of this repository. spec/evidence is separate on
+          # purpose — it is the independent verifier — so it is walked here
+          # exactly as it is for every other gate.
+          for module in . spec/evidence; do
+            for pkg in $(cd "$module" && go list ./...); do
+              if (cd "$module" && go test -list '^Fuzz' "$pkg" 2>/dev/null | grep -q '^Fuzz'); then
+                entries+=("{\"module\":\"$module\",\"package\":\"$pkg\"}")
+              fi
+            done
+          done
+          if [ "${#entries[@]}" -eq 0 ]; then
+            echo "::error::no fuzz targets found in either module — this workflow would pass vacuously"
+            exit 1
+          fi
+          printf 'packages=[%s]\n' "$(IFS=,; echo "${entries[*]}")" >> "$GITHUB_OUTPUT"
+          echo "discovered ${#entries[@]} packages carrying fuzz targets"
+
+  fuzz:
+    name: Fuzz ${{ matrix.entry.package }}
+    needs: discover
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # A crasher in one package says nothing about the others, and the run
+      # exists to learn about all of them.
+      fail-fast: false
+      matrix:
+        entry: ${{ fromJSON(needs.discover.outputs.packages) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: fuzz every target in the package
+        working-directory: ${{ matrix.entry.module }}
         env:
           FUZZTIME: ${{ inputs.fuzztime || '60s' }}
+          PKG: ${{ matrix.entry.package }}
         run: |
           set -euo pipefail
           status=0
           found=0
-          for pkg in $(go list ./...); do
-            for target in $(go test -list '^Fuzz' "$pkg" 2>/dev/null | grep '^Fuzz' || true); do
-              found=$((found + 1))
-              echo "::group::$pkg $target ($FUZZTIME)"
-              if ! go test "$pkg" -run "^${target}$" -fuzz "^${target}$" -fuzztime="$FUZZTIME"; then
-                echo "::error::$target found a failing input"
-                status=1
-              fi
-              echo "::endgroup::"
-            done
+          for target in $(go test -list '^Fuzz' "$PKG" | grep '^Fuzz'); do
+            found=$((found + 1))
+            echo "::group::$PKG $target ($FUZZTIME)"
+            if ! go test "$PKG" -run "^${target}$" -fuzz "^${target}$" -fuzztime="$FUZZTIME"; then
+              echo "::error::$target found a failing input"
+              status=1
+            fi
+            echo "::endgroup::"
           done
           if [ "$found" -eq 0 ]; then
-            echo "::error::no fuzz targets found in ${{ matrix.module }} — this job would pass vacuously"
+            echo "::error::$PKG carried a target at discovery and none now — this job would pass vacuously"
             exit 1
           fi
           echo "fuzzed $found targets"
@@ -89,5 +125,5 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: fuzz-crashers-${{ strategy.job-index }}
-          path: ${{ matrix.module }}/**/testdata/fuzz/**
+          path: ${{ matrix.entry.module }}/**/testdata/fuzz/**
           if-no-files-found: ignore

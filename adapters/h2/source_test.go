@@ -241,3 +241,30 @@ func TestBackupTimezoneIsRefused(t *testing.T) {
 		t.Error("an absent backup_timezone must not be refused")
 	}
 }
+
+// TestStorageFormatReadsAFormatNumberOnly covers what the header field is
+// allowed to be. The value is quoted verbatim into a refusal telling the
+// operator their file "states MVStore format %s", and at that point the
+// file is unvetted input read on the drill host — so a field carrying
+// anything but the number this reader claims to have found is dropped,
+// and H2 stays the authority on a file this one cannot describe. Found by
+// FuzzStorageFormat.
+func TestStorageFormatReadsAFormatNumberOnly(t *testing.T) {
+	for name, tc := range map[string]struct {
+		header string
+		want   string
+	}{
+		"the format H2 writes":    {mvStoreHeader("3"), "3"},
+		"the format 1.x wrote":    {mvStoreHeader("1"), "1"},
+		"a field that is not one": {mvStoreHeader("3x"), ""},
+		"an escape sequence":      {mvStoreHeader("\x1b[31mred\x07"), ""},
+		"an empty field":          {mvStoreHeader(""), ""},
+		"no header at all":        {"plain text", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := storageFormat([]byte(tc.header)); got != tc.want {
+				t.Errorf("storageFormat = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

@@ -380,6 +380,14 @@ func TestParseBackupMetadata(t *testing.T) {
 		{"no created_at", `{"completed_at":"2026-08-18T18:23:55Z"}`, false},
 		{"an unparseable instant", `{"created_at":"yesterday"}`, false},
 		{"not JSON at all", `nope`, false},
+		// Found by FuzzParseBackupMetadata. The artifact's own created_at
+		// picks the backup to restore, dates the record, and is the instant
+		// the series census evaluates at, so a value no snapshot was taken
+		// at must not be read as one. The epoch is the sharpest case: every
+		// caller spells "this artifact does not date itself" as zero.
+		{"the epoch itself is how a caller says 'undated'", `{"created_at":"1970-01-01T00:00:00Z"}`, false},
+		{"an instant no snapshot was taken at", `{"created_at":"1899-12-31T23:59:59Z"}`, false},
+		{"an instant no snapshot is written ahead to", `{"created_at":"9999-01-01T00:00:00Z"}`, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -411,6 +419,36 @@ func TestDeclaredParts(t *testing.T) {
 				t.Errorf("declaredParts = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestPartDirExistsStaysInsideThePartition covers the completeness fence
+// against the artifact that would talk past it. parts.json is the backup's
+// own statement of what a partition requires, and the census refuses a
+// backup missing what it names — so a name resolving anywhere but inside
+// the partition would let a truncated copy pass by pointing at a directory
+// the backup does not contain. Found by FuzzDeclaredParts.
+func TestPartDirExistsStaysInsideThePartition(t *testing.T) {
+	root := t.TempDir()
+	partition := filepath.Join(root, "partition")
+	if err := os.MkdirAll(filepath.Join(partition, "1_2_3_ABC"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "elsewhere"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]bool{
+		"1_2_3_ABC":              true,
+		"../elsewhere":           false,
+		"../partition/1_2_3_ABC": false,
+		".":                      false,
+		"..":                     false,
+		"":                       false,
+		"1_2_3_ABC/../1_2_3_ABC": false,
+	} {
+		if got := partDirExists(partition, name); got != want {
+			t.Errorf("partDirExists(%q) = %v, want %v", name, got, want)
+		}
 	}
 }
 

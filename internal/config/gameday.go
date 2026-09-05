@@ -1,7 +1,6 @@
 package config
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -62,8 +61,7 @@ func LoadGameDay(path string, tr *i18n.T) (*GameDay, error) {
 		return nil, errorf(tr, msgReadGameDay, err)
 	}
 	g := &GameDay{}
-	dec := yaml.NewDecoder(bytes.NewReader(raw), yaml.Strict())
-	if err := dec.Decode(g); err != nil {
+	if err := decodeStrict(raw, g); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, errorf(tr, msgGameDayEmpty, path)
 		}

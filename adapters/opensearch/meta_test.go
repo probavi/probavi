@@ -275,6 +275,12 @@ func TestVersionNewer(t *testing.T) {
 		{"2.19.6", "", false},
 		{"3", "2.19.6", false},
 		{"", "", false},
+		// Found by FuzzVersionTriple: a digit run long enough to overflow
+		// the accumulator would make the largest possible claim compare as
+		// a small version, which is the one direction this pre-check must
+		// not be wrong in.
+		{"99999999999999999999.0.0", "2.19.6", false},
+		{"3.8.0", "99999999999999999999.0.0", false},
 	}
 	for _, tc := range tests {
 		if got := versionNewer(tc.a, tc.b); got != tc.want {

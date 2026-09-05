@@ -161,8 +161,7 @@ func Load(path string, tr *i18n.T) (*Config, error) {
 		return nil, errorf(tr, msgReadConfig, err)
 	}
 	cfg := &Config{}
-	dec := yaml.NewDecoder(bytes.NewReader(raw), yaml.Strict())
-	if err := dec.Decode(cfg); err != nil {
+	if err := decodeStrict(raw, cfg); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, errorf(tr, msgConfigEmpty, path)
 		}
@@ -175,6 +174,33 @@ func Load(path string, tr *i18n.T) (*Config, error) {
 		return nil, errorf(tr, msgInvalidConfig, path, err)
 	}
 	return cfg, nil
+}
+
+// decodeStrict decodes a YAML document into v with unknown fields and
+// duplicate keys refused, and turns a decoder panic into an error.
+//
+// The recover is not defensive habit. The decoder is a dependency, and on
+// the pinned version it panics rather than reporting on some malformed
+// documents — measured: a tag on an empty node where a sequence belongs
+// (`checks: !x `) dereferences nil inside its own AST walk, and the
+// game-day loader crashes the same way on `depends_on: !x `. A config
+// file is operator input read before anything else runs, so a crash there
+// is a drill that reports nothing at all: no diagnostic, no record, and
+// an exit code that says the binary died rather than that the config is
+// wrong.
+//
+// It is scoped to this one call and the recovered value is carried into
+// the message, so a panic from this package's own unmarshalers — which
+// this necessarily also catches — surfaces as text somebody can read
+// rather than as silence. The fuzz targets in this package are what keep
+// watching for both.
+func decodeStrict(raw []byte, v any) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("the YAML decoder could not read this document: %v", r)
+		}
+	}()
+	return yaml.NewDecoder(bytes.NewReader(raw), yaml.Strict()).Decode(v)
 }
 
 // errorf builds a translated error. The no-argument path of Sprintf

@@ -262,7 +262,28 @@ func parseBackupMetadata(raw []byte) (int64, bool) {
 	if err != nil {
 		return 0, false
 	}
-	return t.UTC().UnixMilli(), true
+	ms := t.UTC().UnixMilli()
+	if !plausibleEpochMs(ms) {
+		return 0, false
+	}
+	return ms, true
+}
+
+// plausibleEpochMs bounds what the artifact is allowed to say about
+// itself. This adapter acts on created_at three times — it ranks the
+// candidates in a backup directory, it becomes the record's
+// backup.created_at, and it is the instant the series census evaluates
+// at (ops.go) — so a value read out of a damaged marker would pick the
+// backup, date it, and choose the moment the checks ask about. Zero is
+// outside the window on purpose: every caller reads a zero as "this
+// artifact does not date itself", and 1970-01-01T00:00:00Z parses to
+// exactly that.
+func plausibleEpochMs(ms int64) bool {
+	const (
+		year2000 = 946684800000  // no restorable snapshot predates this
+		year2200 = 7258118400000 // and none is written this far ahead
+	)
+	return ms >= year2000 && ms <= year2200
 }
 
 // partCensus checks the artifact against its own statement of what it
@@ -289,8 +310,7 @@ func partCensus(root string) (int, *protoError) {
 		}
 		partition := filepath.Dir(p)
 		for _, name := range names {
-			info, statErr := os.Stat(filepath.Join(partition, name))
-			if statErr != nil || !info.IsDir() {
+			if !partDirExists(partition, name) {
 				refusal = protoErr("source_corrupt", false,
 					"the backup is incomplete: %s names part %q, which the artifact does not "+
 						"contain — a truncated copy of a backup, not a backup",
@@ -308,6 +328,19 @@ func partCensus(root string) (int, *protoError) {
 		return 0, protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
 	return declared, nil
+}
+
+// partDirExists reports whether the partition holds a part directory of
+// this name. A name that is not a bare directory name is not one vmbackup
+// writes, and joining it would let the artifact satisfy this census with a
+// directory outside itself — the fence talked past by the thing it fences
+// — so it answers false without touching the filesystem.
+func partDirExists(partition, name string) bool {
+	if name != filepath.Base(name) || name == "." || name == ".." {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(partition, name))
+	return err == nil && info.IsDir()
 }
 
 // readPartsList reads one parts.json out of the backup layout, where it

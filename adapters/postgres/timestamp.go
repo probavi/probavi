@@ -117,8 +117,12 @@ func archiveClock(head []byte) (time.Time, bool) {
 // defect: a dump taken without that flag simply cannot be dated, and
 // newestBackupIn ranks it accordingly rather than inventing a time.
 //
-// The first match wins. Only the head is available here, and for the one
-// artifact this reads that is where its own beginning is recorded.
+// The first plausible match wins. Only the head is available here, and for
+// the one artifact this reads that is where its own beginning is recorded.
+// The plausibility gate is the same one the archive header gets, and for
+// the same reason: this clock decides which artifact a directory drill
+// restores, so a line that parses as a date but names no time a backup was
+// taken at must not outrank a real one.
 func plainDumpClock(head []byte) (time.Time, bool) {
 	for _, line := range strings.Split(string(head), "\n") {
 		rest, ok := strings.CutPrefix(strings.TrimSpace(line), plainStartedPrefix)
@@ -128,7 +132,10 @@ func plainDumpClock(head []byte) (time.Time, bool) {
 		// Whatever follows the clock is the backup host's zone
 		// abbreviation, deliberately not read (see the file comment).
 		clock, err := time.ParseInLocation(plainClockLayout, rest[:len(plainClockLayout)], time.UTC)
-		if err != nil {
+		if err != nil || !plausible(headerTime{
+			second: clock.Second(), minute: clock.Minute(), hour: clock.Hour(),
+			day: clock.Day(), month: int(clock.Month()), year: clock.Year(),
+		}) {
 			continue
 		}
 		return clock, true
