@@ -354,7 +354,9 @@ always called out explicitly.
 ### Changed
 
 - **The lint configuration is in golangci-lint's v2 format**, and CI pins
-  v2.13.2. The committed `.golangci.yml` was v1-format against a pinned
+  v2.12.2 — the newest release that builds with the Go version `go.mod`
+  names, which is the constraint that picks it. The committed
+  `.golangci.yml` was v1-format against a pinned
   v1.64.8, so a contributor with a current install got `can't load config:
   unsupported version of the configuration` and then no lint at all —
   which reads like a clean run. `CONTRIBUTING.md` names the version and

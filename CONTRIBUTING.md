@@ -75,10 +75,11 @@ go generate ./...                           # regenerates docs/capabilities.json
 `.golangci.yml` is in the v2 configuration format, so it needs
 **golangci-lint v2** — v1 refuses it with `unsupported version of the
 configuration` and then lints nothing, which looks like a clean run. CI
-pins v2.13.2 and installs it the way you can:
+pins v2.12.2 — the newest release that builds with the Go version in
+`go.mod` — and installs it the way you can:
 
 ```sh
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 ```
 
 Every PR runs the full gate set in CI, and a red check blocks merge with

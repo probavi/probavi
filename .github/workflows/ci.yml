@@ -41,8 +41,12 @@ jobs:
       - name: go.mod / go.sum tidy
         run: go mod tidy -diff
       - name: golangci-lint
+        # The pin is the newest v2 that builds with the Go this repository
+        # pins: v2.13 onwards requires Go 1.26, and setup-go reads go.mod
+        # with GOTOOLCHAIN=local, so `go install` of a newer one fails
+        # before it lints anything. Raising it is a go.mod decision.
         run: |
-          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
           golangci-lint run --timeout 5m
       - name: spec/evidence module (separate module, same gates)
         # spec/evidence is a separate Go module so that the independent
