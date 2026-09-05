@@ -3,7 +3,7 @@
   "id": "aerospike",
   "name": "Aerospike",
   "status": "experimental",
-  "since": null,
+  "since": "0.26.0",
   "engine_name": "Aerospike Database",
   "conformance_verified": false,
   "docs": "adapters/aerospike/README.md",

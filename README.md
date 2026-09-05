@@ -47,7 +47,7 @@ the exact instant proven.
 <!-- capabilities:engines:start -->
 | Engine | Verified against | In every release since | Source kinds |
 | --- | --- | --- | --- |
-| [Aerospike](adapters/aerospike/README.md) | 8.1.2.4, 7.2.0.21 | unreleased | `asbackup`, `asbackup_dir` |
+| [Aerospike](adapters/aerospike/README.md) | 8.1.2.4, 7.2.0.21 | 0.26.0 | `asbackup`, `asbackup_dir` |
 | [Apache Cassandra](adapters/cassandra/README.md) | 4.1, 5.0 | 0.13.0 | `cassandra_snapshot`, `cassandra_snapshot_dir`, `cassandra_snapshot_tar` |
 | [ClickHouse](adapters/clickhouse/README.md) | 26.3, 26.7 | 0.7.0 | `clickhouse_backup`, `clickhouse_backup_dir` |
 | [CouchDB](adapters/couchdb/README.md) | 3.5.2, 3.4.3 | 0.23.0 | `couchbackup`, `couchbackup_dir`, `couchdb_data`, `couchdb_data_tar` |
@@ -90,7 +90,7 @@ answers.
 The adapter protocol (v0) and evidence schema (v2) specs in `docs/` are normative and frozen, with
 machine-readable JSON Schemas in [docs/schemas/](docs/schemas/); third parties can build adapters in
 any language from [docs/adapter-development.md](docs/adapter-development.md) and validate them with
-`probavi adapter conformance` — no container runtime needed. Released as **v0.25.0**: reproducible
+`probavi adapter conformance` — no container runtime needed. Released as **v0.26.0**: reproducible
 binaries for Linux and macOS (amd64/arm64), the core and each adapter as its own archive, with
 checksums on the [releases page](https://github.com/probavi/probavi/releases) — pre-1.0, minor
 versions may break, every change is in [CHANGELOG.md](CHANGELOG.md). See [ROADMAP.md](ROADMAP.md)
@@ -140,7 +140,7 @@ Exit codes are the cron/CI contract: `0` backup proven restorable, `1` recoverab
 Every release publishes **one archive per binary** for Linux and macOS (amd64/arm64), with a `SHA256SUMS` covering all of them, on the [releases page](https://github.com/probavi/probavi/releases). `probavi` is the orchestrator: it resolves `probavi-adapter-<engine>` on your `PATH`, so take the core **plus an adapter for each engine you drill**.
 
 ```console
-$ tag=v0.25.0 os=linux arch=amd64
+$ tag=v0.26.0 os=linux arch=amd64
 $ base="https://github.com/probavi/probavi/releases/download/${tag}"
 $ curl -fsSLO "${base}/probavi_${tag#v}_${os}_${arch}.tar.gz"
 $ curl -fsSLO "${base}/probavi-adapter-postgres_${tag#v}_${os}_${arch}.tar.gz"
@@ -157,7 +157,7 @@ Verifying an evidence log needs nothing else: `probavi evidence verify` reads a 
 
 **Platforms.** Releases build `linux` and `darwin`, both architectures. From source the core builds on every Unix-like platform Go supports that provides `flock` — the advisory lock that keeps two processes from interleaving records into one evidence log — which leaves out Windows, Solaris and AIX; a build for those stops with a message naming that reason rather than a missing symbol. Verifying is not restricted to any of it: the independent verifier in [`spec/evidence`](spec/evidence) has no dependencies, takes no lock, and builds everywhere Go does, Windows included. An auditor handed a log and a public key uses that.
 
-Distribution packages are attached to every release — `.deb`, `.rpm` and `.apk` for both architectures, plus a `PKGBUILD` and a Gentoo ebuild that build from source. One package per binary, so `sudo apt install ./probavi_0.25.0_amd64.deb ./probavi-adapter-postgres_0.25.0_amd64.deb` is a working install. There is no Probavi apt or yum repository, on purpose: hosting one means a second long-lived signing key to guard, in a project whose trust proposition is how it handles the first one. [docs/packaging.md](docs/packaging.md) has the per-distribution commands, the dependency rationale, and a first drill from a packaged install.
+Distribution packages are attached to every release — `.deb`, `.rpm` and `.apk` for both architectures, plus a `PKGBUILD` and a Gentoo ebuild that build from source. One package per binary, so `sudo apt install ./probavi_0.26.0_amd64.deb ./probavi-adapter-postgres_0.26.0_amd64.deb` is a working install. There is no Probavi apt or yum repository, on purpose: hosting one means a second long-lived signing key to guard, in a project whose trust proposition is how it handles the first one. [docs/packaging.md](docs/packaging.md) has the per-distribution commands, the dependency rationale, and a first drill from a packaged install.
 
 On macOS, take the `darwin` archives above — a directly downloaded file is quarantined, so clear it with `xattr -d com.apple.quarantine`. Each release also attaches ready-made Homebrew formulae that name no tap, so `brew tap-new` plus two `curl`s gives a `brew install` with no quarantine step ([docs/packaging.md](docs/packaging.md) §5). There is no hosted Probavi tap. Note also that macOS has no native container runtime: the docker sandbox provider needs Docker Desktop, colima, OrbStack or a remote `DOCKER_HOST`.
 
