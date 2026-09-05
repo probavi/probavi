@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "solr"
-	adapterVersion = "0.3.0"
+	adapterVersion = "0.4.0"
 	// defaultPort is where Solr listens inside the sandbox. Nothing is
 	// published: checks run in-sandbox through the runner below.
 	defaultPort = 8983

@@ -13,6 +13,26 @@ always called out explicitly.
 
 ### Fixed
 
+- **The Solr fence reads only the artifact it was pointed at**
+  (`adapters/solr` 0.4.0). Before a byte is transferred, the adapter walks a
+  directory artifact for a `solrconfig.xml` that enables document expiration
+  — the configuration that makes a restore report success and the collection
+  empty itself seconds later. The walk read every file of that name with
+  `os.ReadFile`, so a `solrconfig.xml` that was a symlink had the fence read
+  whatever it pointed at, anywhere the drill user can read, and read all of
+  it however large it was.
+
+  A backup is unvetted input by this repository's own threat model. The walk
+  is scoped to the artifact with `os.Root` now and reads regular files only,
+  bounded to the same 4 MiB the archive pass already applied to the same
+  file. That pass had always skipped an entry that is not a regular file, so
+  one backup handed over as a directory and as a tar got two answers; they
+  agree now.
+
+  Found by `gosec`'s G122 while migrating the lint configuration to
+  golangci-lint v2 — the rule flags exactly this shape, a filesystem
+  operation on a path handed to a `WalkDir` callback.
+
 - **A malformed config file no longer kills the process.** A YAML tag on an
   empty node — `checks: !000000 ` in a drill config, `depends_on: !000000 `
   in a game-day — made the decoder dereference a nil node and take the

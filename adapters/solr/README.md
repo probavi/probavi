@@ -94,6 +94,12 @@ be proving something other than your backup. So the drill is **refused**,
 and — because the configset is a file in the artifact — refused before a
 byte is transferred, for archives as well as directories.
 
+What the fence reads is the artifact and nothing outside it: regular files
+within it, and at most the first 4 MiB of each. A `solrconfig.xml` that is
+a symlink is not followed — a backup is input this adapter does not trust,
+and the archive pass has never followed one either — so a directory backup
+that keeps its configuration behind a link is not inspected for expiry.
+
 If you drill a collection that uses document expiry, the honest options
 are to drill a collection that does not, or to take the backup from one
 where expiry is not configured.

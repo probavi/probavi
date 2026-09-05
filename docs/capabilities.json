@@ -972,7 +972,7 @@
       "name": "Apache Solr",
       "status": "experimental",
       "since": "0.20.0",
-      "adapter_version": "0.3.0",
+      "adapter_version": "0.4.0",
       "engine": {
         "id": "solr",
         "name": "Apache Solr"

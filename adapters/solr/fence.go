@@ -54,27 +54,47 @@ const solrConfigFile = "solrconfig.xml"
 // expiringConfigs returns the configset paths inside artifact whose
 // solrconfig.xml enables document expiration, relative to the artifact
 // and sorted. Empty means the artifact carries no such configuration.
+//
+// The walk is scoped to the artifact and reads regular files only, which
+// is what the archive pass over the same tree reads (takeTarEntry skips
+// every entry that is not tar.TypeReg). A backup is attacker-shaped
+// input (SECURITY.md): before this scoping, a solrconfig.xml that was a
+// symlink had this pass read whatever it pointed at, anywhere on the
+// drill host, while the same tree handed over as a tar was already
+// ignored. What is read is bounded the way the archive pass bounds it.
 func expiringConfigs(artifact string) ([]string, error) {
+	fi, err := os.Lstat(artifact)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.IsDir() {
+		// An archive. inspectBackupTar reads that one, and a path that
+		// is neither is reported by the caller that opens it.
+		return nil, nil
+	}
+	// Between the Lstat and the open the artifact may be replaced; that
+	// costs nothing here, because what the open yields is either a
+	// directory every later name is resolved inside of, or an error.
+	root, err := os.OpenRoot(artifact)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close() //nolint:errcheck // read-only walk
 	var found []string
-	err := filepath.WalkDir(artifact, func(path string, d fs.DirEntry, err error) error {
+	err = fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || d.Name() != solrConfigFile {
+		if !d.Type().IsRegular() || d.Name() != solrConfigFile {
 			return nil
 		}
-		raw, rerr := os.ReadFile(path) //#nosec G304 -- a file inside the artifact the drill named.
+		expiring, rerr := configExpires(root, path)
 		if rerr != nil {
-			return fmt.Errorf("read %s: %w", path, rerr)
+			return rerr
 		}
-		if !bytes.Contains(raw, []byte(expirationClass)) {
-			return nil
+		if expiring {
+			found = append(found, path)
 		}
-		rel, rerr := filepath.Rel(artifact, path)
-		if rerr != nil {
-			rel = path
-		}
-		found = append(found, filepath.ToSlash(rel))
 		return nil
 	})
 	if err != nil {
@@ -82,6 +102,22 @@ func expiringConfigs(artifact string) ([]string, error) {
 	}
 	sort.Strings(found)
 	return found, nil
+}
+
+// configExpires reports whether one configuration file enables the
+// expiration processor, reading at most maxConfigBytes of it — the bound
+// the archive pass applies to the same file.
+func configExpires(root *os.Root, name string) (bool, error) {
+	f, err := root.Open(name)
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", name, err)
+	}
+	defer f.Close() //nolint:errcheck // read-only descriptor
+	raw, err := io.ReadAll(io.LimitReader(f, maxConfigBytes))
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", name, err)
+	}
+	return bytes.Contains(raw, []byte(expirationClass)), nil
 }
 
 // rejectExpiringBackup refuses an artifact whose own configuration would
