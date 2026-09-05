@@ -77,6 +77,7 @@ func rewrite(root string) error {
 	}
 	// The committed file keeps whatever mode git gave it; the restrictive
 	// mode here only applies if it is being created for the first time.
+	//#nosec G703 -- the path the read above uses, assembled from the -root flag of a go:generate tool.
 	if err := os.WriteFile(path, []byte(updated), 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", readmeFile, err)
 	}
