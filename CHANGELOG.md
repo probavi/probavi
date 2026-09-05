@@ -11,6 +11,162 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-09-05
+
+### Added
+
+- **Aerospike is the twenty-sixth engine** (`adapters/aerospike` 0.1.0),
+  restoring what `asbackup` writes — one `.asb` file, or the directory
+  `asbackup -d` filled — into a sandbox the adapter starts and configures
+  itself. Measured before a line of it was written, and the measurement
+  corrected the roadmap entry that scheduled it: the tooling does not live
+  in a separate image, because `aerospike/aerospike-server` already carries
+  `asbackup`, `asrestore`, `asinfo` and `aql`.
+
+  **The drill is refused when a backup's data has expired, and that is the
+  headline.** A record's time to live travels inside the artifact as an
+  absolute instant rather than a duration, so a backup of data with a TTL
+  stops being restorable once that instant passes: `asrestore` drops every
+  such record and exits 0. Measured — three records backed up with a
+  20-second TTL and restored after it had gone by gave `Expired 3 :
+  inserted 0` against an empty namespace. Nothing on the engine did it, so
+  there is nothing to suspend, and the one switch that would restore them
+  moves the operator's own recorded expiry forward, which *suspend, never
+  rewrite* forbids. The adapter refuses on that counter and says how many
+  records were dropped.
+
+  For the drill's own duration the engine removes nothing: the namespace
+  runs with `nsup-period 0` and `allow-ttl-without-nsup true`, the second
+  because the server otherwise refuses every write carrying a TTL once its
+  reaper is off. It does not make an expired record readable, and nothing
+  does — Aerospike applies expiry when a record is *read*, so a namespace
+  can report `objects=1` while a scan returns nothing and a read by key
+  answers `AEROSPIKE_ERR_RECORD_NOT_FOUND`. That is why the restore's
+  verdict is a record a reader can see, never the count the engine reports.
+
+  **Readiness is not what it appears** either: `asinfo -v status` answers
+  `ok` 0.04 s after launch while a client is still refused, and
+  `cluster-stable:` turns over at the instant a client can work, 1.47 s.
+  Measuring the memory floor against the first signal gave 144 MiB; against
+  the real one, and requiring the restore to finish and the engine to
+  survive it, the floor is 384 MiB — at 352 MiB `asrestore` exits 0 while
+  the engine is OOM-killed and nothing is left.
+
+  The sandbox starts idle and the adapter writes the configuration, because
+  the image's own asks for a cluster whose heartbeat seed does not exist
+  and for 15000 file descriptors where a container is given 1024 — that
+  last one, and not any need of the server's, is what made the engine look
+  as though it needed a raised limit. Under `--network none` the node id
+  and a loopback address for fabric and heartbeat have to be pinned; with
+  them, one configuration serves 8.1 and 7.2 alike, and all four backup ×
+  restore combinations across those two majors restore completely.
+
+  An `.asb` header is three lines — the format version, the namespace, and
+  a marker on the file `asbackup` wrote first — with no timestamp, no
+  engine version and no record count. So `backup.created_at` is always
+  empty, `source.params.backup_timezone` is refused rather than ignored,
+  and a file without that marker is refused as one part of a split backup.
+  A well-formed zero is refused by name: an empty namespace backs up to a
+  valid 42-byte artifact that restores with a zero exit code.
+
+  Checks run through `aql`, with `info:` for the questions it cannot
+  answer: `SELECT count(*)` is not a statement it parses, so the core's
+  generating built-in checks have no form here and a count is asserted as
+  `info:sets/<ns>/<set> objects`. The runner is a wrapper rather than the
+  bare client because `aql` exits 0 for an invalid namespace and for a
+  statement it cannot parse at all.
+
+  `conformance_verified` is false, and stated rather than quietly omitted.
+  The frozen §10 check 9 provisions 64 KiB of random bytes and expects a
+  restore; `asrestore` refuses a file without the header this adapter
+  reads the namespace from, so that check cannot pass honestly. Twelve of
+  the fifteen do.
+
+- **Fuzz targets for the config loaders and every adapter reader that
+  decodes an artifact** — 24 of them, across `internal/config` and fifteen
+  adapters. The suite had them for evidence verification, canonicalization
+  and the adapter message reader — the trust core — and nothing for the two
+  places that read what an operator hands the drill: the config it is
+  configured with, and the backup file itself.
+
+  Each asserts what the parser promises its caller, not that it survived
+  the input: that a refusal and a success stay distinguishable, that a
+  reported value is one the caller may act on, and that what a walk retains
+  out of an archive is bounded — a tar entry is a 512-byte header that
+  compresses to almost nothing, so without that last one a small file
+  chooses how much memory the drill host spends.
+
+  The weekly fuzz workflow discovers targets rather than listing them, so
+  these joined it by existing — and it now fans out one job per package
+  instead of looping over all of them in one, because a single job's wall
+  clock was on its way to deciding how much fuzzing each target is worth.
+  Every target keeps the same budget whatever the suite grows to.
+
+  Seven defects came out of writing them, listed under Fixed above. Two
+  further failures were the assertion being wrong rather than the code, and
+  the decoder behaviours behind them are kept as named cases rather than as
+  opaque corpus files: Go matches JSON object keys without regard to case,
+  and replaces invalid UTF-8 in a string with U+FFFD.
+
+- **The docker sandbox provider is verified against podman**, which the
+  packaged Arch optional dependency and Debian suggestion have told
+  operators all along without anything checking it — a capability claim
+  living outside the manifest that is supposed to be their only source.
+  `.github/workflows/podman.yml` now runs the provider's own integration
+  suite against rootless podman through the docker-compatible CLI that
+  `podman-docker` installs, so the docker descriptor's `verified_against`
+  states it and `docs/capabilities.json` carries it. It is a separate
+  workflow on the paths that can invalidate the claim plus a weekly run,
+  for the version matrix's reason: it re-earns a claim about an
+  environment this repository does not otherwise run in, and that does
+  not belong on every pull request's wall clock.
+
+  Measured, on podman 4.9.3, rootless, cgroup v2 with the systemd cgroup
+  manager: the full lifecycle, the orphan sweep, and both resource caps.
+  The caps were the open question, because a runtime that accepted
+  `--memory` and quietly dropped it would leave a signed record stating a
+  limit that never held; here `memory` and `cpus` reach the container's
+  cgroup exactly as they do under docker. What is verified is the
+  provider and not every engine: adapters are exercised under docker
+  only, and the descriptor says so rather than letting "verified against"
+  widen into "supports". A host without cgroup v2 delegation is outside
+  what is measured, and the constraint says that too.
+
+- **The integration suite asserts that configured resource caps are in
+  force** (`TestResourceCapsApply`), under whichever runtime answers the
+  docker CLI. Nothing checked this before, and it is an evidence question
+  rather than a scheduling one: sandbox parameters are copied verbatim
+  into the signed record, so a dropped cap would be a record claiming a
+  limit the drill never ran under.
+
+### Changed
+
+- **The lint configuration is in golangci-lint's v2 format**, and CI pins
+  v2.12.2 — the newest release that builds with the Go version `go.mod`
+  names, which is the constraint that picks it. The committed
+  `.golangci.yml` was v1-format against a pinned
+  v1.64.8, so a contributor with a current install got `can't load config:
+  unsupported version of the configuration` and then no lint at all —
+  which reads like a clean run. `CONTRIBUTING.md` names the version and
+  the install line now.
+
+  What the gate enforces was measured across the move rather than assumed.
+  A corpus carrying one deliberate violation per enabled linter reports the
+  same findings under both: all 21 of v1's linters still fire, with
+  gosimple's arriving under `staticcheck`, which is where v2 folds it. Two
+  of them are only visible with `uniq-by-line` off, because gocyclo lands
+  on the same line as gocognit and goimports on the same line as gofmt.
+
+  Stricter in two places, deliberately. `staticcheck` runs everything it
+  has except the QF category — so the six ST checks the tool disables by
+  default are on, and the repository passes them — while QF stays off: a
+  quickfix is something an editor offers, not something a gate demands, and
+  v1 never ran those either. The newer bundled gosec found a real traversal
+  in the Solr fence, fixed above, and one path it cannot see through in a
+  `go:generate` tool, suppressed at that site rather than in the config.
+  G703 stays enabled: it is the rule that would catch an archive entry's
+  own name joined onto a directory.
+
 ### Fixed
 
 - **The Solr fence reads only the artifact it was pointed at**
@@ -280,133 +436,6 @@ always called out explicitly.
   A false red rather than a false green, and still wrong: a drill is a
   verdict, and a nondeterministic one is worth less than a slow one.
 
-### Added
-
-- **Aerospike is the twenty-sixth engine** (`adapters/aerospike` 0.1.0),
-  restoring what `asbackup` writes — one `.asb` file, or the directory
-  `asbackup -d` filled — into a sandbox the adapter starts and configures
-  itself. Measured before a line of it was written, and the measurement
-  corrected the roadmap entry that scheduled it: the tooling does not live
-  in a separate image, because `aerospike/aerospike-server` already carries
-  `asbackup`, `asrestore`, `asinfo` and `aql`.
-
-  **The drill is refused when a backup's data has expired, and that is the
-  headline.** A record's time to live travels inside the artifact as an
-  absolute instant rather than a duration, so a backup of data with a TTL
-  stops being restorable once that instant passes: `asrestore` drops every
-  such record and exits 0. Measured — three records backed up with a
-  20-second TTL and restored after it had gone by gave `Expired 3 :
-  inserted 0` against an empty namespace. Nothing on the engine did it, so
-  there is nothing to suspend, and the one switch that would restore them
-  moves the operator's own recorded expiry forward, which *suspend, never
-  rewrite* forbids. The adapter refuses on that counter and says how many
-  records were dropped.
-
-  For the drill's own duration the engine removes nothing: the namespace
-  runs with `nsup-period 0` and `allow-ttl-without-nsup true`, the second
-  because the server otherwise refuses every write carrying a TTL once its
-  reaper is off. It does not make an expired record readable, and nothing
-  does — Aerospike applies expiry when a record is *read*, so a namespace
-  can report `objects=1` while a scan returns nothing and a read by key
-  answers `AEROSPIKE_ERR_RECORD_NOT_FOUND`. That is why the restore's
-  verdict is a record a reader can see, never the count the engine reports.
-
-  **Readiness is not what it appears** either: `asinfo -v status` answers
-  `ok` 0.04 s after launch while a client is still refused, and
-  `cluster-stable:` turns over at the instant a client can work, 1.47 s.
-  Measuring the memory floor against the first signal gave 144 MiB; against
-  the real one, and requiring the restore to finish and the engine to
-  survive it, the floor is 384 MiB — at 352 MiB `asrestore` exits 0 while
-  the engine is OOM-killed and nothing is left.
-
-  The sandbox starts idle and the adapter writes the configuration, because
-  the image's own asks for a cluster whose heartbeat seed does not exist
-  and for 15000 file descriptors where a container is given 1024 — that
-  last one, and not any need of the server's, is what made the engine look
-  as though it needed a raised limit. Under `--network none` the node id
-  and a loopback address for fabric and heartbeat have to be pinned; with
-  them, one configuration serves 8.1 and 7.2 alike, and all four backup ×
-  restore combinations across those two majors restore completely.
-
-  An `.asb` header is three lines — the format version, the namespace, and
-  a marker on the file `asbackup` wrote first — with no timestamp, no
-  engine version and no record count. So `backup.created_at` is always
-  empty, `source.params.backup_timezone` is refused rather than ignored,
-  and a file without that marker is refused as one part of a split backup.
-  A well-formed zero is refused by name: an empty namespace backs up to a
-  valid 42-byte artifact that restores with a zero exit code.
-
-  Checks run through `aql`, with `info:` for the questions it cannot
-  answer: `SELECT count(*)` is not a statement it parses, so the core's
-  generating built-in checks have no form here and a count is asserted as
-  `info:sets/<ns>/<set> objects`. The runner is a wrapper rather than the
-  bare client because `aql` exits 0 for an invalid namespace and for a
-  statement it cannot parse at all.
-
-  `conformance_verified` is false, and stated rather than quietly omitted.
-  The frozen §10 check 9 provisions 64 KiB of random bytes and expects a
-  restore; `asrestore` refuses a file without the header this adapter
-  reads the namespace from, so that check cannot pass honestly. Twelve of
-  the fifteen do.
-
-- **Fuzz targets for the config loaders and every adapter reader that
-  decodes an artifact** — 24 of them, across `internal/config` and fifteen
-  adapters. The suite had them for evidence verification, canonicalization
-  and the adapter message reader — the trust core — and nothing for the two
-  places that read what an operator hands the drill: the config it is
-  configured with, and the backup file itself.
-
-  Each asserts what the parser promises its caller, not that it survived
-  the input: that a refusal and a success stay distinguishable, that a
-  reported value is one the caller may act on, and that what a walk retains
-  out of an archive is bounded — a tar entry is a 512-byte header that
-  compresses to almost nothing, so without that last one a small file
-  chooses how much memory the drill host spends.
-
-  The weekly fuzz workflow discovers targets rather than listing them, so
-  these joined it by existing — and it now fans out one job per package
-  instead of looping over all of them in one, because a single job's wall
-  clock was on its way to deciding how much fuzzing each target is worth.
-  Every target keeps the same budget whatever the suite grows to.
-
-  Seven defects came out of writing them, listed under Fixed above. Two
-  further failures were the assertion being wrong rather than the code, and
-  the decoder behaviours behind them are kept as named cases rather than as
-  opaque corpus files: Go matches JSON object keys without regard to case,
-  and replaces invalid UTF-8 in a string with U+FFFD.
-
-- **The docker sandbox provider is verified against podman**, which the
-  packaged Arch optional dependency and Debian suggestion have told
-  operators all along without anything checking it — a capability claim
-  living outside the manifest that is supposed to be their only source.
-  `.github/workflows/podman.yml` now runs the provider's own integration
-  suite against rootless podman through the docker-compatible CLI that
-  `podman-docker` installs, so the docker descriptor's `verified_against`
-  states it and `docs/capabilities.json` carries it. It is a separate
-  workflow on the paths that can invalidate the claim plus a weekly run,
-  for the version matrix's reason: it re-earns a claim about an
-  environment this repository does not otherwise run in, and that does
-  not belong on every pull request's wall clock.
-
-  Measured, on podman 4.9.3, rootless, cgroup v2 with the systemd cgroup
-  manager: the full lifecycle, the orphan sweep, and both resource caps.
-  The caps were the open question, because a runtime that accepted
-  `--memory` and quietly dropped it would leave a signed record stating a
-  limit that never held; here `memory` and `cpus` reach the container's
-  cgroup exactly as they do under docker. What is verified is the
-  provider and not every engine: adapters are exercised under docker
-  only, and the descriptor says so rather than letting "verified against"
-  widen into "supports". A host without cgroup v2 delegation is outside
-  what is measured, and the constraint says that too.
-
-- **The integration suite asserts that configured resource caps are in
-  force** (`TestResourceCapsApply`), under whichever runtime answers the
-  docker CLI. Nothing checked this before, and it is an evidence question
-  rather than a scheduling one: sandbox parameters are copied verbatim
-  into the signed record, so a dropped cap would be a record claiming a
-  limit the drill never ran under.
-
-### Fixed
 
 - **The orphan sweep no longer fails a drill over a container that is
   already gone**, when the runtime words its refusal in lower case.
@@ -417,34 +446,6 @@ always called out explicitly.
   exit 125) fell through to the error path, and the sweep runs at every
   drill start. Both that check and the teardown's own are now
   case-insensitive.
-
-### Changed
-
-- **The lint configuration is in golangci-lint's v2 format**, and CI pins
-  v2.12.2 — the newest release that builds with the Go version `go.mod`
-  names, which is the constraint that picks it. The committed
-  `.golangci.yml` was v1-format against a pinned
-  v1.64.8, so a contributor with a current install got `can't load config:
-  unsupported version of the configuration` and then no lint at all —
-  which reads like a clean run. `CONTRIBUTING.md` names the version and
-  the install line now.
-
-  What the gate enforces was measured across the move rather than assumed.
-  A corpus carrying one deliberate violation per enabled linter reports the
-  same findings under both: all 21 of v1's linters still fire, with
-  gosimple's arriving under `staticcheck`, which is where v2 folds it. Two
-  of them are only visible with `uniq-by-line` off, because gocyclo lands
-  on the same line as gocognit and goimports on the same line as gofmt.
-
-  Stricter in two places, deliberately. `staticcheck` runs everything it
-  has except the QF category — so the six ST checks the tool disables by
-  default are on, and the repository passes them — while QF stays off: a
-  quickfix is something an editor offers, not something a gate demands, and
-  v1 never ran those either. The newer bundled gosec found a real traversal
-  in the Solr fence, fixed above, and one path it cannot see through in a
-  `go:generate` tool, suppressed at that site rather than in the config.
-  G703 stays enabled: it is the rule that would catch an archive entry's
-  own name joined onto a directory.
 
 ## [0.25.0] - 2026-09-03
 
@@ -3985,7 +3986,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/probavi/probavi/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/probavi/probavi/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/probavi/probavi/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/probavi/probavi/compare/v0.22.0...v0.23.0
