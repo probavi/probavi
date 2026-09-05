@@ -37,6 +37,45 @@
   },
   "adapters": [
     {
+      "id": "aerospike",
+      "name": "Aerospike",
+      "status": "experimental",
+      "since": null,
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "aerospike",
+        "name": "Aerospike Database"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "8.1.2.4",
+          "image": "aerospike/aerospike-server:8.1.2.4"
+        },
+        {
+          "engine_version": "7.2.0.21",
+          "image": "aerospike/aerospike-server:7.2.0.21"
+        }
+      ],
+      "sources": [
+        {
+          "id": "asbackup",
+          "name": "One `.asb` file, as `asbackup -o` writes it: the format version, the namespace, and the marker asbackup puts on the file it wrote first",
+          "pitr": false
+        },
+        {
+          "id": "asbackup_dir",
+          "name": "A directory `asbackup -d` filled; every `.asb` file in it belongs to the same backup, and asrestore reads the directory rather than any one file",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": false,
+      "docs": "adapters/aerospike/README.md"
+    },
+    {
       "id": "cassandra",
       "name": "Apache Cassandra",
       "status": "experimental",
