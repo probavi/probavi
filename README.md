@@ -135,6 +135,8 @@ $ probavi evidence verify --log /var/lib/probavi/evidence.jsonl --key /etc/proba
 
 Exit codes are the cron/CI contract: `0` backup proven restorable, `1` recoverability failure, `2` infrastructure error, `5` evidence record could not be written.
 
+Every key of the file, what the loader accepts and refuses, and which of these values reach the adapter and the signed evidence record: [`docs/drill-config.md`](docs/drill-config.md).
+
 ## Install
 
 Every release publishes **one archive per binary** for Linux and macOS (amd64/arm64), with a `SHA256SUMS` covering all of them, on the [releases page](https://github.com/probavi/probavi/releases). `probavi` is the orchestrator: it resolves `probavi-adapter-<engine>` on your `PATH`, so take the core **plus an adapter for each engine you drill**.
@@ -326,6 +328,8 @@ Probavi deliberately has no built-in scheduler — cron or a systemd timer owns 
 ```
 
 The evidence store additionally holds its own single-writer lock, so overlapping drills against the same log fail fast instead of interleaving. Prometheus metrics land in the configured textfile for node_exporter — the last run's headline numbers plus rolling restore-duration quantiles recomputed from the evidence log itself (`probavi_restore_duration_rolling_seconds{quantile="0.5"|"0.95"|"1"}` over the last 100 restores). Two alert rules cover most needs: `time() - probavi_last_success_timestamp_seconds > 172800` ("no proven restore for two days") and `probavi_restore_duration_rolling_seconds{quantile="0.95"} > <your RTO>` ("restores are drifting past the objective").
+
+The same cron file is where a backup kept on another host gets staged: a drill restores what is already on its own filesystem, so the copy — rsync over SSH, a mount, `rclone copy` — runs before it. The patterns for that, and the failure mode staging adds (a stalled copy restores an older artifact and passes), are in [`docs/backup-staging.md`](docs/backup-staging.md).
 
 Audit report export arrives in Phase 3.
 
