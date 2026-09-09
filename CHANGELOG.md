@@ -11,6 +11,30 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **The drill configuration has a specification of its own**
+  (`docs/drill-config.md`), and it is the normative one: every key of
+  `drill.yaml`, the value types, what the loader accepts and refuses, and
+  — the part no example can carry — where a mistake surfaces and what it
+  costs. A wiring error (unknown adapter, unreadable signing key, a locked
+  evidence log) ends the run before it starts, with exit 3 and no record;
+  a source kind the adapter does not declare is caught by its probe and
+  *recorded*, signed, as `unsupported_source`. That difference is the
+  contract a scheduled drill is read by, and it lived only in the code.
+
+  Two mappings are written down for the first time: which config values
+  reach the adapter (protocol §6.2) and which reach the signed record.
+  They are what makes the rule about `sandbox.params` legible rather than
+  folklore — those parameters are recorded verbatim, which is why a Docker
+  endpoint or an SSH target belongs in the environment and never in the
+  file, while `source.path`, `source.params` and `target.options` never
+  enter a record at all.
+
+  `probavi run` was the only command whose entry in the capabilities
+  manifest had no document to point at; it now points here, and the
+  manifest gate holds the path to a file that exists.
+
 ## [0.26.0] - 2026-09-05
 
 ### Added

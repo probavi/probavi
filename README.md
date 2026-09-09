@@ -135,6 +135,8 @@ $ probavi evidence verify --log /var/lib/probavi/evidence.jsonl --key /etc/proba
 
 Exit codes are the cron/CI contract: `0` backup proven restorable, `1` recoverability failure, `2` infrastructure error, `5` evidence record could not be written.
 
+Every key of the file, what the loader accepts and refuses, and which of these values reach the adapter and the signed evidence record: [`docs/drill-config.md`](docs/drill-config.md).
+
 ## Install
 
 Every release publishes **one archive per binary** for Linux and macOS (amd64/arm64), with a `SHA256SUMS` covering all of them, on the [releases page](https://github.com/probavi/probavi/releases). `probavi` is the orchestrator: it resolves `probavi-adapter-<engine>` on your `PATH`, so take the core **plus an adapter for each engine you drill**.
