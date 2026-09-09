@@ -11,6 +11,48 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Solr restore gate waits for the restored index, not for the first
+  number the collection produces** (`adapters/solr` 0.5.0). A drill could
+  report `fail` against a backup that had restored perfectly: the first
+  check read `0` rows and the next three, against the same collection,
+  answered correctly. Caught in CI on an unrelated documentation pull
+  request, which is the second time this window has surfaced there.
+
+  0.3.0 fixed the outer half of it — the gate asked `LIST` whether the
+  collection existed while `/select` still answered 404 — and this is the
+  same instant one layer in. Measured on `solr:10` with cold sandboxes
+  restoring a 40,000 document backup: for **100–140 ms after `RESTORE`
+  returns**, the collection answers `200` with `numFound` 0 while
+  `admin/cores` already reports the full count **1 ms in**. Two of six
+  cold runs answered 0; the rest answered 404 for the same window, which
+  the gate already handled — so which failure a run got was a coin toss,
+  and only one of the two faces was covered.
+
+  **Both obvious fixes were measured and neither works.** The engine's own
+  completion signals do not mean the data is visible: `waitForFinalState=true`
+  left the window in four of six runs, and `async` with `REQUESTSTATUS`
+  in six of six — its extra round trip lands inside the window rather than
+  after it. The artifact cannot settle it either: `backup_N.properties`
+  carries `indexFileCount`, `indexSizeMB`, `indexVersion` and the two
+  timestamps, and no document count anywhere.
+
+  What does work is asking the cores. The gate now reads what the sandbox's
+  cores hold and waits until the collection's own query path — the same
+  query a check runs — answers at least that much: 8 of 8 cold runs now
+  hand the first check the full 40,000, at a cost of one readiness poll,
+  about half a second against a restore measured in minutes. The
+  comparison is against the largest single core rather than the sum,
+  because a collection's `numFound` is the sum over its shards, so its
+  biggest shard is a number the query must reach and can never exceed
+  whatever the replication factor multiplies the cores by. A restore that
+  holds nothing passes on the first answer, and a core status that will
+  not answer leaves the older gate rather than refusing a drill over a
+  status endpoint. The refusal that ends the budget now names which wait
+  ran out — a collection that never answered, or one answering less than
+  the engine restored.
+
 ## [0.26.0] - 2026-09-05
 
 ### Added

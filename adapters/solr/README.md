@@ -176,6 +176,26 @@ whatever runs first. The listing still decides how long to wait: a
 collection missing from it after a synchronous `RESTORE` reported success
 is not late but absent, and is refused straight away.
 
+An answer is not the whole gate either. For roughly 120 ms after `RESTORE`
+returns, the collection can answer `200` with `numFound` 0 while the cores
+under it already hold every restored document — measured on `solr:10`,
+where two of six cold restores of a 40,000 document backup answered 0 for
+100–140 ms and `admin/cores` reported the full count 1 ms in. Closing on
+the first number therefore let a check read an empty view and sign a
+failure against a backup that had restored perfectly. Neither of the
+engine's own completion signals removes that window (`waitForFinalState`
+left it in four of six runs, `async` with `REQUESTSTATUS` in six of six),
+and the artifact carries no document count to compare against, so the gate
+asks the cores what they hold and waits until the collection's own query
+path answers at least that much. The comparison is against the largest
+single core rather than the sum: a collection's `numFound` is the sum over
+its shards, so its biggest shard is a number the query must reach and can
+never exceed, whatever the replication factor. A restore that holds
+nothing passes on the first answer, and a core status that will not answer
+leaves the older, weaker gate rather than refusing the drill. On a cold
+sandbox the wait costs one poll — about half a second, measured, against a
+restore measured in minutes.
+
 ## Drill config options
 
 | Option | Effect |
