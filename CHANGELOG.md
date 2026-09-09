@@ -11,6 +11,33 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **How to drill a backup that lives on another host** (`docs/backup-staging.md`).
+  A drill restores what is already on its own filesystem, and the two sandbox
+  verbs are why: `put_file` copies a host path, and a 4 MiB message cap rules out
+  streaming bytes through `exec`. So staging is the operator's step — and it had
+  no page, which left everyone to invent the same four patterns (push, pull,
+  a shared mount, an object-store copy) with the trade-offs undocumented.
+
+  The document recommends **push**, and says why the direction is the point: the
+  drill host already holds production data and the signing key, so giving it
+  credentials to every production host as well concentrates three things that do
+  not belong together. It carries the worked `rrsync -wo` key restriction and the
+  `--partial-dir` rule that keeps a half-copied file from being read as a corrupt
+  backup.
+
+  Two hazards are named because neither is obvious. A hung **hard NFS mount**
+  reads uninterruptibly, so no context deadline or `sandbox.timeout` can end the
+  drill — it stops past its own limit and leaves no record, the one outcome this
+  software treats as severe; `soft` with a bounded `timeo`, or a FUSE mount, keeps
+  a read failing rather than hanging. And a **stalled copy passes**: a `*_dir`
+  source kind selects the newest artifact present, so the restore succeeds and
+  every check agrees while the backup silently ages. Neither the exit code nor
+  `probavi_last_success_timestamp_seconds` sees it. The `freshness` check does,
+  which is why the page calls it mandatory in a staged topology rather than
+  optional.
+
 ## [0.26.0] - 2026-09-05
 
 ### Added
