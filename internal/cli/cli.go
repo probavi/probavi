@@ -109,6 +109,7 @@ func Commands() []Command {
 				{Code: ExitUsage, Meaning: "usage or setup error"},
 				{Code: ExitEvidenceLost, Meaning: "evidence record could not be written"},
 			},
+			Docs: "docs/drill-config.md",
 		},
 		{
 			ID:      CmdGameDay,

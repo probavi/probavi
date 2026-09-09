@@ -1565,7 +1565,7 @@
             "meaning": "evidence record could not be written"
           }
         ],
-        "docs": null
+        "docs": "docs/drill-config.md"
       },
       {
         "id": "gameday",

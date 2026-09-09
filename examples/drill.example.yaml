@@ -1,8 +1,8 @@
 # Example Probavi drill configuration.
 # A "drill" = one scheduled restore-verification of one database, executed
-# by `probavi run`. This schema is implemented and validated by
-# internal/config; this file is loaded by the config test suite, so it can
-# never drift from the real schema.
+# by `probavi run`. The format is specified in docs/drill-config.md and
+# implemented by internal/config; this file is loaded by the config test
+# suite, so it can never drift from the real schema.
 
 target:
   name: prod-orders-db            # identifies the drill in evidence records
