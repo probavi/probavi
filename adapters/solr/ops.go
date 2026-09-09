@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "solr"
-	adapterVersion = "0.4.0"
+	adapterVersion = "0.5.0"
 	// defaultPort is where Solr listens inside the sandbox. Nothing is
 	// published: checks run in-sandbox through the runner below.
 	defaultPort = 8983
@@ -396,43 +396,55 @@ func mapRestoreFailure(diagnosis string) *protoError {
 // collection, answered correctly. Gating on the listing let a drill that
 // restored perfectly report a failed check, nondeterministically.
 //
-// The listing still has a job, and it is the one that keeps a genuine
-// failure fast. A collection absent from LIST after a synchronous RESTORE
-// reported success is not late, it is missing, and waiting on it would
-// only delay the refusal. So a query that does not answer is diagnosed
-// once: absent means refuse now, present means wait, bounded.
+// A query that answers is not enough either, and that is the same lesson
+// one instant further in. For about 120 ms after RESTORE returns, the
+// collection can answer 200 with numFound 0 while the cores under it
+// already hold every restored document (heldScript carries the
+// measurements, including the two engine completion signals that do not
+// close the window). A gate closing on the first number let the first
+// check read an empty view and sign a failure against a backup that
+// restored perfectly — measured in CI, where the three checks after it
+// passed against the same collection. So the gate closes when the query
+// path agrees with what the engine says it restored, not when it merely
+// produces a number.
+//
+// Where the cores do not say, held stays 0 and every answer satisfies the
+// comparison: an unreadable status endpoint leaves the older, weaker gate
+// rather than refusing a restore nothing is wrong with.
+//
+// The listing keeps the job that makes a genuine failure fast. A
+// collection absent from LIST after a synchronous RESTORE reported
+// success is not late, it is missing, and waiting on it would only delay
+// the refusal. So a query that does not answer is diagnosed once: absent
+// means refuse now, present means wait, bounded.
 func assertServing(ctx context.Context, c *core, collection string) *protoError {
 	start := time.Now()
+	var (
+		held  int
+		known bool
+	)
 	for {
-		// The same two conditions the healthcheck applies, so "serving"
-		// means one thing in this adapter: the query succeeded, and what
-		// came back is a count rather than some other 200.
-		val, stdout, _, perr := c.exec(ctx, execArgs{
-			Argv: []string{"bash", "-c", healthScript, "bash", collection},
-		})
+		if !known {
+			h, ok, perr := docsHeld(ctx, c)
+			if perr != nil {
+				return perr
+			}
+			held, known = h, ok
+		}
+		served, answered, perr := servedCount(ctx, c, collection)
 		if perr != nil {
 			return perr
 		}
-		if val.ExitCode == 0 {
-			if _, err := strconv.Atoi(strings.TrimSpace(string(stdout))); err == nil {
-				return nil
+		if answered && served >= held {
+			return nil
+		}
+		if !answered {
+			if perr := refuseIfAbsent(ctx, c, collection); perr != nil {
+				return perr
 			}
 		}
-
-		listed, perr := isListed(ctx, c, collection)
-		if perr != nil {
-			return perr
-		}
-		if !listed {
-			return protoErr("restore_failed", false,
-				"the restore reported success but Solr does not serve collection %q%s",
-				collection, servedSuffix(ctx, c))
-		}
 		if time.Since(start) > servingBudget {
-			return protoErr("restore_failed", false,
-				"Solr lists collection %q but it did not answer a query within %s — the restore "+
-					"reported success, so the collection came up without becoming servable",
-				collection, servingBudget)
+			return notServing(collection, held, known, served, answered)
 		}
 		select {
 		case <-ctx.Done():
@@ -440,6 +452,76 @@ func assertServing(ctx context.Context, c *core, collection string) *protoError 
 		case <-time.After(readinessPoll):
 		}
 	}
+}
+
+// servedCount asks the collection exactly what a check will ask it, and
+// reports whether it answered at all. A query that does not answer is not
+// an error here — it is the state this gate exists to wait out.
+func servedCount(ctx context.Context, c *core, collection string) (int, bool, *protoError) {
+	val, stdout, _, perr := c.exec(ctx, execArgs{
+		Argv: []string{"bash", "-c", healthScript, "bash", collection},
+	})
+	if perr != nil {
+		return 0, false, perr
+	}
+	if val.ExitCode != 0 {
+		return 0, false, nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(stdout)))
+	if err != nil {
+		return 0, false, nil
+	}
+	return n, true, nil
+}
+
+// docsHeld reports what the sandbox's cores hold, and whether they said.
+// A status endpoint that answers nothing usable is deliberately not a
+// failure: this number sharpens the gate, and a restore is not refused
+// over the sharpening (see assertServing).
+func docsHeld(ctx context.Context, c *core) (int, bool, *protoError) {
+	val, stdout, _, perr := c.exec(ctx, execArgs{Argv: []string{"sh", "-c", heldScript}})
+	if perr != nil {
+		return 0, false, perr
+	}
+	if val.ExitCode != 0 {
+		return 0, false, nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(stdout)))
+	if err != nil || n < 0 {
+		return 0, false, nil
+	}
+	return n, true, nil
+}
+
+// refuseIfAbsent turns a query that did not answer into a refusal when
+// the collection is not there at all, and into more waiting when it is.
+func refuseIfAbsent(ctx context.Context, c *core, collection string) *protoError {
+	listed, perr := isListed(ctx, c, collection)
+	if perr != nil {
+		return perr
+	}
+	if listed {
+		return nil
+	}
+	return protoErr("restore_failed", false,
+		"the restore reported success but Solr does not serve collection %q%s",
+		collection, servedSuffix(ctx, c))
+}
+
+// notServing is the refusal when the budget runs out, and it names which
+// of the two waits ran out: a collection that never answered, or one
+// answering with less than the engine says it restored.
+func notServing(collection string, held int, known bool, served int, answered bool) *protoError {
+	if answered && known {
+		return protoErr("restore_failed", false,
+			"Solr restored %d documents into collection %q, but the collection's own query path still "+
+				"answers %d after %s — it came up on an index the restore did not produce",
+			held, collection, served, servingBudget)
+	}
+	return protoErr("restore_failed", false,
+		"Solr lists collection %q but it did not answer a query within %s — the restore "+
+			"reported success, so the collection came up without becoming servable",
+		collection, servingBudget)
 }
 
 // isListed reports whether the Collections API knows the name at all.

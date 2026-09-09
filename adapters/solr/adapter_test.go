@@ -176,6 +176,8 @@ func step(t *testing.T, call verbCall) (string, execArgs) {
 		return "live", args
 	case strings.Contains(script, "action=LIST"):
 		return "served", args
+	case strings.Contains(script, "action=STATUS"):
+		return "held", args
 	case strings.Contains(script, "numFound"):
 		return "health", args
 	default:
@@ -254,6 +256,10 @@ func happyHandler(t *testing.T, seen *[]string) func(verbCall) (any, *protoError
 			return outExec("1"), nil
 		case "live":
 			return outExec("1"), nil
+		case "held":
+			// What the cores hold: the same number the query answers, so
+			// the gate closes on the first poll of a healthy restore.
+			return outExec("250"), nil
 		case "health":
 			wantArgs(t, name, args, collection)
 			return outExec("250"), nil
@@ -307,7 +313,9 @@ func TestProbeGolden(t *testing.T) {
 // TestProvisionHappyPath pins the order the steps run in. The order is
 // the design: the artifact is read and fenced host-side, the engine is
 // found before anything is written, and nothing is called a success
-// until the server says it serves the collection.
+// until the query path answers with what the restore actually produced —
+// which is why the cores are asked what they hold before the collection
+// is asked what it serves.
 func TestProvisionHappyPath(t *testing.T) {
 	backup := writeBackup(t, nil)
 	var seen []string
@@ -319,7 +327,7 @@ func TestProvisionHappyPath(t *testing.T) {
 	if !f.OK {
 		t.Fatalf("final = %+v", f)
 	}
-	want := []string{"home", "ready", "mode", "put_file", "restore", "health"}
+	want := []string{"home", "ready", "mode", "put_file", "restore", "held", "health"}
 	if strings.Join(seen, ",") != strings.Join(want, ",") {
 		t.Errorf("steps = %v, want %v", seen, want)
 	}
@@ -488,6 +496,159 @@ func TestProvisionWaitsForACollectionThatIsListedButNotYetServing(t *testing.T) 
 	}
 	if !slices.Contains(seen, "live") {
 		t.Error("the listing was never consulted — it is what tells a late collection from a missing one")
+	}
+}
+
+// TestProvisionWaitsUntilTheQueryPathShowsWhatWasRestored pins the
+// second half of the serving gate. A collection can answer 200 with
+// numFound 0 for about 120 ms after RESTORE returns while its cores
+// already hold every restored document (measured, scripts.go); provision
+// returning there hands the drill's first check an empty view, and the
+// signed record blames a backup that restored perfectly.
+func TestProvisionWaitsUntilTheQueryPathShowsWhatWasRestored(t *testing.T) {
+	backup := writeBackup(t, nil)
+	var seen []string
+	handler := happyHandler(t, &seen)
+	queries, cores := 0, 0
+	line, _, exit := driveOp(t, "provision", provisionPayload(backup, ""),
+		func(call verbCall) (any, *protoError) {
+			if call.Verb == "exec" {
+				name, _ := step(t, call)
+				switch name {
+				case "held":
+					cores++
+					return outExec("250"), nil
+				case "health":
+					queries++
+					if queries < 3 {
+						// Answering, and answering an empty index.
+						return outExec("0"), nil
+					}
+					return outExec("250"), nil
+				}
+			}
+			return handler(call)
+		})
+	if exit != 0 {
+		t.Fatalf("exit = %d", exit)
+	}
+	if f := parseFinal(t, line); !f.OK {
+		t.Fatalf("final = %+v, want a successful provision once the query agrees with the cores", f)
+	}
+	if queries != 3 {
+		t.Errorf("health queries = %d, want 3 — a count of 0 against 250 restored documents is not serving", queries)
+	}
+	if cores != 1 {
+		t.Errorf("core status calls = %d, want 1 — what the cores hold is read once, not polled", cores)
+	}
+}
+
+// TestProvisionAcceptsARestoreThatHoldsNothing keeps the gate honest in
+// the other direction: an empty backup is a legitimate artifact, and
+// waiting for a document that was never in it would burn the budget and
+// refuse a restore that did exactly what it was asked to.
+func TestProvisionAcceptsARestoreThatHoldsNothing(t *testing.T) {
+	backup := writeBackup(t, nil)
+	var seen []string
+	handler := happyHandler(t, &seen)
+	queries := 0
+	line, _, exit := driveOp(t, "provision", provisionPayload(backup, ""),
+		func(call verbCall) (any, *protoError) {
+			if call.Verb == "exec" {
+				name, _ := step(t, call)
+				switch name {
+				case "held":
+					return outExec("0"), nil
+				case "health":
+					queries++
+					return outExec("0"), nil
+				}
+			}
+			return handler(call)
+		})
+	if exit != 0 {
+		t.Fatalf("exit = %d", exit)
+	}
+	if f := parseFinal(t, line); !f.OK {
+		t.Fatalf("final = %+v, want an empty restore to provision", f)
+	}
+	if queries != 1 {
+		t.Errorf("health queries = %d, want 1 — nothing restored is nothing to wait for", queries)
+	}
+}
+
+// TestProvisionKeepsTheOlderGateWhenTheCoresDoNotSay documents the
+// fallback. The core status sharpens the gate; a status endpoint that
+// will not answer is not grounds for refusing a restore, so the gate
+// degrades to what it was before that number existed.
+func TestProvisionKeepsTheOlderGateWhenTheCoresDoNotSay(t *testing.T) {
+	backup := writeBackup(t, nil)
+	var seen []string
+	handler := happyHandler(t, &seen)
+	queries := 0
+	line, _, exit := driveOp(t, "provision", provisionPayload(backup, ""),
+		func(call verbCall) (any, *protoError) {
+			if call.Verb == "exec" {
+				name, _ := step(t, call)
+				switch name {
+				case "held":
+					return okExec(7), nil
+				case "health":
+					queries++
+					return outExec("0"), nil
+				}
+			}
+			return handler(call)
+		})
+	if exit != 0 {
+		t.Fatalf("exit = %d", exit)
+	}
+	if f := parseFinal(t, line); !f.OK {
+		t.Fatalf("final = %+v, want the older gate to close on the first answer", f)
+	}
+	if queries != 1 {
+		t.Errorf("health queries = %d, want 1 — with no number to compare against, an answer is the gate", queries)
+	}
+}
+
+// TestNotServingNamesWhichWaitRanOut keeps the two refusals apart. They
+// describe different failures and send an operator to different places:
+// a collection that never answered is a restore that did not come up, and
+// one answering less than it restored is a view that never caught up.
+func TestNotServingNamesWhichWaitRanOut(t *testing.T) {
+	tests := map[string]struct {
+		held     int
+		known    bool
+		served   int
+		answered bool
+		want     string
+	}{
+		"answers an index the restore did not produce": {
+			held: 250, known: true, served: 0, answered: true,
+			want: "restored 250 documents",
+		},
+		"never answered at all": {
+			held: 250, known: true, answered: false,
+			want: "did not answer a query",
+		},
+		"answered, but the cores never said what they hold": {
+			served: 0, answered: true,
+			want: "did not answer a query",
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			perr := notServing(fixtureCollection, tc.held, tc.known, tc.served, tc.answered)
+			if perr.Code != "restore_failed" {
+				t.Errorf("code = %q, want restore_failed", perr.Code)
+			}
+			if !strings.Contains(perr.Message, tc.want) {
+				t.Errorf("message = %q, want it to contain %q", perr.Message, tc.want)
+			}
+			if !strings.Contains(perr.Message, fixtureCollection) {
+				t.Errorf("message = %q, want it to name the collection", perr.Message)
+			}
+		})
 	}
 }
 

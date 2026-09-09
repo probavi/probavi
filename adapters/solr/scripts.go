@@ -107,15 +107,50 @@ curl -s "` + serverURL + `/admin/collections?action=LIST&wt=json" |
 const servedScript = `curl -s "` + serverURL + `/admin/collections?action=LIST&wt=json" |
   tr ',' '\n' | sed -n 's/.*"\(.*\)".*/\1/p' | grep -v '^$'`
 
-// healthScript proves the restored collection answers a query. It is
-// both the healthcheck and the gate provision closes on (assertServing),
-// so the two agree by construction on what "serving" means: curl -sf
-// fails the 404 a node answers for a collection it does not serve, and
-// the count that comes back is what tells a Solr response from any other
-// 200.
+// healthScript asks the collection the question a check will ask: curl
+// -sf fails the 404 a node answers for a collection it does not serve,
+// and the count that comes back is what tells a Solr response from any
+// other 200.
+//
+// Both the healthcheck and the provision gate run it, on the same
+// collection, and they read the answer differently on purpose. The
+// healthcheck asks whether the engine still serves what the drill already
+// read, so a count — any count — answers it. The gate asks whether what a
+// check is about to read is the restored index, which a count alone does
+// not answer (see heldScript).
 const healthScript = `set -u
 curl -sf "` + serverURL + `/$1/select?q=*:*&rows=0&omitHeader=true&wt=json" |
   sed -n 's/.*"numFound":\([0-9]*\).*/\1/p' | head -1`
+
+// heldScript reports what this sandbox's cores hold, in documents, as the
+// largest count any single core reports.
+//
+// It exists because the index and the query path come up at different
+// instants. Measured on solr:10 with a cold sandbox restoring a 40,000
+// document backup: `/select` answers numFound 0 — or Solr's 404 page, and
+// which one it is varies between runs — for 100–140 ms after the
+// Collections API's RESTORE has returned, while `admin/cores` already
+// reports every restored document 1 ms in. A gate that closes on the
+// first number the query path produces therefore lets the drill's first
+// check run against an empty view, and the record blames a backup that
+// restored perfectly. Two of six cold runs answered 0; the rest answered
+// 404 for the same window, which is the shape the gate already handled.
+//
+// Neither of the engine's own completion signals closes that window:
+// `waitForFinalState=true` left it in four of six cold runs, and `async`
+// with REQUESTSTATUS in six of six — its extra round trip lands inside
+// the window rather than after it. The artifact cannot answer it either:
+// backup_N.properties carries indexFileCount, indexSizeMB, indexVersion
+// and the two timestamps, and no document count anywhere (all measured).
+//
+// The largest single core is the right number rather than the sum: a
+// collection's numFound is the sum over its shards, so its biggest shard
+// is a count the query path must reach and cannot exceed, whatever the
+// replication factor multiplies the cores by. A sandbox holds one drill's
+// restore and nothing else, so no core here belongs to anything else.
+const heldScript = `set -u
+curl -sf "` + serverURL + `/admin/cores?action=STATUS&indexInfo=true&wt=json" |
+  tr ',' '\n' | sed -n 's/.*"numDocs":\([0-9]*\).*/\1/p' | sort -n | tail -1`
 
 // runnerScript absorbs the check dialect declaratively.
 //
