@@ -29,6 +29,53 @@ always called out explicitly.
   removing the entry would hide it, and this image is a throwaway the
   drill never ships. Both pgBackRest tests, including the point-in-time
   one, pass against the variant again.
+- **A drill no longer fails because the Elasticsearch node wrote its own
+  logs into the cluster it was restoring into** (`adapters/elasticsearch`
+  0.3.0). The restore refused with
+
+  ```
+  cannot restore index [.ds-.logs-elasticsearch.deprecation-default-…]
+  because an open index with same name already exists in the cluster
+  ```
+
+  and the drill recorded `restore_failed` against a backup that is
+  perfectly restorable. Caught by the version matrix on an unrelated pull
+  request, on the 9.5.2 line only.
+
+  **The node does it to itself, unprompted.** Measured: a 9.5.2 node that
+  runs no query at all creates
+  `.ds-.logs-elasticsearch.deprecation-default-<date>-000001` about ten
+  seconds after it answers, and `.ds-ilm-history-<n>-<date>-000001` about
+  ten seconds after that — the second because the first arrives under a
+  lifecycle policy for ILM to act on. An idle 8.19.20 node creates
+  neither, which is why one verified line was red and the other green.
+  Both are ordinary hidden data streams rather than system indices, so a
+  production snapshot taken with `indices: *`, or with the API's default,
+  carries them — and restoring one into a node that has been up ten
+  seconds collides with the copy the node just made.
+
+  Whether it happened at all was a race between the node's startup and the
+  restore, which is how it stayed hidden: the job last ran green two days
+  earlier, and the same suite passed locally while CI was failing.
+
+  The launch now pins `cluster.deprecation_indexing.enabled=false` as a
+  node setting — in force before the node answers, since a cluster-level
+  PUT afterwards would race the stream it is meant to prevent — and reads
+  it back through the cluster settings API beside the lifecycle pin,
+  refusing a node that reports anything else rather than letting the drill
+  blame the backup. Both verified lines accept the setting. Nothing about
+  the artifact changes: measured, the same snapshot restores whole with
+  0 failed shards and the engine's own streams among the six backing
+  indices that come back.
+
+  Two things are pinned by tests rather than by hope: an integration test
+  builds a fixture that carries the engine's own stream and drills it, and
+  asserts the setting read back off the node — the collision is a race, so
+  a green provision alone would prove only that the restore won it this
+  time (measured, with the pin removed: a run where the drill passed and
+  the node still reported the setting `true`). The lifecycle fixture's own
+  assertion was counting every `.ds-` index on the node, the engine's
+  included, and now counts the two data streams it built.
 
 ### Fixed
 
