@@ -61,6 +61,53 @@ always called out explicitly.
   what a copy actually costs. Conformance 15/15, verified against 10.0.1
   and 9.4.3, which restore each other's artifacts in both directions.
 
+- **How to drill a backup that lives on another host** (`docs/backup-staging.md`).
+  A drill restores what is already on its own filesystem, and the two sandbox
+  verbs are why: `put_file` copies a host path, and a 4 MiB message cap rules out
+  streaming bytes through `exec`. So staging is the operator's step — and it had
+  no page, which left everyone to invent the same four patterns (push, pull,
+  a shared mount, an object-store copy) with the trade-offs undocumented.
+
+  The document recommends **push**, and says why the direction is the point: the
+  drill host already holds production data and the signing key, so giving it
+  credentials to every production host as well concentrates three things that do
+  not belong together. It carries the worked `rrsync -wo` key restriction and the
+  `--partial-dir` rule that keeps a half-copied file from being read as a corrupt
+  backup.
+
+  Two hazards are named because neither is obvious. A hung **hard NFS mount**
+  reads uninterruptibly, so no context deadline or `sandbox.timeout` can end the
+  drill — it stops past its own limit and leaves no record, the one outcome this
+  software treats as severe; `soft` with a bounded `timeo`, or a FUSE mount, keeps
+  a read failing rather than hanging. And a **stalled copy passes**: a `*_dir`
+  source kind selects the newest artifact present, so the restore succeeds and
+  every check agrees while the backup silently ages. Neither the exit code nor
+  `probavi_last_success_timestamp_seconds` sees it. The `freshness` check does,
+  which is why the page calls it mandatory in a staged topology rather than
+  optional.
+  
+- **The drill configuration has a specification of its own**
+  (`docs/drill-config.md`), and it is the normative one: every key of
+  `drill.yaml`, the value types, what the loader accepts and refuses, and
+  — the part no example can carry — where a mistake surfaces and what it
+  costs. A wiring error (unknown adapter, unreadable signing key, a locked
+  evidence log) ends the run before it starts, with exit 3 and no record;
+  a source kind the adapter does not declare is caught by its probe and
+  *recorded*, signed, as `unsupported_source`. That difference is the
+  contract a scheduled drill is read by, and it lived only in the code.
+
+  Two mappings are written down for the first time: which config values
+  reach the adapter (protocol §6.2) and which reach the signed record.
+  They are what makes the rule about `sandbox.params` legible rather than
+  folklore — those parameters are recorded verbatim, which is why a Docker
+  endpoint or an SSH target belongs in the environment and never in the
+  file, while `source.path`, `source.params` and `target.options` never
+  enter a record at all.
+
+  `probavi run` was the only command whose entry in the capabilities
+  manifest had no document to point at; it now points here, and the
+  manifest gate holds the path to a file that exists.
+
 ### Changed
 
 - **The conformance suite can drive an adapter whose artifact is a
@@ -136,8 +183,6 @@ always called out explicitly.
   assertion was counting every `.ds-` index on the node, the engine's
   included, and now counts the two data streams it built.
 
-### Fixed
-
 - **The Solr restore gate waits for the restored index, not for the first
   number the collection produces** (`adapters/solr` 0.5.0). A drill could
   report `fail` against a backup that had restored perfectly: the first
@@ -177,54 +222,6 @@ always called out explicitly.
   status endpoint. The refusal that ends the budget now names which wait
   ran out — a collection that never answered, or one answering less than
   the engine restored.
-### Added
-
-- **How to drill a backup that lives on another host** (`docs/backup-staging.md`).
-  A drill restores what is already on its own filesystem, and the two sandbox
-  verbs are why: `put_file` copies a host path, and a 4 MiB message cap rules out
-  streaming bytes through `exec`. So staging is the operator's step — and it had
-  no page, which left everyone to invent the same four patterns (push, pull,
-  a shared mount, an object-store copy) with the trade-offs undocumented.
-
-  The document recommends **push**, and says why the direction is the point: the
-  drill host already holds production data and the signing key, so giving it
-  credentials to every production host as well concentrates three things that do
-  not belong together. It carries the worked `rrsync -wo` key restriction and the
-  `--partial-dir` rule that keeps a half-copied file from being read as a corrupt
-  backup.
-
-  Two hazards are named because neither is obvious. A hung **hard NFS mount**
-  reads uninterruptibly, so no context deadline or `sandbox.timeout` can end the
-  drill — it stops past its own limit and leaves no record, the one outcome this
-  software treats as severe; `soft` with a bounded `timeo`, or a FUSE mount, keeps
-  a read failing rather than hanging. And a **stalled copy passes**: a `*_dir`
-  source kind selects the newest artifact present, so the restore succeeds and
-  every check agrees while the backup silently ages. Neither the exit code nor
-  `probavi_last_success_timestamp_seconds` sees it. The `freshness` check does,
-  which is why the page calls it mandatory in a staged topology rather than
-  optional.
-  
-- **The drill configuration has a specification of its own**
-  (`docs/drill-config.md`), and it is the normative one: every key of
-  `drill.yaml`, the value types, what the loader accepts and refuses, and
-  — the part no example can carry — where a mistake surfaces and what it
-  costs. A wiring error (unknown adapter, unreadable signing key, a locked
-  evidence log) ends the run before it starts, with exit 3 and no record;
-  a source kind the adapter does not declare is caught by its probe and
-  *recorded*, signed, as `unsupported_source`. That difference is the
-  contract a scheduled drill is read by, and it lived only in the code.
-
-  Two mappings are written down for the first time: which config values
-  reach the adapter (protocol §6.2) and which reach the signed record.
-  They are what makes the rule about `sandbox.params` legible rather than
-  folklore — those parameters are recorded verbatim, which is why a Docker
-  endpoint or an SSH target belongs in the environment and never in the
-  file, while `source.path`, `source.params` and `target.options` never
-  enter a record at all.
-
-  `probavi run` was the only command whose entry in the capabilities
-  manifest had no document to point at; it now points here, and the
-  manifest gate holds the path to a file that exists.
 
 ## [0.26.0] - 2026-09-05
 
