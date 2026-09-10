@@ -13,6 +13,25 @@ always called out explicitly.
 
 ### Fixed
 
+- **The pgBackRest tool image builds again on the PostGIS variant.** The
+  `postgres 17-3.5` matrix job failed at `apt-get update` with exit 100,
+  and nothing about the image, the package or this repository had changed
+  — the clock had. Measured 2026-09-10: `postgis/postgis:17-3.5` is
+  Debian 11, whose security suite stopped being refreshed, so its Release
+  file expired ("invalid since 2d 22h") and `apt-get update` refuses it;
+  the `&&` then kept the install from running at all. Run on its own, the
+  install still works — pgbackrest comes from the PostgreSQL project's
+  own repository, current at `2.59.1-1.pgdg11+1`.
+
+  The build now waives the expiry check for that one `apt-get update`.
+  The suite is left in the image rather than deleted: waiving says out
+  loud that a base image outlived its distribution's support, where
+  removing the entry would hide it, and this image is a throwaway the
+  drill never ships. Both pgBackRest tests, including the point-in-time
+  one, pass against the variant again.
+
+### Fixed
+
 - **The Solr restore gate waits for the restored index, not for the first
   number the collection produces** (`adapters/solr` 0.5.0). A drill could
   report `fail` against a backup that had restored perfectly: the first
