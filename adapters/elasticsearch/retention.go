@@ -92,7 +92,7 @@ func pinLifecycle(ctx context.Context, c *core) (float64, *protoError) {
 	if perr != nil {
 		return 0, perr
 	}
-	seconds, perr := verifyLifecyclePoll(ctx, c)
+	seconds, perr := verifyLaunchSettings(ctx, c)
 	if perr != nil {
 		return 0, perr
 	}
@@ -148,29 +148,39 @@ func ilmMode(stdout []byte) (string, bool) {
 	return status.OperationMode, true
 }
 
-// verifyLifecyclePoll reads the data stream lifecycle poll interval back
-// and refuses a node that did not take the launch setting.
-func verifyLifecyclePoll(ctx context.Context, c *core) (float64, *protoError) {
+// verifyLaunchSettings reads the settings the launch pinned back out of
+// the node, in one call, and refuses a node that did not take them: the
+// data stream lifecycle poll interval (this file) and the node's own
+// deprecation indexing (ops.go). A setting the node never reports is
+// left alone — a value this adapter cannot read is one it cannot judge.
+func verifyLaunchSettings(ctx context.Context, c *core) (float64, *protoError) {
 	val, stdout, _, perr := c.exec(ctx, execArgs{Argv: []string{"curl", "-s",
 		serverURL + "/_cluster/settings?include_defaults=true&flat_settings=true"}})
 	if perr != nil {
 		return 0, perr
 	}
-	interval, answered := lifecyclePollValue(stdout)
-	if !answered {
-		return val.DurationSeconds, nil
-	}
-	if interval != lifecyclePollInterval {
+	if interval, answered := lifecyclePollValue(stdout); answered && interval != lifecyclePollInterval {
 		return 0, refusedLifecycle("the data stream lifecycle poll interval reads " + interval +
 			" where the launch pinned " + lifecyclePollInterval)
+	}
+	if perr := judgeDeprecationIndexing(stdout); perr != nil {
+		return 0, perr
 	}
 	return val.DurationSeconds, nil
 }
 
 // lifecyclePollValue reads the effective poll interval out of the flat
-// cluster settings: a persistent or transient value wins over the node
-// default, exactly as the engine resolves it.
+// cluster settings.
 func lifecyclePollValue(stdout []byte) (string, bool) {
+	return settingValue(stdout, lifecyclePollSetting)
+}
+
+// settingValue reads one setting out of the flat cluster settings: a
+// transient or persistent value wins over the node default, exactly as
+// the engine resolves it. It answers false when the response is not the
+// settings shape or the setting is not in it — a value this adapter
+// cannot read is one it cannot judge.
+func settingValue(stdout []byte, name string) (string, bool) {
 	settings := struct {
 		Persistent map[string]string `json:"persistent"`
 		Transient  map[string]string `json:"transient"`
@@ -180,7 +190,7 @@ func lifecyclePollValue(stdout []byte) (string, bool) {
 		return "", false
 	}
 	for _, scope := range []map[string]string{settings.Transient, settings.Persistent, settings.Defaults} {
-		if v, ok := scope[lifecyclePollSetting]; ok {
+		if v, ok := scope[name]; ok {
 			return v, true
 		}
 	}
