@@ -1,0 +1,30 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. The sandbox must be idle: the official image starts QuestDB itself, and this adapter replaces the data root, so a drill sets command: sleep infinity and the adapter starts the engine once the backup is in place. Measured on both verified lines: the engine answers 2.0-2.1 s after start under --network none, restores at 640 MiB and fails to start at 512 MiB, and a data root is 328 MB for 250 rows because every column file is preallocated. There is no archive source kind because the image carries no tar. QuestDB publishes no end-of-life dates, so supported_until is null. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "questdb",
+  "name": "QuestDB",
+  "status": "experimental",
+  "since": null,
+  "engine_name": "QuestDB",
+  "conformance_verified": true,
+  "docs": "adapters/questdb/README.md",
+  "versions_checked": "2026-09-10",
+  "verified": [
+    {
+      "engine_version": "10.0.1",
+      "image": "questdb/questdb:10.0.1",
+      "supported_until": null,
+      "baseline": true
+    },
+    {
+      "engine_version": "9.4.3",
+      "image": "questdb/questdb:9.4.3",
+      "supported_until": null,
+      "baseline": false
+    }
+  ],
+  "sources": {
+    "questdb_checkpoint": "One data root copied while `CHECKPOINT CREATE` was in force",
+    "questdb_checkpoint_dir": "A directory of them; the newest by file time is restored",
+    "questdb_data": "One data root copied with no checkpoint held — the copy makes no consistency claim"
+  }
+}

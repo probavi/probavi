@@ -28,7 +28,8 @@ pkgname=('probavi' 'probavi-adapter-postgres' 'probavi-adapter-mysql'
          'probavi-adapter-couchdb'
          'probavi-adapter-qdrant'
          'probavi-adapter-weaviate'
-         'probavi-adapter-aerospike')
+         'probavi-adapter-aerospike'
+         'probavi-adapter-questdb')
 pkgver=${PKGVER}
 pkgrel=1
 # The git tag, which differs from pkgver for a pre-release: makepkg
@@ -114,4 +115,5 @@ package_probavi-adapter-couchdb() { _package_adapter couchdb; }
 package_probavi-adapter-qdrant() { _package_adapter qdrant; }
 package_probavi-adapter-weaviate() { _package_adapter weaviate; }
 package_probavi-adapter-aerospike() { _package_adapter aerospike; }
+package_probavi-adapter-questdb() { _package_adapter questdb; }
 package_probavi-adapter-mssql()    { _package_adapter mssql; }

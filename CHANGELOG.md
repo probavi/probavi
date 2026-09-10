@@ -11,6 +11,65 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **QuestDB is the twenty-seventh engine** (`adapters/questdb` 0.1.0),
+  restoring the data root a checkpoint leaves behind — one copy, the newest
+  of a directory of them, or a copy taken with no checkpoint at all, each
+  under a kind that claims exactly what it is.
+
+  **A row count proves less here than anywhere else in the catalogue, and
+  that is the headline.** A column file truncated from 16 MiB to 64 bytes
+  restores into a server that answers `count(*)` with the full 250 while
+  `sum(id)` answers 36 — eight real values — and says nothing about it in
+  the log or the response. QuestDB serves what the transaction metadata
+  claims and reads the column file underneath it without checking that the
+  two agree. The adapter README says so and says what to write instead (an
+  aggregate over a value column, or a filter that has to read one), and an
+  integration test pins the behaviour against the engine so the
+  documentation cannot drift from it.
+
+  The artifact states its own provenance, which is what makes three kinds
+  honest rather than two: `.checkpoint/db` is populated while `CHECKPOINT
+  CREATE` is in force and empty after `CHECKPOINT RELEASE`, so
+  `questdb_checkpoint` can refuse a copy of a live data root and name
+  `questdb_data`, the kind that promises nothing, in the refusal. Both
+  restore identically; the record says which one ran.
+
+  The measurement corrected the roadmap entry twice. The statements are
+  `CHECKPOINT CREATE`/`RELEASE`, not `SNAPSHOT PREPARE`/`COMPLETE`, on both
+  verified lines; and *recovered on startup* does not happen — the engine
+  logs `skipping recovery from checkpoint` unless the instance that took
+  the copy had an id configured, and the copy restores correctly anyway,
+  WAL and non-WAL tables both measured.
+
+  Issue #166 is the **guard** shape. TTL enforcement drops whole partitions
+  when a table is written — `ALTER TABLE … SET TTL 1 HOUR` dropped four of
+  six rows immediately — and a drill only reads: a nine-day-old backup
+  whose table declares a one-hour TTL restores whole and holds every row
+  five seconds later. There is nothing to suspend (`cairo.ttl.use.wall.clock=false`
+  changed no outcome that could be produced), so an integration test keeps
+  the property and the operator's declaration is left as they wrote it.
+
+  Sandbox notes, all measured: the sandbox must be idle (`command: sleep
+  infinity`) because the adapter replaces the data root, and one already
+  serving is refused with that parameter named; 640 MiB restores while
+  512 MiB does not; the engine answers 2.0–2.1 s after start under
+  `--network none`; telemetry is switched off (ADR 0018); and there is no
+  archive kind because the image carries no `tar`. A data root is 328 MB
+  for 250 rows — every column file is preallocated — so the README says
+  what a copy actually costs. Conformance 15/15, verified against 10.0.1
+  and 9.4.3, which restore each other's artifacts in both directions.
+
+### Changed
+
+- **The conformance suite can drive an adapter whose artifact is a
+  directory.** It provisions from a temporary file, which suits an adapter
+  whose backup is one file and cannot suit one whose backup is a tree — so
+  an adapter may now commit `testdata/conformance-source`, and the suite
+  provisions from that instead. Refusing a file for a directory-shaped kind
+  is correct behaviour, and it was reading as a conformance failure.
+
 ### Fixed
 
 - **The Solr restore gate waits for the restored index, not for the first
