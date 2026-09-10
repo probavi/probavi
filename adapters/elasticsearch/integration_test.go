@@ -112,7 +112,7 @@ for ds in ilm-drill-app dlm-drill-app; do
       --data-binary "{\"@timestamp\":\"2026-08-2${n}T00:00:00Z\",\"msg\":\"m$n\"}" > /dev/null
   done
 done
-backing=$(curl -s 'http://127.0.0.1:9200/_cat/indices/.ds-*?h=index')
+backing=$(curl -s 'http://127.0.0.1:9200/_cat/indices/.ds-ilm-drill-*,.ds-dlm-drill-*?h=index')
 [ "$(printf '%s\n' "$backing" | wc -l)" -eq 4 ] || { echo "backing indices: $backing" >&2; exit 1; }
 for idx in $backing; do
   curl -sf -XPUT "http://127.0.0.1:9200/$idx/_settings" -H "$H" \
@@ -122,6 +122,33 @@ curl -sf -XPUT http://127.0.0.1:9200/_snapshot/seed -H "$H" \
   --data-binary '{"type":"fs","settings":{"location":"/tmp/repo"}}' > /dev/null
 curl -sf -XPUT 'http://127.0.0.1:9200/_snapshot/seed/snap-1?wait_for_completion=true' -H "$H" \
   --data-binary '{"indices":"*"}' | grep -q '"state":"SUCCESS"'`
+
+// enginesOwnStreamSeedScript takes a snapshot that carries the engine's
+// own logs, which is what a production snapshot holds: a 9.x node writes
+// `.ds-.logs-elasticsearch.deprecation-default-<date>` about ten seconds
+// after it answers, and an `indices: *` snapshot — or the default —
+// carries the stream with everything else. The seed waits for it rather
+// than assuming a timing, and says so when the line it runs on never
+// writes one (8.19 measured: an idle node creates nothing).
+const enginesOwnStreamSeedScript = `set -e
+` + launchNode + `
+curl -sf -XPUT http://127.0.0.1:9200/orders -H "$H" \
+  --data-binary '{"settings":{"number_of_shards":1,"number_of_replicas":0}}' > /dev/null
+for n in 1 2 3; do
+  curl -sf -XPOST "http://127.0.0.1:9200/orders/_doc/$n?refresh=true" -H "$H" \
+    --data-binary "{\"sku\":\"item-$n\"}" > /dev/null
+done
+own=""
+for i in $(seq 1 12); do
+  own=$(curl -s 'http://127.0.0.1:9200/_cat/indices/.ds-.logs-elasticsearch.*?h=index' | tr -d ' \n')
+  [ -n "$own" ] && break
+  sleep 5
+done
+curl -sf -XPUT http://127.0.0.1:9200/_snapshot/seed -H "$H" \
+  --data-binary '{"type":"fs","settings":{"location":"/tmp/repo"}}' > /dev/null
+curl -sf -XPUT 'http://127.0.0.1:9200/_snapshot/seed/snap-1?wait_for_completion=true' -H "$H" \
+  --data-binary '{"indices":"*"}' | grep -q '"state":"SUCCESS"'
+printf 'engines-own-stream:%s\n' "${own:-none}"`
 
 // controlRestoreScript is what a drill without the adapter's pins would
 // do: register the fixture repository and restore it into a node whose
@@ -508,7 +535,7 @@ func TestLiveDataDirIsRefusedByName(t *testing.T) {
 // the named artifacts, produced the way the README tells operators to
 // produce them.
 func seedFixture(t *testing.T, ctx context.Context, provider *docker.Provider, image, script string,
-	extract map[string]string) {
+	extract map[string]string) string {
 	t.Helper()
 	seed, err := provider.Create(ctx, sandboxParams(image))
 	if err != nil {
@@ -528,6 +555,7 @@ func seedFixture(t *testing.T, ctx context.Context, provider *docker.Provider, i
 			t.Fatalf("extract fixture: %v: %s", err, out)
 		}
 	}
+	return strings.TrimSpace(string(res.Stdout))
 }
 
 // copyIntoSandbox places a host tree inside a sandbox the test drives
@@ -583,6 +611,111 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// TestTheNodesOwnLogsDoNotFailTheDrill covers the collision the launch
+// pin removes.
+//
+// A 9.x node writes `.ds-.logs-elasticsearch.deprecation-default-<date>`
+// about ten seconds after it answers, and `.ds-ilm-history-<n>-<date>`
+// about ten seconds after that. Both are ordinary hidden data streams, so
+// a production snapshot carries them — and restoring one into a node that
+// has been up that long fails on an index the engine made, not on
+// anything the backup holds. Whether it happened at all was a race
+// between the node's startup and the restore, which is how it stayed
+// hidden until a full matrix run caught it.
+//
+// The fixture here waits for the engine's own stream so the snapshot
+// carries it the way production would; on a line that writes none the
+// drill half still runs and the test says which half it got. The
+// assertion that must hold either way is the pin read back off the node:
+// the collision itself is a race, so a green provision alone would prove
+// only that the restore won it this time — measured, with the pin
+// removed, a run where the drill passed and the node reported the
+// setting true.
+func TestTheNodesOwnLogsDoNotFailTheDrill(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := verifiedImage(t)
+	provider := docker.New(nil)
+
+	fixture := filepath.Join(t.TempDir(), "repo")
+	seeded := seedFixture(t, ctx, provider, image, enginesOwnStreamSeedScript,
+		map[string]string{"/tmp/repo": fixture})
+	own := strings.TrimPrefix(lastLine(seeded), "engines-own-stream:")
+	if own == "none" {
+		t.Logf("this engine line wrote no deprecation stream of its own; the snapshot cannot carry "+
+			"the collision, so only the pin is proven here (%s)", image)
+	} else {
+		t.Logf("the fixture carries the engine's own stream: %s", own)
+	}
+
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("elasticsearch", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	if _, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "elasticsearch_repo", Path: fixture},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx); err != nil {
+		t.Fatalf("provision: %v — a snapshot carrying the engine's own logs must still restore", err)
+	}
+
+	if got := curlInSandbox(t, ctx, sbx, "/orders/_count"); !strings.Contains(got, `"count":3`) {
+		t.Errorf("orders count = %s, want the three documents the backup holds", got)
+	}
+	// Read back through the engine, the way the adapter's own gate does:
+	// the pin has to be in force on the node, not merely on the command
+	// line this suite could have got wrong.
+	settings := curlInSandbox(t, ctx, sbx,
+		"/_cluster/settings?include_defaults=true&flat_settings=true")
+	if !strings.Contains(settings, `"cluster.deprecation_indexing.enabled":"false"`) {
+		t.Errorf("the node does not report deprecation indexing off — the launch pin did not take: %s",
+			firstFragment(settings, "deprecation_indexing"))
+	}
+	if own != "none" {
+		if got := curlInSandbox(t, ctx, sbx, "/_cat/indices/"+own+"?h=index"); !strings.Contains(got, own) {
+			t.Errorf("the backup's own %s did not come back (%q) — it was skipped rather than restored",
+				own, got)
+		}
+	}
+}
+
+// firstFragment returns the part of a response around a name, for a
+// failure message that shows what the engine said rather than the whole
+// settings document.
+func firstFragment(body, name string) string {
+	i := strings.Index(body, name)
+	if i < 0 {
+		return "(the response never mentions " + name + ")"
+	}
+	end := min(i+80, len(body))
+	return body[max(0, i-40):end]
+}
+
+// curlInSandbox reads one endpoint off the node inside the sandbox.
+func curlInSandbox(t *testing.T, ctx context.Context, sbx *docker.Sandbox, path string) string {
+	t.Helper()
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"curl", "-s", "http://127.0.0.1:9200" + path}})
+	if err != nil {
+		t.Fatalf("curl %s: %v", path, err)
+	}
+	return strings.TrimSpace(string(out.Stdout))
+}
+
+// lastLine is the seed's final line, which is where its scripts print
+// what the fixture holds.
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 // assertCheck runs one Elasticsearch SQL check through the probe-declared

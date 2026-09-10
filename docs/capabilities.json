@@ -256,7 +256,7 @@
       "name": "Elasticsearch",
       "status": "experimental",
       "since": "0.17.0",
-      "adapter_version": "0.2.0",
+      "adapter_version": "0.3.0",
       "engine": {
         "id": "elasticsearch",
         "name": "Elasticsearch"
