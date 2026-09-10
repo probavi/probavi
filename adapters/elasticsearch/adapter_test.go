@@ -474,6 +474,72 @@ func TestLifecyclePollNotPinnedIsRefused(t *testing.T) {
 	}
 }
 
+// TestDeprecationIndexingNotPinnedIsRefused is the other half of the
+// launch pin. A node that keeps writing its own deprecation log creates
+// `.ds-.logs-elasticsearch.deprecation-default-<date>` within seconds of
+// starting, a production snapshot carries the same stream, and the
+// restore then fails on an index the engine made — a false verdict
+// against the backup, and a nondeterministic one, since it depends on
+// whether the node got there first.
+func TestDeprecationIndexingNotPinnedIsRefused(t *testing.T) {
+	repo := writeRepo(t, t.TempDir())
+	sim := defaultSimulated()
+	sim.settings = outExec(`{"persistent":{"cluster.deprecation_indexing.enabled":"true"},"transient":{},` +
+		`"defaults":{"data_streams.lifecycle.poll_interval":"876000h"}}`)
+	var sequence []string
+	line, _, _ := driveOp(t, "provision", provisionPayload(t, "elasticsearch_repo", repo, nil),
+		provisionHandler(t, &sequence, sim))
+	f := parseFinal(t, line)
+	if f.OK || f.Error.Code != "invalid_request" ||
+		!strings.Contains(f.Error.Message, deprecationIndexingSetting) {
+		t.Errorf("final = %+v, want invalid_request naming the setting", f)
+	}
+	if counts := sequenceCounts(sequence); counts["put_file"] != 0 || counts["register"] != 0 {
+		t.Errorf("sequence = %v, want the refusal before any transfer", sequence)
+	}
+}
+
+// TestLaunchPinsTheNodesOwnLogging keeps the setting on the command line:
+// it has to be in force before the node answers, because the stream
+// appears about ten seconds later (measured on 9.5.2) and a cluster-level
+// PUT afterwards would be a race with it.
+func TestLaunchPinsTheNodesOwnLogging(t *testing.T) {
+	if !strings.Contains(startScript, deprecationIndexingSetting+"=false") {
+		t.Errorf("the launch does not pin %s=false", deprecationIndexingSetting)
+	}
+}
+
+// TestSettingValueReadsTheEnginesOwnPrecedence pins how a setting is
+// resolved: transient over persistent over default, as the engine does.
+func TestSettingValueReadsTheEnginesOwnPrecedence(t *testing.T) {
+	const name = "cluster.deprecation_indexing.enabled"
+	tests := map[string]struct {
+		body     string
+		want     string
+		answered bool
+	}{
+		"only the default": {
+			`{"persistent":{},"transient":{},"defaults":{"` + name + `":"false"}}`, "false", true,
+		},
+		"persistent overrides the default": {
+			`{"persistent":{"` + name + `":"true"},"transient":{},"defaults":{"` + name + `":"false"}}`, "true", true,
+		},
+		"transient wins": {
+			`{"persistent":{"` + name + `":"false"},"transient":{"` + name + `":"true"},"defaults":{}}`, "true", true,
+		},
+		"absent":                 {`{"persistent":{},"transient":{},"defaults":{}}`, "", false},
+		"not the settings shape": {`{"error":{"reason":"nope"}}`, "", false},
+	}
+	for label, tc := range tests {
+		t.Run(label, func(t *testing.T) {
+			got, answered := settingValue([]byte(tc.body), name)
+			if got != tc.want || answered != tc.answered {
+				t.Errorf("settingValue = %q, %v, want %q, %v", got, answered, tc.want, tc.answered)
+			}
+		})
+	}
+}
+
 func TestProvisionUnpacksArchive(t *testing.T) {
 	repo := writeRepo(t, t.TempDir())
 	path := treeToZip(t, repo, filepath.Join(t.TempDir(), "repo.zip"), "backup")

@@ -145,6 +145,41 @@ the drill — with ILM's poll interval then forced down to one second,
 harsher than any default — keeps every generation and every document.
 Remove either pin and the test goes red.
 
+## The node's own logs stay out of the cluster it restores into
+
+A 9.x node writes about itself into the cluster it is running: measured
+on 9.5.2, a node that does nothing at all creates
+`.ds-.logs-elasticsearch.deprecation-default-<date>-000001` about ten
+seconds after it answers, and `.ds-ilm-history-<n>-<date>-000001` about
+ten seconds after that — the second because the first arrives under a
+lifecycle policy for ILM to act on. An idle 8.19.20 node creates
+neither, which is why this shows on one line only.
+
+Both are ordinary hidden data streams rather than system indices, so a
+production snapshot taken with `indices: *` — or with the API's default
+— carries them. Restoring such a snapshot into a node that has been up
+for ten seconds fails:
+
+```
+cannot restore index [.ds-.logs-elasticsearch.deprecation-default-…]
+because an open index with same name already exists in the cluster
+```
+
+The drill would then record `restore_failed` against a backup that is
+perfectly restorable, and whether it happened at all was a race between
+the node's startup and the restore — a nondeterministic verdict, which
+is worth less than a slow one.
+
+So the launch pins `cluster.deprecation_indexing.enabled=false`, as a
+node setting, in force before the node answers. The pin is read back
+through the cluster settings API like the lifecycle one, and a node
+reporting anything else is refused as `invalid_request` rather than left
+to blame the backup for the engine's own logs. Nothing about the
+artifact changes: what the backup holds about deprecation is restored
+exactly as it was taken — measured, the same snapshot restores whole,
+0 failed shards, with the engine's own streams among the six backing
+indices that come back.
+
 ## Version pairing: snapshots do not restore on older engines
 
 A snapshot restores on an engine at least as new as the one that wrote

@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "elasticsearch"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 
 	// workDirName is created under the provider's scratch directory —
 	// the official images run as the elasticsearch user (uid 1000,
@@ -275,8 +275,10 @@ func checkEngine(ctx context.Context, c *core) *protoError {
 // sysctl decision measured: bootstrap checks not enforced, security off,
 // mmap disabled by setting, the repository path allowed from the start
 // (path.repo is a static setting), the GeoIP downloader off (it has no
-// network to reach), and the data stream lifecycle poll interval pinned
-// before the node exists to poll anything (retention.go).
+// network to reach), the data stream lifecycle poll interval pinned
+// before the node exists to poll anything (retention.go), and the node's
+// own deprecation log kept out of the cluster it is about to restore
+// into (deprecationIndexing below).
 //
 // The hosts file is the 8.x line's own requirement: under a zero-ingress
 // sandbox the container's hostname resolves to nothing, and an 8.19
@@ -294,7 +296,51 @@ printf '127.0.0.1 localhost %s\n::1 localhost\n' "${HOSTNAME:-$(cat /etc/hostnam
 (ES_JAVA_OPTS="${ES_JAVA_OPTS:+$ES_JAVA_OPTS }-Djdk.net.hosts.file=$hosts" elasticsearch ` +
 	`-E discovery.type=single-node -E xpack.security.enabled=false -E node.store.allow_mmap=false ` +
 	`-E ingest.geoip.downloader.enabled=false -E path.repo="$repo" ` +
+	`-E ` + deprecationIndexingSetting + `=false ` +
 	`-E ` + lifecyclePollSetting + `=` + lifecyclePollInterval + ` > "$log" 2>&1 &)`
+
+// deprecationIndexingSetting keeps the node from writing its own
+// deprecation log into the cluster it restores into.
+//
+// A 9.5.2 node that does nothing at all creates
+// `.ds-.logs-elasticsearch.deprecation-default-<date>-000001` about ten
+// seconds after it answers, and `.ds-ilm-history-7-<date>-000001` about
+// ten seconds after that — the second because the first gets a lifecycle
+// policy for ILM to act on (all measured; an idle 8.19.20 node creates
+// neither, which is why this surfaced on one line only).
+//
+// Both are ordinary hidden data streams rather than system indices, so a
+// production snapshot taken with `indices: *` — or with the default —
+// carries them, and restoring one into a node that has been up for ten
+// seconds fails: "cannot restore index [...] because an open index with
+// same name already exists in the cluster". The drill then records
+// restore_failed against a backup that is perfectly restorable, and
+// whether it happens at all is a race between the node's startup and the
+// restore. Measured from both sides: with the node's own indexing off,
+// the same snapshot — the engine's own streams included — restores
+// whole, 0 failed shards, and the operator's documents read back.
+//
+// Suspending the node's own logging is not rewriting the operator's
+// data: what the backup holds about deprecation is restored exactly as
+// it was taken. Both verified lines accept the setting and report it
+// back (measured).
+const deprecationIndexingSetting = "cluster.deprecation_indexing.enabled"
+
+// judgeDeprecationIndexing refuses a node that would keep writing its own
+// deprecation log while restoring. It reads the settings the caller
+// already fetched (retention.go), so the pins cost one call between them.
+func judgeDeprecationIndexing(stdout []byte) *protoError {
+	value, answered := settingValue(stdout, deprecationIndexingSetting)
+	if !answered || value == "false" {
+		return nil
+	}
+	return protoErr("invalid_request", false,
+		"this node keeps its own deprecation log in the cluster (%s reads %q): it creates "+
+			"`.ds-.logs-elasticsearch.deprecation-default-<date>` within seconds of starting, a "+
+			"snapshot taken with `indices: *` carries the same stream, and the restore then fails "+
+			"on an index the engine made rather than on anything the backup holds",
+		deprecationIndexingSetting, value)
+}
 
 // startEngine launches the node, waits for it, suspends its lifecycle
 // machinery, and reads what it is.
