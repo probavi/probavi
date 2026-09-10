@@ -495,8 +495,21 @@ func buildPgBackRestImage(t *testing.T, ctx context.Context) string {
 	}
 	const tag = "probavi-it-pgbackrest:16"
 	dir := t.TempDir()
+	// The expiry check is waived for this one build because an image's
+	// own base can outlive its distribution's support and nothing here
+	// controls when. Measured 2026-09-10: the postgis variant is Debian
+	// 11, whose security suite stopped being refreshed — `apt-get update`
+	// exits 100 on "Release file for …/bullseye-security/InRelease is
+	// expired (invalid since 2d 22h)" — and the `&&` then keeps the
+	// install from running at all. Nothing about the image or the package
+	// had changed; the clock had. pgbackrest itself comes from the
+	// PostgreSQL project's own repository, which is current
+	// (2.59.1-1.pgdg11+1, measured), and this image is a throwaway the
+	// drill never ships: waiving the check says that out loud where
+	// deleting the stale suite from the image would hide it.
 	dockerfile := "FROM " + verifiedImage(t) + "\n" +
-		"RUN apt-get update && apt-get install -y --no-install-recommends pgbackrest && rm -rf /var/lib/apt/lists/*\n"
+		"RUN apt-get -o Acquire::Check-Valid-Until=false update" +
+		" && apt-get install -y --no-install-recommends pgbackrest && rm -rf /var/lib/apt/lists/*\n"
 	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o600); err != nil {
 		t.Fatalf("write dockerfile: %v", err)
 	}
