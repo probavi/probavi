@@ -169,9 +169,17 @@ jobs:
           rm -f source.tar.gz
 
       - name: checksum every artifact
+        # Every name is written bare. sha256sum echoes the argument it was
+        # given, so a `./*.ebuild` glob put one entry in the file as
+        # `./probavi-<version>.ebuild` while the other 281 carried no
+        # prefix — `sha256sum -c` resolves both to the same file, so it
+        # verified, but a checksum file is read by people and by strict
+        # tooling, and one line spelled differently from the rest is a
+        # question nobody should have to answer. The glob needs no `./`:
+        # the shell expands it inside dist either way.
         run: |
           set -euo pipefail
-          (cd dist && sha256sum -- *.tar.gz *.deb *.rpm *.apk PKGBUILD ./*.ebuild > SHA256SUMS)
+          (cd dist && sha256sum -- *.tar.gz *.deb *.rpm *.apk PKGBUILD *.ebuild > SHA256SUMS)
           cat dist/SHA256SUMS
 
       - name: render the Homebrew formulae
