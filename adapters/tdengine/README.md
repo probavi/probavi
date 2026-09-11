@@ -117,7 +117,7 @@ sandbox:
   params:
     image: tdengine/tdengine:3.3.6.13
     command: sleep infinity     # required: the adapter starts the engine
-    memory: 1g
+    memory: 2g
   timeout: 30m
 ```
 

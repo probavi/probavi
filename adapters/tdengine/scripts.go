@@ -84,40 +84,42 @@ curl -sf -u ` + credentials + ` -d "SELECT count(*) FROM information_schema.ins_
 const engineEnv = `export TAOS_FQDN=localhost TAOS_FIRST_EP=localhost:6030
 `
 
-// Both are detached with setsid and with every standard descriptor
-// closed. A background process that keeps the exec's own output open
-// keeps the call open with it: the core waits for the command it ran, and
-// on CI's runtime that wait was twenty minutes and a sandbox destroyed
-// under it, while the same script returned at once on the development
-// machine (measured on both).
+// The script waits for the engine inside itself, the way the sibling
+// adapters that start an engine do, and exits non-zero with the engine's
+// own last lines when it does not come up. Backgrounding the processes
+// and returning immediately looked equivalent and was not: on CI's
+// runtime the call that started them stayed open for twenty minutes,
+// where the same script returned at once here (measured). A start that
+// answers only when the engine is ready has nothing left to outlive it.
 const startScript = `set -u
 ` + engineEnv + `
-setsid taosd </dev/null >/tmp/probavi-taosd.log 2>&1 &
-for i in $(seq 1 40); do
+nohup taosd > /tmp/probavi-taosd.log 2>&1 &
+tpid=$!
+i=0
+while [ $i -lt 60 ]; do
+  kill -0 "$tpid" 2>/dev/null || { echo "taosd exited while starting" >&2; tail -5 /tmp/probavi-taosd.log >&2; exit 1; }
   taos -s "show databases;" >/dev/null 2>&1 && break
-  sleep 0.5
+  i=$((i+1)); sleep 1
 done
-setsid taosadapter </dev/null >/tmp/probavi-taosadapter.log 2>&1 &
-echo started`
-
-// Nothing is killed before that start, deliberately. The obvious move —
-// clear whatever the image left running — took the sandbox down with it:
-// the entrypoint is the container's first process on some hosts, so a
-// taosd it spawned is its child, and killing the child ended the
-// container. The drill then failed against a sandbox that no longer
-// existed, which is worse than the problem it was fixing (measured).
-//
-// It is not needed either. Where the image's own taosd cannot start it
-// exits on its own — that is the failure this adapter is working around —
-// so by the time the grace has passed there is nothing holding the data
-// directory, and the engine this adapter starts takes it.
+nohup taosadapter > /tmp/probavi-taosadapter.log 2>&1 &
+apid=$!
+i=0
+while [ $i -lt 60 ]; do
+  kill -0 "$apid" 2>/dev/null || { echo "taosadapter exited while starting" >&2; tail -5 /tmp/probavi-taosadapter.log >&2; exit 1; }
+  n=$(curl -sf -u ` + credentials + ` -d "SELECT count(*) FROM information_schema.ins_dnodes WHERE status = 'ready'" "` + serverURL + `/rest/sql" | sed -n 's/.*"data":\[\[\([0-9]*\)\].*/\1/p')
+  case "${n:-0}" in ''|0) ;; *) echo started; exit 0;; esac
+  i=$((i+1)); sleep 1
+done
+echo "the engine reported no ready node within 60s" >&2
+tail -5 /tmp/probavi-taosd.log >&2
+exit 1`
 
 // startupErrorScript surfaces what the engine said when it never came up.
 // The server and the HTTP endpoint are two processes with two logs, and a
 // sandbox that answers neither is a question the operator cannot chase
 // afterwards: the container is gone by the time they read the record.
 const startupErrorScript = `set -u
-for f in /var/log/taos/taosdlog.0 /var/log/taos/taosadapter_*.log /tmp/probavi-taosd.log /tmp/probavi-taosadapter.log; do
+for f in /tmp/probavi-taosd.log /tmp/probavi-taosadapter.log /var/log/taos/taosdlog.0 /var/log/taos/taosadapter_*.log; do
   [ -f "$f" ] || continue
   grep -iE "error|fail|cannot|refus|unable" "$f" 2>/dev/null | tail -2
 done

@@ -42,7 +42,7 @@ func verifiedImage(t *testing.T) string {
 // not always finish (scripts.go), and a drill has no business depending
 // on which host it is running on.
 func sandboxParams(t *testing.T) map[string]string {
-	return map[string]string{"image": verifiedImage(t), "command": "sleep infinity", "memory": "1g"}
+	return map[string]string{"image": verifiedImage(t), "command": "sleep infinity", "memory": "2g"}
 }
 
 const (
@@ -365,6 +365,14 @@ func awaitServing(t *testing.T, ctx context.Context, sbx *docker.Sandbox) {
 func sandboxDiagnosis(t *testing.T, ctx context.Context, sbx *docker.Sandbox) string {
 	t.Helper()
 	var parts []string
+	// Why the container is in the state it is in, before what it said:
+	// a sandbox that died answers no exec, and the reason (an exit code,
+	// an out-of-memory kill) is the whole diagnosis in that case.
+	if out, err := exec.CommandContext(ctx, "docker", "inspect", "-f",
+		"{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} err={{.State.Error}}",
+		sbx.ID()).CombinedOutput(); err == nil {
+		parts = append(parts, "container state: "+strings.TrimSpace(string(out)))
+	}
 	if out, err := exec.CommandContext(ctx, "docker", "logs", "--tail", "25", sbx.ID()).CombinedOutput(); err == nil {
 		parts = append(parts, "container output: "+strings.TrimSpace(string(out)))
 	}
