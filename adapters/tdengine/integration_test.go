@@ -331,10 +331,36 @@ func awaitServing(t *testing.T, ctx context.Context, sbx *docker.Sandbox) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("the seed server never answered")
+			t.Fatalf("the server in the sandbox never answered: %s", sandboxDiagnosis(t, ctx, sbx))
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// sandboxDiagnosis is what a server that never answered left behind. A
+// suite that reports only its own timeout says nothing a maintainer can
+// act on, and the container is gone by the time anyone reads the log.
+func sandboxDiagnosis(t *testing.T, ctx context.Context, sbx *docker.Sandbox) string {
+	t.Helper()
+	var parts []string
+	if out, err := exec.CommandContext(ctx, "docker", "logs", "--tail", "25", sbx.ID()).CombinedOutput(); err == nil {
+		parts = append(parts, "container output: "+strings.TrimSpace(string(out)))
+	}
+	res, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"bash", "-c",
+		// Which of the two processes is missing answers most of it: taosd
+		// serves the native client, taosadapter the endpoint the checks
+		// use, and they fail independently.
+		`ps -eo comm | sort -u | grep -i taos | tr '\n' ' '; echo; ` +
+			`taos -s "show databases;" >/dev/null 2>&1 && echo "native client: answers" || echo "native client: silent"; ` +
+			`tail -n 5 /var/log/taos/taosdlog.0 2>/dev/null; ` +
+			`grep -iE "error|fail|cannot" /var/log/taos/taosadapter_*.log 2>/dev/null | tail -n 5`}})
+	if err == nil {
+		parts = append(parts, "inside: "+strings.TrimSpace(string(res.Stdout)))
+	}
+	if len(parts) == 0 {
+		return "(the sandbox said nothing)"
+	}
+	return strings.Join(parts, " || ")
 }
 
 func freshSandbox(t *testing.T, ctx context.Context, provider *docker.Provider) *docker.Sandbox {

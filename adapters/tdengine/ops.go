@@ -162,7 +162,7 @@ func awaitReady(ctx context.Context, c *core) (float64, *protoError) {
 			return 0, protoErr("engine_not_ready", true,
 				"the server did not answer a query within %s: this adapter restores into the server the "+
 					"image starts, so the sandbox needs no command override and the engine has to come "+
-					"up on its own", readinessBudget)
+					"up on its own%s", readinessBudget, startupDiagnosis(ctx, c))
 		}
 		select {
 		case <-ctx.Done():
@@ -170,6 +170,22 @@ func awaitReady(ctx context.Context, c *core) (float64, *protoError) {
 		case <-time.After(readinessPoll):
 		}
 	}
+}
+
+// startupDiagnosis returns what the engine said while failing to come up,
+// as a suffix for the refusal above. The sandbox is destroyed when the
+// drill ends, so a record that does not carry the engine's own words
+// carries nothing anybody can act on.
+func startupDiagnosis(ctx context.Context, c *core) string {
+	val, stdout, _, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", startupErrorScript}, TimeoutSeconds: 15})
+	if perr != nil || val.ExitCode != 0 {
+		return ""
+	}
+	said := strings.TrimSpace(string(stdout))
+	if said == "" {
+		return ""
+	}
+	return " — the sandbox said: " + strings.ReplaceAll(said, "\n", " | ")
 }
 
 // extractArchive unpacks a tar artifact and reports the directory the

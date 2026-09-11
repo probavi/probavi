@@ -38,6 +38,17 @@ const (
 const readyScript = `curl -sf -o /dev/null -u ` + credentials +
 	` -d "SHOW DATABASES" "` + serverURL + `/rest/sql"`
 
+// startupErrorScript surfaces what the engine said when it never came up.
+// The server and the HTTP endpoint are two processes with two logs, and a
+// sandbox that answers neither is a question the operator cannot chase
+// afterwards: the container is gone by the time they read the record.
+const startupErrorScript = `set -u
+for f in /var/log/taos/taosdlog.0 /var/log/taos/taosadapter_*.log; do
+  [ -f "$f" ] || continue
+  grep -iE "error|fail|cannot|refus|unable" "$f" 2>/dev/null | tail -2
+done
+ps -eo comm 2>/dev/null | sort -u | grep -i taos | tr '\n' ' '`
+
 // extractScript unpacks a tar artifact and answers with the directory
 // the restore tool has to be pointed at: the one holding the schema,
 // wherever the archive happens to nest it. $1 is the destination, $2 the
