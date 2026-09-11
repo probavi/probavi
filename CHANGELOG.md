@@ -50,7 +50,7 @@ always called out explicitly.
   is outside the window before the restore starts, and restoring an empty
   database would be the green this project exists to prevent.
 
-  Sandbox notes, all measured, and the first three were CI's corrections
+  Sandbox notes, all measured, and the first four were CI's corrections
   rather than the measurement day's: **the engine is pinned to loopback**,
   because an image can carry a name that resolves to nothing in a sandbox
   — 3.3.5.8 ships `fqdn buildkitsandbox`, the hostname of the machine that
@@ -67,7 +67,11 @@ always called out explicitly.
   adapter starts, either: clearing the sandbox first took the container
   down with it, because the entrypoint is the first process on some hosts
   and the taosd it spawned is its child (measured, and worse than the
-  problem it was fixing). Readiness itself is **a node the cluster calls
+  problem it was fixing). And both processes are **detached with every
+  standard descriptor closed**: a background process that keeps the exec's
+  own output open keeps the call open with it, which on CI's runtime meant
+  a twenty-minute wait and a sandbox destroyed under it, where the same
+  script returned at once here. Readiness itself is **a node the cluster calls
   ready**, not a query that answers: `SHOW DATABASES` answers and
   `SERVER_STATUS()` reads 1 at t+338 ms while `CREATE DATABASE` — the
   first thing a restore does — still fails with "Out of dnodes", and the

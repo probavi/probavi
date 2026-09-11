@@ -147,7 +147,7 @@ func step(t *testing.T, call verbCall) string {
 	switch {
 	case strings.Contains(script, "taosdump -i"):
 		return "restore"
-	case strings.Contains(script, "nohup taosd"):
+	case strings.Contains(script, "setsid taosd"):
 		return "start"
 	case strings.Contains(script, "tar -xf"):
 		return "extract"

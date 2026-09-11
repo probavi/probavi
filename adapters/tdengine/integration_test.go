@@ -336,9 +336,9 @@ func awaitServing(t *testing.T, ctx context.Context, sbx *docker.Sandbox) {
 	// to nothing in a zero-ingress sandbox (scripts.go).
 	if _, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"bash", "-c",
 		`export TAOS_FQDN=localhost TAOS_FIRST_EP=localhost:6030
-		 (nohup taosd >/tmp/seed-taosd.log 2>&1 &)
+		 setsid taosd </dev/null >/tmp/seed-taosd.log 2>&1 &
 		 for i in $(seq 1 40); do taos -s "show databases;" >/dev/null 2>&1 && break; sleep 0.5; done
-		 (nohup taosadapter >/tmp/seed-taosadapter.log 2>&1 &)
+		 setsid taosadapter </dev/null >/tmp/seed-taosadapter.log 2>&1 &
 		 echo started`}}); err != nil {
 		t.Fatalf("start the seed engine: %v", err)
 	}

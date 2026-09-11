@@ -84,14 +84,20 @@ curl -sf -u ` + credentials + ` -d "SELECT count(*) FROM information_schema.ins_
 const engineEnv = `export TAOS_FQDN=localhost TAOS_FIRST_EP=localhost:6030
 `
 
+// Both are detached with setsid and with every standard descriptor
+// closed. A background process that keeps the exec's own output open
+// keeps the call open with it: the core waits for the command it ran, and
+// on CI's runtime that wait was twenty minutes and a sandbox destroyed
+// under it, while the same script returned at once on the development
+// machine (measured on both).
 const startScript = `set -u
 ` + engineEnv + `
-(nohup taosd >/tmp/probavi-taosd.log 2>&1 &)
+setsid taosd </dev/null >/tmp/probavi-taosd.log 2>&1 &
 for i in $(seq 1 40); do
   taos -s "show databases;" >/dev/null 2>&1 && break
   sleep 0.5
 done
-(nohup taosadapter >/tmp/probavi-taosadapter.log 2>&1 &)
+setsid taosadapter </dev/null >/tmp/probavi-taosadapter.log 2>&1 &
 echo started`
 
 // Nothing is killed before that start, deliberately. The obvious move —
