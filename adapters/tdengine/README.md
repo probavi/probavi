@@ -135,9 +135,30 @@ the line where the entrypoint reads its data directory —
 The same image serves in 0.6 s on a development machine, so whatever that
 pipeline waits for belongs to the host rather than to the backup, and a
 drill has no business depending on which host it landed on. The adapter
-therefore starts `taosd` and then `taosadapter` itself. A sandbox whose
-entrypoint did finish is left alone: the engine is what matters, not who
-started it.
+therefore starts `taosd` and then `taosadapter` itself.
+
+**The name the engine binds to is pinned to loopback.** An image can
+carry one that means nothing in a sandbox: 3.3.5.8 ships
+`fqdn buildkitsandbox` — the hostname of the machine that built it —
+where 3.3.6.13 ships `localhost` (both measured). With that name
+unresolvable the engine refuses to start, in its own words:
+
+```
+failed to get ip from fqdn:buildkitsandbox since Resource temporarily
+unavailable, dnode can not be initialized
+failed to start since read config error
+```
+
+Measured from both sides with the name made unresolvable: a plain start
+fails as above, and the same start with `TAOS_FQDN=localhost` and
+`TAOS_FIRST_EP=localhost:6030` serves. Both travel to `taos` and
+`taosdump` too, which reach the server through the configured endpoint
+rather than the HTTP one.
+
+An engine that is already serving is left alone — **readiness decides,
+never the presence of a process**. The entrypoint's own `taosd` can be
+alive and already dying, and an adapter that saw it and stood back waited
+three minutes for a server that was never coming (measured).
 
 The restore runs at **256 MiB** (measured).
 

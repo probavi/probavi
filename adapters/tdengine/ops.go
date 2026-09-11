@@ -147,19 +147,30 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	}, nil
 }
 
-// awaitReady starts the engine when the sandbox is idle, and waits for
-// the endpoint the checks will use.
+// startGrace is how long a sandbox that came up serving is given to say
+// so before the adapter starts the engine itself. Where the image's
+// entrypoint did work, the engine answers in about a second.
+const startGrace = 5 * time.Second
+
+// awaitReady gets the engine serving and waits for a node that can work.
 //
 // The drill config asks for an idle sandbox (`command: sleep infinity`)
-// because the image's own entrypoint does not always finish (scripts.go).
-// A sandbox that started the engine anyway is left alone: the engine is
-// what matters, not who started it.
+// because the image's own entrypoint does not always finish (scripts.go),
+// so the normal path is to start the engine here. A sandbox that is
+// already ready is left alone — and readiness is what decides, never the
+// presence of a process: the entrypoint's own taosd can be alive and
+// already dying, and an adapter that stood back for it waited three
+// minutes for a server that was never coming (measured).
 func awaitReady(ctx context.Context, c *core) (float64, *protoError) {
 	begin := time.Now()
-	if perr := startEngineIfIdle(ctx, c); perr != nil {
-		return 0, perr
-	}
+	started := false
 	for {
+		if !started && time.Since(begin) > startGrace {
+			if perr := startEngine(ctx, c); perr != nil {
+				return 0, perr
+			}
+			started = true
+		}
 		val, stdout, _, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", readyScript}, TimeoutSeconds: 10})
 		if perr != nil {
 			return 0, perr
@@ -169,9 +180,9 @@ func awaitReady(ctx context.Context, c *core) (float64, *protoError) {
 		}
 		if time.Since(begin) > readinessBudget {
 			return 0, protoErr("engine_not_ready", true,
-				"the server did not answer a query within %s: this adapter restores into the server the "+
-					"image starts, so the sandbox needs no command override and the engine has to come "+
-					"up on its own%s", readinessBudget, startupDiagnosis(ctx, c))
+				"the engine reported no ready node within %s of being started: the drill config asks for "+
+					"an idle sandbox (command: sleep infinity) and this adapter starts the server in "+
+					"it%s", readinessBudget, startupDiagnosis(ctx, c))
 		}
 		select {
 		case <-ctx.Done():
@@ -197,15 +208,11 @@ func startupDiagnosis(ctx context.Context, c *core) string {
 	return " — the sandbox said: " + strings.ReplaceAll(said, "\n", " | ")
 }
 
-// startEngineIfIdle starts the server and its HTTP endpoint when nothing
-// is running them yet.
-func startEngineIfIdle(ctx context.Context, c *core) *protoError {
-	val, stdout, _, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", runningScript}})
-	if perr != nil {
+// startEngine clears whatever the image left running and starts the
+// server and its HTTP endpoint on the adapter's own terms.
+func startEngine(ctx context.Context, c *core) *protoError {
+	if _, _, _, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", stopScript}, TimeoutSeconds: 30}); perr != nil {
 		return perr
-	}
-	if val.ExitCode == 0 && strings.TrimSpace(string(stdout)) == "1" {
-		return nil
 	}
 	start, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", startScript}, TimeoutSeconds: 120})
 	if perr != nil {

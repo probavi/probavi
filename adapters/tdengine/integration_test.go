@@ -244,7 +244,8 @@ func makeDump(t *testing.T, ctx context.Context, provider *docker.Provider) stri
 		// not into the one -o names (measured), so the seed runs where the
 		// artifact is written — the way an operator's backup job would, and
 		// the reason the dump can date itself at all.
-		Argv: []string{"bash", "-c", "set -e; rm -rf /tmp/dump; mkdir -p /tmp/dump; cd /tmp/dump && taosdump -D " + database + " -o /tmp/dump"},
+		Argv: []string{"bash", "-c", "set -e; export TAOS_FQDN=localhost TAOS_FIRST_EP=localhost:6030; " +
+			"rm -rf /tmp/dump; mkdir -p /tmp/dump; cd /tmp/dump && taosdump -D " + database + " -o /tmp/dump"},
 	})
 	if err != nil || res.ExitCode != 0 {
 		t.Fatalf("taosdump: %v exit=%d %s", err, res.ExitCode, res.Stderr)
@@ -272,7 +273,10 @@ func innerDumpDir(t *testing.T, dump string) string {
 // intact — what a half-written copy looks like.
 func damageOneAvro(t *testing.T, dump string) {
 	t.Helper()
-	matches, err := filepath.Glob(filepath.Join(dump, "taosdump.*", "data0-*", "*.avro"))
+	// The data directory is `data0` on 3.3.5.8 and `data0-<hash>` on
+	// 3.3.6.13 (measured), so the glob covers both rather than the one
+	// the development machine happened to produce.
+	matches, err := filepath.Glob(filepath.Join(dump, "taosdump.*", "data0*", "*.avro"))
 	if err != nil || len(matches) == 0 {
 		t.Fatalf("find an avro file: %v (%d matches)", err, len(matches))
 	}
@@ -326,10 +330,16 @@ func runnerScriptForTest(t *testing.T) string {
 // server the suite fills by hand.
 func awaitServing(t *testing.T, ctx context.Context, sbx *docker.Sandbox) {
 	t.Helper()
+	// The same start the adapter performs, for the same reasons: the
+	// image's entrypoint is not dependable here, and the engine has to be
+	// pinned to loopback because an image can carry a name that resolves
+	// to nothing in a zero-ingress sandbox (scripts.go).
 	if _, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"bash", "-c",
-		`nohup taosd >/tmp/seed-taosd.log 2>&1 &
+		`pkill -x taosd 2>/dev/null; pkill -x taosadapter 2>/dev/null; sleep 1
+		 export TAOS_FQDN=localhost TAOS_FIRST_EP=localhost:6030
+		 (nohup taosd >/tmp/seed-taosd.log 2>&1 &)
 		 for i in $(seq 1 40); do taos -s "show databases;" >/dev/null 2>&1 && break; sleep 0.5; done
-		 nohup taosadapter >/tmp/seed-taosadapter.log 2>&1 &
+		 (nohup taosadapter >/tmp/seed-taosadapter.log 2>&1 &)
 		 echo started`}}); err != nil {
 		t.Fatalf("start the seed engine: %v", err)
 	}

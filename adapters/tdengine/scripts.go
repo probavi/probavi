@@ -60,22 +60,49 @@ curl -sf -u ` + credentials + ` -d "SELECT count(*) FROM information_schema.ins_
 // whatever the pipeline waits for is the host's, not the backup's, and a
 // drill has no business depending on it.
 //
+// The name the server binds to has to resolve before any of that, and an
+// image can carry one that means nothing here: 3.3.5.8 ships
+// `fqdn buildkitsandbox` — the hostname of the machine that built the
+// image — where 3.3.6.13 ships `localhost` (both measured). Under a
+// zero-ingress sandbox that name resolves to nothing and the engine
+// refuses to start, in its own words:
+//
+//	failed to get ip from fqdn:buildkitsandbox since Resource temporarily
+//	unavailable, dnode can not be initialized
+//	failed to start since read config error
+//
+// So the engine is pinned to loopback for the drill, which is where a
+// sandbox with no network and no published ports can serve anyway.
+// Measured from both sides with that name made unresolvable: a plain
+// start fails as above, and the same start with the two variables below
+// serves. They travel to the native client too — taos and taosdump reach
+// the server through the configured endpoint, not through the HTTP one.
+//
 // taosd first, then the HTTP endpoint that every check speaks to: the
 // second connects to the first, and starting them the other way round
 // only makes it retry.
+const engineEnv = `export TAOS_FQDN=localhost TAOS_FIRST_EP=localhost:6030
+`
+
 const startScript = `set -u
-nohup taosd >/tmp/probavi-taosd.log 2>&1 &
+` + engineEnv + `
+(nohup taosd >/tmp/probavi-taosd.log 2>&1 &)
 for i in $(seq 1 40); do
   taos -s "show databases;" >/dev/null 2>&1 && break
   sleep 0.5
 done
-nohup taosadapter >/tmp/probavi-taosadapter.log 2>&1 &
+(nohup taosadapter >/tmp/probavi-taosadapter.log 2>&1 &)
 echo started`
 
-// runningScript answers whether the engine is already up — 1 when the
-// server process is there, 0 when the sandbox is idle. A sandbox whose
-// entrypoint did finish is left alone rather than started twice.
-const runningScript = `ps -eo comm 2>/dev/null | grep -qx taosd && echo 1 || echo 0`
+// stopScript clears whatever the image left running, so the engine starts
+// on the adapter's own terms.
+//
+// A process is not evidence of a working engine, which is the mistake
+// this exists to avoid: the image's entrypoint starts a taosd of its own,
+// and where the configured name does not resolve that taosd is alive for
+// a moment and doomed. An adapter that saw it and stood back waited three
+// minutes for a server that was already dying (measured).
+const stopScript = `pkill -x taosd 2>/dev/null; pkill -x taosadapter 2>/dev/null; sleep 1; echo stopped`
 
 // startupErrorScript surfaces what the engine said when it never came up.
 // The server and the HTTP endpoint are two processes with two logs, and a
@@ -109,6 +136,7 @@ find "$1" -maxdepth 3 -name dbs.sql -printf '%h\n' |
 // So the script reports the tool's own words and the caller judges them
 // against what the artifact says it holds.
 const restoreScript = `set -u
+` + engineEnv + `
 taosdump -i "$1" 2>&1`
 
 // databaseScript answers whether the restored database exists and how

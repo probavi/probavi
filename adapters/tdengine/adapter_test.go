@@ -147,8 +147,8 @@ func step(t *testing.T, call verbCall) string {
 	switch {
 	case strings.Contains(script, "taosdump -i"):
 		return "restore"
-	case strings.Contains(script, "grep -qx taosd"):
-		return "running"
+	case strings.Contains(script, "pkill -x taosd"):
+		return "stop"
 	case strings.Contains(script, "nohup taosd"):
 		return "start"
 	case strings.Contains(script, "tar -xf"):
@@ -265,9 +265,8 @@ func happyHandler(t *testing.T, seen *[]string) func(verbCall) (any, *protoError
 		name := step(t, call)
 		*seen = append(*seen, name)
 		switch name {
-		case "running":
-			// An idle sandbox: the adapter starts the engine itself.
-			return outExec("0"), nil
+		case "stop":
+			return outExec("stopped"), nil
 		case "start":
 			return outExec("started"), nil
 		case "ready":
@@ -324,7 +323,7 @@ func TestProvisionHappyPath(t *testing.T) {
 	if !f.OK {
 		t.Fatalf("final = %+v", f)
 	}
-	want := []string{"running", "start", "ready", "put_file", "restore", "tables"}
+	want := []string{"ready", "put_file", "restore", "tables"}
 	if strings.Join(seen, ",") != strings.Join(want, ",") {
 		t.Errorf("steps = %v, want %v", seen, want)
 	}
@@ -358,19 +357,45 @@ func TestProvisionHappyPath(t *testing.T) {
 	}
 }
 
-// TestASandboxThatStartedTheEngineIsLeftAlone pins the other half of the
-// start: the drill config asks for an idle sandbox because the image's
-// entrypoint does not always finish, but one that did finish has a
-// running engine, and starting a second one would be the adapter fighting
-// its own sandbox.
-func TestASandboxThatStartedTheEngineIsLeftAlone(t *testing.T) {
+// TestAnEngineThatIsAlreadyServingIsLeftAlone pins one half of the start:
+// a sandbox whose engine answers is not restarted, because readiness is
+// what the drill needs and who provided it does not matter.
+func TestAnEngineThatIsAlreadyServingIsLeftAlone(t *testing.T) {
+	dump := writeDump(t, dumpOptions{nested: true, startedAgo: time.Hour})
+	var seen []string
+	line, _, exit := driveOp(t, "provision", provisionPayload(dump, ""), happyHandler(t, &seen))
+	if exit != 0 {
+		t.Fatalf("exit = %d", exit)
+	}
+	if f := parseFinal(t, line); !f.OK {
+		t.Fatalf("final = %+v", f)
+	}
+	for _, s := range seen {
+		if s == "start" || s == "stop" {
+			t.Errorf("the adapter restarted an engine that was already serving: %v", seen)
+		}
+	}
+}
+
+// TestAnEngineThatNeverCameUpIsStarted pins the other half, which is the
+// normal path: the image's entrypoint did not leave a working engine, so
+// after a short grace the adapter clears whatever is there and starts one
+// itself. A process check would have stood back here — the entrypoint's
+// own taosd can be alive and already dying (scripts.go).
+func TestAnEngineThatNeverCameUpIsStarted(t *testing.T) {
 	dump := writeDump(t, dumpOptions{nested: true, startedAgo: time.Hour})
 	var seen []string
 	handler := happyHandler(t, &seen)
+	polls := 0
 	line, _, exit := driveOp(t, "provision", provisionPayload(dump, ""),
 		func(call verbCall) (any, *protoError) {
-			if call.Verb == "exec" && step(t, call) == "running" {
-				return outExec("1"), nil
+			if call.Verb == "exec" && step(t, call) == "ready" {
+				polls++
+				if polls < 12 {
+					// The engine answers, and no node is ready: what a
+					// doomed taosd looks like from the outside.
+					return outExec("0"), nil
+				}
 			}
 			return handler(call)
 		})
@@ -380,10 +405,13 @@ func TestASandboxThatStartedTheEngineIsLeftAlone(t *testing.T) {
 	if f := parseFinal(t, line); !f.OK {
 		t.Fatalf("final = %+v", f)
 	}
+	var stopped, started bool
 	for _, s := range seen {
-		if s == "start" {
-			t.Errorf("the adapter started an engine that was already running: %v", seen)
-		}
+		stopped = stopped || s == "stop"
+		started = started || s == "start"
+	}
+	if !stopped || !started {
+		t.Errorf("steps = %v, want the adapter to clear the sandbox and start the engine", seen)
 	}
 }
 

@@ -50,14 +50,21 @@ always called out explicitly.
   is outside the window before the restore starts, and restoring an empty
   database would be the green this project exists to prevent.
 
-  Sandbox notes, all measured, and the first two were CI's corrections
-  rather than the measurement day's: **the sandbox starts idle and the
-  adapter starts the engine**, because the image's own entrypoint does not
-  always finish — on CI's runners, twice, on both images, the container's
+  Sandbox notes, all measured, and the first three were CI's corrections
+  rather than the measurement day's: **the engine is pinned to loopback**,
+  because an image can carry a name that resolves to nothing in a sandbox
+  — 3.3.5.8 ships `fqdn buildkitsandbox`, the hostname of the machine that
+  built it, and the engine refuses to start on it with "failed to get ip
+  from fqdn … dnode can not be initialized"; **the sandbox starts idle and
+  the adapter starts the engine**, because the image's own entrypoint does
+  not always finish — on CI's runners, twice, on both images, the container's
   trace stopped where the entrypoint reads its data directory, with only
   that config-dump process alive, while the same image serves in 0.6 s on
-  a development machine. And **readiness is a node the cluster calls
-  ready**, not a query that answers: `SHOW DATABASES` answers and
+  a development machine. And **readiness decides, never the presence of a
+  process** — the entrypoint's own taosd can be alive and already dying,
+  and an adapter that stood back for it waited three minutes for a server
+  that was never coming — where readiness itself is **a node the cluster
+  calls ready**, not a query that answers: `SHOW DATABASES` answers and
   `SERVER_STATUS()` reads 1 at t+338 ms while `CREATE DATABASE` — the
   first thing a restore does — still fails with "Out of dnodes", and the
   node reports ready at t+1006 ms, exactly when the create succeeds. The
