@@ -208,12 +208,9 @@ func startupDiagnosis(ctx context.Context, c *core) string {
 	return " — the sandbox said: " + strings.ReplaceAll(said, "\n", " | ")
 }
 
-// startEngine clears whatever the image left running and starts the
-// server and its HTTP endpoint on the adapter's own terms.
+// startEngine starts the server and its HTTP endpoint on the adapter's
+// own terms. It kills nothing first, and scripts.go says why.
 func startEngine(ctx context.Context, c *core) *protoError {
-	if _, _, _, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", stopScript}, TimeoutSeconds: 30}); perr != nil {
-		return perr
-	}
 	start, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", startScript}, TimeoutSeconds: 120})
 	if perr != nil {
 		return perr

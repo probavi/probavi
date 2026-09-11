@@ -335,8 +335,7 @@ func awaitServing(t *testing.T, ctx context.Context, sbx *docker.Sandbox) {
 	// pinned to loopback because an image can carry a name that resolves
 	// to nothing in a zero-ingress sandbox (scripts.go).
 	if _, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"bash", "-c",
-		`pkill -x taosd 2>/dev/null; pkill -x taosadapter 2>/dev/null; sleep 1
-		 export TAOS_FQDN=localhost TAOS_FIRST_EP=localhost:6030
+		`export TAOS_FQDN=localhost TAOS_FIRST_EP=localhost:6030
 		 (nohup taosd >/tmp/seed-taosd.log 2>&1 &)
 		 for i in $(seq 1 40); do taos -s "show databases;" >/dev/null 2>&1 && break; sleep 0.5; done
 		 (nohup taosadapter >/tmp/seed-taosadapter.log 2>&1 &)
@@ -381,7 +380,8 @@ func sandboxDiagnosis(t *testing.T, ctx context.Context, sbx *docker.Sandbox) st
 		parts = append(parts, "inside: "+strings.TrimSpace(string(res.Stdout)))
 	}
 	if len(parts) == 0 {
-		return "(the sandbox said nothing)"
+		return "the sandbox answered nothing at all — its container is gone, which is a failure of the " +
+			"sandbox rather than of the engine"
 	}
 	return strings.Join(parts, " || ")
 }

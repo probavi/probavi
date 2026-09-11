@@ -147,8 +147,6 @@ func step(t *testing.T, call verbCall) string {
 	switch {
 	case strings.Contains(script, "taosdump -i"):
 		return "restore"
-	case strings.Contains(script, "pkill -x taosd"):
-		return "stop"
 	case strings.Contains(script, "nohup taosd"):
 		return "start"
 	case strings.Contains(script, "tar -xf"):
@@ -265,8 +263,6 @@ func happyHandler(t *testing.T, seen *[]string) func(verbCall) (any, *protoError
 		name := step(t, call)
 		*seen = append(*seen, name)
 		switch name {
-		case "stop":
-			return outExec("stopped"), nil
 		case "start":
 			return outExec("started"), nil
 		case "ready":
@@ -371,7 +367,7 @@ func TestAnEngineThatIsAlreadyServingIsLeftAlone(t *testing.T) {
 		t.Fatalf("final = %+v", f)
 	}
 	for _, s := range seen {
-		if s == "start" || s == "stop" {
+		if s == "start" {
 			t.Errorf("the adapter restarted an engine that was already serving: %v", seen)
 		}
 	}
@@ -405,13 +401,12 @@ func TestAnEngineThatNeverCameUpIsStarted(t *testing.T) {
 	if f := parseFinal(t, line); !f.OK {
 		t.Fatalf("final = %+v", f)
 	}
-	var stopped, started bool
+	started := false
 	for _, s := range seen {
-		stopped = stopped || s == "stop"
 		started = started || s == "start"
 	}
-	if !stopped || !started {
-		t.Errorf("steps = %v, want the adapter to clear the sandbox and start the engine", seen)
+	if !started {
+		t.Errorf("steps = %v, want the adapter to start the engine", seen)
 	}
 }
 

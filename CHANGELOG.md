@@ -63,8 +63,12 @@ always called out explicitly.
   a development machine. And **readiness decides, never the presence of a
   process** — the entrypoint's own taosd can be alive and already dying,
   and an adapter that stood back for it waited three minutes for a server
-  that was never coming — where readiness itself is **a node the cluster
-  calls ready**, not a query that answers: `SHOW DATABASES` answers and
+  that was never coming. Nothing is killed to make room for the one this
+  adapter starts, either: clearing the sandbox first took the container
+  down with it, because the entrypoint is the first process on some hosts
+  and the taosd it spawned is its child (measured, and worse than the
+  problem it was fixing). Readiness itself is **a node the cluster calls
+  ready**, not a query that answers: `SHOW DATABASES` answers and
   `SERVER_STATUS()` reads 1 at t+338 ms while `CREATE DATABASE` — the
   first thing a restore does — still fails with "Out of dnodes", and the
   node reports ready at t+1006 ms, exactly when the create succeeds. The

@@ -94,15 +94,17 @@ done
 (nohup taosadapter >/tmp/probavi-taosadapter.log 2>&1 &)
 echo started`
 
-// stopScript clears whatever the image left running, so the engine starts
-// on the adapter's own terms.
+// Nothing is killed before that start, deliberately. The obvious move —
+// clear whatever the image left running — took the sandbox down with it:
+// the entrypoint is the container's first process on some hosts, so a
+// taosd it spawned is its child, and killing the child ended the
+// container. The drill then failed against a sandbox that no longer
+// existed, which is worse than the problem it was fixing (measured).
 //
-// A process is not evidence of a working engine, which is the mistake
-// this exists to avoid: the image's entrypoint starts a taosd of its own,
-// and where the configured name does not resolve that taosd is alive for
-// a moment and doomed. An adapter that saw it and stood back waited three
-// minutes for a server that was already dying (measured).
-const stopScript = `pkill -x taosd 2>/dev/null; pkill -x taosadapter 2>/dev/null; sleep 1; echo stopped`
+// It is not needed either. Where the image's own taosd cannot start it
+// exits on its own — that is the failure this adapter is working around —
+// so by the time the grace has passed there is nothing holding the data
+// directory, and the engine this adapter starts takes it.
 
 // startupErrorScript surfaces what the engine said when it never came up.
 // The server and the HTTP endpoint are two processes with two logs, and a
