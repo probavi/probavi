@@ -11,6 +11,55 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **TDengine is the twenty-eighth engine** (`adapters/tdengine` 0.1.0),
+  restoring what `taosdump` writes — one output directory, the newest of a
+  directory of them, or a tar archive of one.
+
+  **The tool's exit code is 0 in every case worth telling apart**, and
+  that is what shaped the adapter. Measured on 3.3.6.13: a whole restore
+  prints `OK: 250 row(s) dumped in!`; a backup with one truncated avro
+  file prints `OK: 125 row(s) dumped in!` *and* `ERROR: 1 failures
+  occurred to dump in!`; pointed at the directory `-o` was given it
+  restores nothing and creates no database; asked before the server is
+  ready it prints `Retry to connect` and stops. All four exit 0.
+
+  So the verdict is what the tool said, held against what the artifact
+  claims: the dump's own `# total row count:` has to match the rows the
+  restore reports, a failure line is a corrupt backup, and a run that said
+  nothing about restoring rows is a restore that did not happen. Output
+  carrying none of taosdump's own markers is left alone — the conformance
+  suite's simulated sandbox answers every command with a stand-in, and
+  judging that would refuse a drill on the strength of nothing — with the
+  engine-facing gate still required to find tables.
+
+  **The outer directory resolves to the payload**, by the `CREATE
+  DATABASE` line rather than by a directory name, so a drill may name
+  either level; an outer directory holding several dumps is refused rather
+  than guessed at. An archive is read host-side in one streaming pass, so
+  it says the same things about itself a directory does.
+
+  Issue #166 is the **fence** shape. TDengine's retention is `KEEP`,
+  enforced on write — a row outside the window is refused with `Timestamp
+  data out of range` (measured, error 1547) — and it travels inside the
+  backup, because taosdump writes the operator's own `CREATE DATABASE`
+  line. There is nothing to suspend and nothing that may be widened
+  without rewriting what a check is entitled to read, so a dump older than
+  its own `KEEP` is refused up front, naming both numbers: every row in it
+  is outside the window before the restore starts, and restoring an empty
+  database would be the green this project exists to prevent.
+
+  Sandbox notes, all measured: no command override, because the image
+  starts the server and the adapter restores into it; the wait is for the
+  REST endpoint, which comes up about 1.9 s after the native client and is
+  the path every check takes; the restore runs at 256 MiB; and
+  `dump_result.txt` lands in the directory taosdump runs in rather than
+  the one `-o` names, which is why the README's example changes directory
+  first — that file is how a dump dates itself. Conformance 15/15,
+  verified against 3.3.6.13 and 3.3.5.8, and a 3.3.6.13 artifact restores
+  into 3.3.5.8.
+
 ## [0.27.0] - 2026-09-11
 
 ### Added

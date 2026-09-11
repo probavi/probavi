@@ -1152,6 +1152,50 @@
       "docs": "adapters/sqlite/README.md"
     },
     {
+      "id": "tdengine",
+      "name": "TDengine",
+      "status": "experimental",
+      "since": null,
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "tdengine",
+        "name": "TDengine"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "3.3.6.13",
+          "image": "tdengine/tdengine:3.3.6.13"
+        },
+        {
+          "engine_version": "3.3.5.8",
+          "image": "tdengine/tdengine:3.3.5.8"
+        }
+      ],
+      "sources": [
+        {
+          "id": "taosdump",
+          "name": "One `taosdump` output directory, named at either level",
+          "pitr": false
+        },
+        {
+          "id": "taosdump_dir",
+          "name": "A directory of them; the newest by the dumps' own recorded instant is restored",
+          "pitr": false
+        },
+        {
+          "id": "taosdump_tar",
+          "name": "One tar archive of a taosdump output directory",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/tdengine/README.md"
+    },
+    {
       "id": "valkey",
       "name": "Valkey",
       "status": "experimental",
