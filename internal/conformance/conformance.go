@@ -52,6 +52,13 @@ type Options struct {
 	SourceKind string
 	// SourceParams pass through as source.params for checks 8–10.
 	SourceParams map[string]string
+	// SourcePath is the artifact checks 9–10 provision from. Default: a
+	// temporary file the suite generates, which suits an adapter whose
+	// artifact is one file and cannot suit one whose artifact is a
+	// directory — QuestDB's is the server's whole data root, and refusing
+	// a file for it is correct behaviour rather than a conformance
+	// failure. A path given here is used as it stands and never removed.
+	SourcePath string
 	// Grace is the §2.4 SIGTERM→SIGKILL period for check 14; default 10s.
 	Grace time.Duration
 }
@@ -299,12 +306,12 @@ func (s *suite) checkProvisionErrors() {
 
 // checkProvisionHappyPath covers checks 9–10.
 func (s *suite) checkProvisionHappyPath() {
-	source, err := tempSource()
+	source, cleanup, err := s.source()
 	if err != nil {
 		s.err = err
 		return
 	}
-	defer os.Remove(source) //nolint:errcheck // temp file, best effort
+	defer cleanup()
 
 	res := s.driveOp("provision", s.provisionPayload(s.sourceKind(), source), driveSpec{})
 	pr := &provisionResult{}
@@ -428,12 +435,12 @@ func (s *suite) checkTeardown() {
 
 // checkSigterm covers check 14.
 func (s *suite) checkSigterm() {
-	source, err := tempSource()
+	source, cleanup, err := s.source()
 	if err != nil {
 		s.err = err
 		return
 	}
-	defer os.Remove(source) //nolint:errcheck // temp file, best effort
+	defer cleanup()
 
 	res := s.driveOp("provision", s.provisionPayload(s.sourceKind(), source),
 		driveSpec{sigterm: true, grace: s.opts.Grace})
@@ -489,6 +496,22 @@ func (s *suite) provisionPayload(kind, path string) map[string]any {
 }
 
 // tempSource creates the generated backup-source file of §10 checks 9–10.
+// source returns the artifact to provision from and how to release it:
+// the caller's own path when Options names one, and otherwise a temporary
+// file the suite made and must delete.
+func (s *suite) source() (string, func(), error) {
+	if s.opts.SourcePath != "" {
+		return s.opts.SourcePath, func() {}, nil
+	}
+	path, err := tempSource()
+	if err != nil {
+		return "", func() {}, err
+	}
+	// Removing the temporary file is best effort: it lives in the
+	// system's temp directory and its fate changes no verdict.
+	return path, func() { os.Remove(path) }, nil //nolint:errcheck,gosec // best effort
+}
+
 func tempSource() (string, error) {
 	f, err := os.CreateTemp("", "probavi-conformance-source-*")
 	if err != nil {

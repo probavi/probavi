@@ -955,6 +955,50 @@
       "docs": "adapters/qdrant/README.md"
     },
     {
+      "id": "questdb",
+      "name": "QuestDB",
+      "status": "experimental",
+      "since": null,
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "questdb",
+        "name": "QuestDB"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "10.0.1",
+          "image": "questdb/questdb:10.0.1"
+        },
+        {
+          "engine_version": "9.4.3",
+          "image": "questdb/questdb:9.4.3"
+        }
+      ],
+      "sources": [
+        {
+          "id": "questdb_checkpoint",
+          "name": "One data root copied while `CHECKPOINT CREATE` was in force",
+          "pitr": false
+        },
+        {
+          "id": "questdb_checkpoint_dir",
+          "name": "A directory of them; the newest by file time is restored",
+          "pitr": false
+        },
+        {
+          "id": "questdb_data",
+          "name": "One data root copied with no checkpoint held — the copy makes no consistency claim",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/questdb/README.md"
+    },
+    {
       "id": "redis",
       "name": "Redis",
       "status": "experimental",

@@ -4,6 +4,7 @@ package conformance
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -45,7 +46,16 @@ func TestInRepoAdaptersAreConformant(t *testing.T) {
 				dir).CombinedOutput(); berr != nil {
 				t.Fatalf("build adapter: %v: %s", berr, out)
 			}
-			report, rerr := Run(ctx, bin, Options{})
+			// An adapter whose artifact is a directory cannot be driven
+			// with the temporary file the suite generates, so it commits
+			// the smallest artifact its host-side pass accepts and the
+			// suite provisions from that.
+			opts := Options{}
+			fixture := filepath.Join(dir, "testdata", "conformance-source")
+			if _, ferr := os.Stat(fixture); ferr == nil {
+				opts.SourcePath = fixture
+			}
+			report, rerr := Run(ctx, bin, opts)
 			if rerr != nil {
 				t.Fatalf("Run: %v", rerr)
 			}
