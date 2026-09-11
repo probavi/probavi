@@ -59,6 +59,17 @@ always called out explicitly.
   first — that file is how a dump dates itself. Conformance 15/15,
   verified against 3.3.6.13 and 3.3.5.8, and a 3.3.6.13 artifact restores
   into 3.3.5.8.
+### Fixed
+
+- **Every name in `SHA256SUMS` is written the same way.** The release
+  globbed the Gentoo ebuild as `./*.ebuild`, and `sha256sum` echoes the
+  argument it was given, so one line of v0.27.0's 282 read
+  `./probavi-0.27.0.ebuild` while the other 281 carried no prefix.
+  Verification was never affected — `sha256sum -c` resolves both spellings
+  to the same file, measured against the published release — but a
+  checksum file is read by people and by strict tooling, and one line
+  spelled differently from the rest is a question nobody should have to
+  answer.
 
 ## [0.27.0] - 2026-09-11
 
