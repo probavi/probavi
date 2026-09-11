@@ -50,10 +50,18 @@ always called out explicitly.
   is outside the window before the restore starts, and restoring an empty
   database would be the green this project exists to prevent.
 
-  Sandbox notes, all measured: no command override, because the image
-  starts the server and the adapter restores into it; the wait is for the
-  REST endpoint, which comes up about 1.9 s after the native client and is
-  the path every check takes; the restore runs at 256 MiB; and
+  Sandbox notes, all measured, and the first two were CI's corrections
+  rather than the measurement day's: **the sandbox starts idle and the
+  adapter starts the engine**, because the image's own entrypoint does not
+  always finish — on CI's runners, twice, on both images, the container's
+  trace stopped where the entrypoint reads its data directory, with only
+  that config-dump process alive, while the same image serves in 0.6 s on
+  a development machine. And **readiness is a node the cluster calls
+  ready**, not a query that answers: `SHOW DATABASES` answers and
+  `SERVER_STATUS()` reads 1 at t+338 ms while `CREATE DATABASE` — the
+  first thing a restore does — still fails with "Out of dnodes", and the
+  node reports ready at t+1006 ms, exactly when the create succeeds. The
+  restore runs at 256 MiB; and
   `dump_result.txt` lands in the directory taosdump runs in rather than
   the one `-o` names, which is why the README's example changes directory
   first — that file is how a dump dates itself. Conformance 15/15,

@@ -147,11 +147,15 @@ func step(t *testing.T, call verbCall) string {
 	switch {
 	case strings.Contains(script, "taosdump -i"):
 		return "restore"
+	case strings.Contains(script, "grep -qx taosd"):
+		return "running"
+	case strings.Contains(script, "nohup taosd"):
+		return "start"
 	case strings.Contains(script, "tar -xf"):
 		return "extract"
 	case strings.Contains(script, "ins_tables"):
 		return "tables"
-	case strings.Contains(script, "SHOW DATABASES"):
+	case strings.Contains(script, "ins_dnodes"):
 		return "ready"
 	default:
 		return "unknown:" + script
@@ -261,8 +265,13 @@ func happyHandler(t *testing.T, seen *[]string) func(verbCall) (any, *protoError
 		name := step(t, call)
 		*seen = append(*seen, name)
 		switch name {
+		case "running":
+			// An idle sandbox: the adapter starts the engine itself.
+			return outExec("0"), nil
+		case "start":
+			return outExec("started"), nil
 		case "ready":
-			return okExec(0), nil
+			return outExec("1"), nil
 		case "extract":
 			return outExec(stagingDir + "/unpacked/taosdump.1"), nil
 		case "restore":
@@ -315,7 +324,7 @@ func TestProvisionHappyPath(t *testing.T) {
 	if !f.OK {
 		t.Fatalf("final = %+v", f)
 	}
-	want := []string{"ready", "put_file", "restore", "tables"}
+	want := []string{"running", "start", "ready", "put_file", "restore", "tables"}
 	if strings.Join(seen, ",") != strings.Join(want, ",") {
 		t.Errorf("steps = %v, want %v", seen, want)
 	}
@@ -346,6 +355,35 @@ func TestProvisionHappyPath(t *testing.T) {
 	}
 	if payload.State.Database != "drill" {
 		t.Errorf("state.database = %q", payload.State.Database)
+	}
+}
+
+// TestASandboxThatStartedTheEngineIsLeftAlone pins the other half of the
+// start: the drill config asks for an idle sandbox because the image's
+// entrypoint does not always finish, but one that did finish has a
+// running engine, and starting a second one would be the adapter fighting
+// its own sandbox.
+func TestASandboxThatStartedTheEngineIsLeftAlone(t *testing.T) {
+	dump := writeDump(t, dumpOptions{nested: true, startedAgo: time.Hour})
+	var seen []string
+	handler := happyHandler(t, &seen)
+	line, _, exit := driveOp(t, "provision", provisionPayload(dump, ""),
+		func(call verbCall) (any, *protoError) {
+			if call.Verb == "exec" && step(t, call) == "running" {
+				return outExec("1"), nil
+			}
+			return handler(call)
+		})
+	if exit != 0 {
+		t.Fatalf("exit = %d", exit)
+	}
+	if f := parseFinal(t, line); !f.OK {
+		t.Fatalf("final = %+v", f)
+	}
+	for _, s := range seen {
+		if s == "start" {
+			t.Errorf("the adapter started an engine that was already running: %v", seen)
+		}
 	}
 }
 
@@ -540,16 +578,23 @@ func TestWellFormedZeroIsRefused(t *testing.T) {
 
 func TestHealthcheck(t *testing.T) {
 	for name, tc := range map[string]struct {
-		exit    int
+		answer  any
 		healthy bool
-	}{"the server answers": {0, true}, "the server stopped": {7, false}} {
+	}{
+		"a node the cluster calls ready": {outExec("1"), true},
+		"the engine stopped":             {okExec(7), false},
+		// The engine answers, and says no node is ready: the state the
+		// restore would fail in, and the one a healthcheck must not call
+		// healthy (measured: "Out of dnodes" while queries still answer).
+		"no ready node": {outExec("0"), false},
+	} {
 		t.Run(name, func(t *testing.T) {
 			line, _, exit := driveOp(t, "healthcheck", `{"state":{"database":"drill"}}`,
 				func(call verbCall) (any, *protoError) {
 					if step(t, call) != "ready" {
-						t.Errorf("healthcheck ran %q, want the query the checks run", name)
+						t.Errorf("healthcheck ran %q, want the readiness the drill waited for", name)
 					}
-					return okExec(tc.exit), nil
+					return tc.answer, nil
 				})
 			if exit != 0 {
 				t.Fatalf("exit = %d", exit)

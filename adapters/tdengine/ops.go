@@ -147,15 +147,24 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	}, nil
 }
 
-// awaitReady waits for the endpoint the checks will use.
+// awaitReady starts the engine when the sandbox is idle, and waits for
+// the endpoint the checks will use.
+//
+// The drill config asks for an idle sandbox (`command: sleep infinity`)
+// because the image's own entrypoint does not always finish (scripts.go).
+// A sandbox that started the engine anyway is left alone: the engine is
+// what matters, not who started it.
 func awaitReady(ctx context.Context, c *core) (float64, *protoError) {
 	begin := time.Now()
+	if perr := startEngineIfIdle(ctx, c); perr != nil {
+		return 0, perr
+	}
 	for {
-		val, _, _, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", readyScript}, TimeoutSeconds: 10})
+		val, stdout, _, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", readyScript}, TimeoutSeconds: 10})
 		if perr != nil {
 			return 0, perr
 		}
-		if val.ExitCode == 0 {
+		if val.ExitCode == 0 && ready(stdout) {
 			return time.Since(begin).Seconds(), nil
 		}
 		if time.Since(begin) > readinessBudget {
@@ -186,6 +195,26 @@ func startupDiagnosis(ctx context.Context, c *core) string {
 		return ""
 	}
 	return " — the sandbox said: " + strings.ReplaceAll(said, "\n", " | ")
+}
+
+// startEngineIfIdle starts the server and its HTTP endpoint when nothing
+// is running them yet.
+func startEngineIfIdle(ctx context.Context, c *core) *protoError {
+	val, stdout, _, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", runningScript}})
+	if perr != nil {
+		return perr
+	}
+	if val.ExitCode == 0 && strings.TrimSpace(string(stdout)) == "1" {
+		return nil
+	}
+	start, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", startScript}, TimeoutSeconds: 120})
+	if perr != nil {
+		return perr
+	}
+	if start.ExitCode != 0 {
+		return protoErr("engine_not_ready", false, "start the engine: %s", firstLine(stderr))
+	}
+	return nil
 }
 
 // extractArchive unpacks a tar artifact and reports the directory the
@@ -272,18 +301,25 @@ func opHealthcheck(ctx context.Context, c *core, payload json.RawMessage) (any, 
 	if err := json.Unmarshal(payload, req); err != nil {
 		return nil, protoErr("invalid_request", false, "malformed healthcheck payload")
 	}
-	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", readyScript}, TimeoutSeconds: 10})
+	val, stdout, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", readyScript}, TimeoutSeconds: 10})
 	if perr != nil {
 		return nil, perr
 	}
-	if val.ExitCode != 0 {
+	if val.ExitCode != 0 || !ready(stdout) {
 		detail := firstLine(stderr)
 		if detail == "" {
-			detail = "the server did not answer a query"
+			detail = "the engine reports no ready node"
 		}
 		return map[string]any{"healthy": false, "detail": detail}, nil
 	}
 	return map[string]any{"healthy": true}, nil
+}
+
+// ready reads the readiness answer: the number of nodes the cluster says
+// are ready, of which a sandbox has exactly one when it can work.
+func ready(stdout []byte) bool {
+	n, err := strconv.Atoi(strings.TrimSpace(string(stdout)))
+	return err == nil && n >= 1
 }
 
 // firstLine is the first non-empty line of engine output, trimmed.

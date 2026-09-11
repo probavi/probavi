@@ -109,22 +109,53 @@ checks:
 
 ## Sandbox
 
-No command override: the official image starts the server itself, and this
-adapter restores into it.
+The sandbox starts idle and the adapter starts the engine:
 
 ```yaml
 sandbox:
   provider: docker
   params:
     image: tdengine/tdengine:3.3.6.13
+    command: sleep infinity     # required: the adapter starts the engine
     memory: 1g
   timeout: 30m
 ```
 
-The restore runs at **256 MiB** (measured). The adapter waits for the REST
-endpoint rather than the native client, because that is the path every
-check takes and it comes up about 1.9 seconds later (measured: the client
-answered 0.6 s after the container started).
+**The image's own entrypoint does not always finish.** Measured on both
+verified images, on CI's runners, twice: the container's trace stops at
+the line where the entrypoint reads its data directory —
+
+```
+++ taosd -C
+++ grep -E 'dataDir\s+(\S+)' -o
+++ head -n1
+```
+
+— with only that config-dump process alive, and nothing else ever starts.
+The same image serves in 0.6 s on a development machine, so whatever that
+pipeline waits for belongs to the host rather than to the backup, and a
+drill has no business depending on which host it landed on. The adapter
+therefore starts `taosd` and then `taosadapter` itself. A sandbox whose
+entrypoint did finish is left alone: the engine is what matters, not who
+started it.
+
+The restore runs at **256 MiB** (measured).
+
+### Readiness is a node the cluster calls ready
+
+Not a query that answers. Measured on a freshly started engine:
+
+| | t+338 ms | t+1006 ms |
+| --- | --- | --- |
+| `SHOW DATABASES` | answers | answers |
+| `SELECT SERVER_STATUS()` | `1` | `1` |
+| nodes reporting `ready` | **0** | **1** |
+| `CREATE DATABASE` — what a restore does first | **error 820, "Out of dnodes"** | succeeds |
+
+So the gate reads `information_schema.ins_dnodes`, and the healthcheck
+reads the same thing: an engine that answers while no node is ready is
+one a restore would fail against, and calling that healthy would be a
+drill reporting on a server that cannot work.
 
 ## Environment
 

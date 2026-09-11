@@ -37,11 +37,12 @@ func verifiedImage(t *testing.T) string {
 	return image
 }
 
-// sandboxParams are the documented drill-config sandbox params. There is
-// no command override: the image starts the server itself, and this
-// adapter restores into it.
+// sandboxParams are the documented drill-config sandbox params: idle, so
+// the adapter starts the engine itself. The image's own entrypoint does
+// not always finish (scripts.go), and a drill has no business depending
+// on which host it is running on.
 func sandboxParams(t *testing.T) map[string]string {
-	return map[string]string{"image": verifiedImage(t), "memory": "1g"}
+	return map[string]string{"image": verifiedImage(t), "command": "sleep infinity", "memory": "1g"}
 }
 
 const (
@@ -320,13 +321,25 @@ func runnerScriptForTest(t *testing.T) string {
 	return probe.Payload.SQLRunner.Argv[2]
 }
 
-// awaitServing waits for the endpoint the checks use.
+// awaitServing starts the engine in an idle sandbox and waits for the
+// endpoint the checks use — what the adapter does, done here for the seed
+// server the suite fills by hand.
 func awaitServing(t *testing.T, ctx context.Context, sbx *docker.Sandbox) {
 	t.Helper()
+	if _, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"bash", "-c",
+		`nohup taosd >/tmp/seed-taosd.log 2>&1 &
+		 for i in $(seq 1 40); do taos -s "show databases;" >/dev/null 2>&1 && break; sleep 0.5; done
+		 nohup taosadapter >/tmp/seed-taosadapter.log 2>&1 &
+		 echo started`}}); err != nil {
+		t.Fatalf("start the seed engine: %v", err)
+	}
 	deadline := time.Now().Add(3 * time.Minute)
 	for {
+		// The same signal the adapter waits for: a node the cluster calls
+		// ready, not merely a query that answers (scripts.go).
 		out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"bash", "-c",
-			`curl -sf -o /dev/null -u root:taosdata -d "SHOW DATABASES" http://127.0.0.1:6041/rest/sql`}})
+			`curl -sf -u root:taosdata -d "SELECT count(*) FROM information_schema.ins_dnodes WHERE status = 'ready'" ` +
+				`http://127.0.0.1:6041/rest/sql | grep -q '"data":\[\[[1-9]'`}})
 		if err == nil && out.ExitCode == 0 {
 			return
 		}

@@ -28,22 +28,61 @@ const (
 	archivePath = "/tmp/probavi-tdengine.tar"
 )
 
-// readyScript asks whether the REST endpoint answers a query yet.
+// readyScript answers how many of the cluster's own nodes are ready, over
+// the endpoint the checks use.
 //
-// It is deliberately the later of the two readiness signals. The native
-// client connects about 0.6 s after the container starts and the REST
-// endpoint about 1.9 s after that (measured), and REST is the path every
-// check takes — so a gate on the CLI would hand the drill a server its
-// own checks cannot reach.
-const readyScript = `curl -sf -o /dev/null -u ` + credentials +
-	` -d "SHOW DATABASES" "` + serverURL + `/rest/sql"`
+// It asks that rather than whether a query answers, because the two are
+// not the same instant and the difference is a failed restore. Measured
+// on a freshly started engine: `SHOW DATABASES` answers and
+// `SERVER_STATUS()` reads 1 at t+338 ms, while `CREATE DATABASE` — the
+// first thing any restore does — still fails with "Out of dnodes" (error
+// 820); the dnode reports itself ready at t+1006 ms, which is exactly
+// when the create succeeds. A gate on the earlier signal hands the drill
+// a server that cannot yet do the work.
+const readyScript = `set -u
+curl -sf -u ` + credentials + ` -d "SELECT count(*) FROM information_schema.ins_dnodes WHERE status = 'ready'" "` +
+	serverURL + `/rest/sql" | sed -n 's/.*"data":\[\[\([0-9]*\)\].*/\1/p'`
+
+// startScript starts the engine the image ships, and answers when its own
+// endpoint does.
+//
+// The adapter starts it rather than leaving it to the image's entrypoint,
+// because that entrypoint does not always finish. Measured on both
+// verified images, on GitHub's runners, twice: the container's trace stops
+// at the line where it reads its data directory —
+//
+//	++ taosd -C
+//	++ grep -E 'dataDir\s+(\S+)' -o
+//	++ head -n1
+//
+// — with only that config-dump process alive, and nothing else ever
+// starts. The same image starts in 0.6 s on the development machine, so
+// whatever the pipeline waits for is the host's, not the backup's, and a
+// drill has no business depending on it.
+//
+// taosd first, then the HTTP endpoint that every check speaks to: the
+// second connects to the first, and starting them the other way round
+// only makes it retry.
+const startScript = `set -u
+nohup taosd >/tmp/probavi-taosd.log 2>&1 &
+for i in $(seq 1 40); do
+  taos -s "show databases;" >/dev/null 2>&1 && break
+  sleep 0.5
+done
+nohup taosadapter >/tmp/probavi-taosadapter.log 2>&1 &
+echo started`
+
+// runningScript answers whether the engine is already up — 1 when the
+// server process is there, 0 when the sandbox is idle. A sandbox whose
+// entrypoint did finish is left alone rather than started twice.
+const runningScript = `ps -eo comm 2>/dev/null | grep -qx taosd && echo 1 || echo 0`
 
 // startupErrorScript surfaces what the engine said when it never came up.
 // The server and the HTTP endpoint are two processes with two logs, and a
 // sandbox that answers neither is a question the operator cannot chase
 // afterwards: the container is gone by the time they read the record.
 const startupErrorScript = `set -u
-for f in /var/log/taos/taosdlog.0 /var/log/taos/taosadapter_*.log; do
+for f in /var/log/taos/taosdlog.0 /var/log/taos/taosadapter_*.log /tmp/probavi-taosd.log /tmp/probavi-taosadapter.log; do
   [ -f "$f" ] || continue
   grep -iE "error|fail|cannot|refus|unable" "$f" 2>/dev/null | tail -2
 done
