@@ -3,7 +3,7 @@
   "id": "questdb",
   "name": "QuestDB",
   "status": "experimental",
-  "since": null,
+  "since": "0.27.0",
   "engine_name": "QuestDB",
   "conformance_verified": true,
   "docs": "adapters/questdb/README.md",

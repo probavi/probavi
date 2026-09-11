@@ -11,6 +11,8 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-09-11
+
 ### Added
 
 - **QuestDB is the twenty-seventh engine** (`adapters/questdb` 0.1.0),
@@ -4198,7 +4200,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/probavi/probavi/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/probavi/probavi/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/probavi/probavi/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/probavi/probavi/compare/v0.23.0...v0.24.0
