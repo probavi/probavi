@@ -14,7 +14,16 @@ always called out explicitly.
 ### Added
 
 - **The READMEs carry a row of engine badges**, one per adapter, each
-  linking to the adapter that restores that engine. Like the engine table
+  carrying that engine's logo on that brand's own colour and linking to the
+  adapter that restores it. The logo slugs and colours come from
+  simple-icons — the catalogue shields.io resolves `?logo=` against, so a
+  slug here is one it can actually draw and a colour is the one that
+  catalogue records rather than one picked by eye. Eight engines have no
+  entry there, several because the brand asked for its icon to be removed;
+  they take a neutral colour that belongs to nobody rather than a guessed
+  one. The logo colour is chosen per badge by the brightness rule
+  shields.io uses for its own text, so a white mark never lands on
+  ClickHouse yellow. Like the engine table
   below it, the row is generated from `docs/capabilities.json` rather than
   kept by hand, so it cannot name an engine the manifest does not declare
   — and it is written into every translation, because engine names and

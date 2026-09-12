@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/probavi/probavi/internal/capabilities"
@@ -48,10 +49,21 @@ const (
 	// badge here cannot report another project's state — the property
 	// internal/docs holds every badge in these files to.
 	badgeEndpoint = "https://img.shields.io/badge/"
-	// badgeColour is the one the platform badge above the block already
-	// uses. A colour per engine would have to mean something, and the
-	// manifest gives every adapter the same one.
-	badgeColour = "informational"
+	// neutralColour is the background for an engine this file has no
+	// brand colour for. It is nobody's brand: an engine without an icon
+	// should read as deliberate rather than as a badge that failed to
+	// load, and borrowing Probavi's own colours for somebody else's engine
+	// would say something neither project agreed to.
+	neutralColour = "4B5563"
+	// lightLogo and darkLogo are the two logo colours, chosen per badge by
+	// brightness. shields.io picks the *text* colour that way itself; the
+	// logo it draws in whatever colour it is handed, so a white icon on
+	// ClickHouse yellow simply disappears.
+	lightLogo = "white"
+	darkLogo  = "333333"
+	// logoBrightness is the threshold shields.io uses for its own text
+	// colour, so the logo and the words beside it always agree.
+	logoBrightness = 0.69
 	// unreleased is what the release column says for an adapter that is in
 	// the tree but has not been in a tagged release yet. The manifest
 	// carries null; a blank cell would read as an omission.
@@ -218,6 +230,54 @@ func renderTable(adapters []capabilities.Adapter) string {
 // before the extension.
 var translationRe = regexp.MustCompile(`^README\.[a-z]{2}\.md$`)
 
+// badgeStyle is how one engine is drawn: the simple-icons slug shields.io
+// resolves its logo from, and that brand's own colour.
+type badgeStyle struct{ logo, colour string }
+
+// engineBadgeStyles is presentation, which is why it lives here and not in
+// docs/capabilities.json: a logo slug and a brand colour are facts about
+// somebody else's trademark, not claims about what this repository
+// restores, and the manifest states only the latter.
+//
+// Both fields come from simple-icons, the catalogue shields.io itself
+// resolves `?logo=` against — so the slug is guaranteed to render and the
+// colour is the one that catalogue records for the brand, rather than one
+// picked by eye. Eight engines have no entry there, several because the
+// brand asked for its icon to be removed; they are listed with an empty
+// style rather than left out, so that "no logo" reads as a decision and a
+// new adapter still cannot arrive without one. The gate is in
+// main_test.go, against the committed manifest.
+var engineBadgeStyles = map[string]badgeStyle{
+	"aerospike":       {},
+	"cassandra":       {logo: "apachecassandra", colour: "1287B1"},
+	"clickhouse":      {logo: "clickhouse", colour: "FFCC01"},
+	"couchdb":         {logo: "apachecouchdb", colour: "E42528"},
+	"duckdb":          {logo: "duckdb", colour: "FFF000"},
+	"elasticsearch":   {logo: "elasticsearch", colour: "005571"},
+	"etcd":            {logo: "etcd", colour: "419EDA"},
+	"firebird":        {},
+	"h2":              {logo: "h2database", colour: "09476B"},
+	"influxdb":        {logo: "influxdb", colour: "22ADF6"},
+	"mariadb":         {logo: "mariadb", colour: "003545"},
+	"mongodb":         {logo: "mongodb", colour: "47A248"},
+	"mssql":           {},
+	"mysql":           {logo: "mysql", colour: "4479A1"},
+	"neo4j":           {logo: "neo4j", colour: "4581C3"},
+	"opensearch":      {logo: "opensearch", colour: "005EB8"},
+	"oracle":          {},
+	"postgres":        {logo: "postgresql", colour: "4169E1"},
+	"prometheus":      {logo: "prometheus", colour: "E6522C"},
+	"qdrant":          {logo: "qdrant", colour: "DC244C"},
+	"questdb":         {},
+	"redis":           {logo: "redis", colour: "FF4438"},
+	"solr":            {logo: "apachesolr", colour: "D9411E"},
+	"sqlite":          {logo: "sqlite", colour: "003B57"},
+	"tdengine":        {},
+	"valkey":          {},
+	"victoriametrics": {logo: "victoriametrics", colour: "621773"},
+	"weaviate":        {},
+}
+
 // renderBadges renders one linked badge per adapter, each carrying the
 // engine's name and pointing at the adapter that restores it.
 //
@@ -239,10 +299,54 @@ func renderBadges(adapters []capabilities.Adapter) string {
 	})
 	b := &strings.Builder{}
 	for _, a := range sorted {
-		fmt.Fprintf(b, "[![%s](%s%s-%s)](%s)\n",
-			a.Name, badgeEndpoint, badgeText(a.Name), badgeColour, adapterLink(a))
+		fmt.Fprintf(b, "[![%s](%s)](%s)\n", a.Name, badgeImage(a), adapterLink(a))
 	}
 	return b.String()
+}
+
+// badgeImage builds one shields.io static badge: the engine's name on its
+// brand colour, with its logo where one exists.
+func badgeImage(a capabilities.Adapter) string {
+	style := engineBadgeStyles[a.ID]
+	colour := style.colour
+	if colour == "" {
+		colour = neutralColour
+	}
+	url := badgeEndpoint + badgeText(a.Name) + "-" + colour
+	if style.logo == "" {
+		return url
+	}
+	return url + "?logo=" + style.logo + "&logoColor=" + logoColour(colour)
+}
+
+// logoColour picks the logo colour a background can actually show. It is
+// shields.io's own brightness rule, so the logo and the name beside it are
+// never drawn in opposite colours: white on ClickHouse yellow vanishes,
+// and dark on SQLite navy does the same.
+func logoColour(hex string) string {
+	if brightness(hex) > logoBrightness {
+		return darkLogo
+	}
+	return lightLogo
+}
+
+// brightness is the perceived brightness of a six-digit hex colour, 0 to
+// 1, by the weights shields.io uses. An unreadable value comes back 0,
+// which only means a light logo — a badge nobody can see is worse than a
+// badge drawn conservatively.
+func brightness(hex string) float64 {
+	if len(hex) != 6 {
+		return 0
+	}
+	var rgb [3]float64
+	for i := range rgb {
+		v, err := strconv.ParseUint(hex[i*2:i*2+2], 16, 8)
+		if err != nil {
+			return 0
+		}
+		rgb[i] = float64(v)
+	}
+	return (rgb[0]*299 + rgb[1]*587 + rgb[2]*114) / 1000 / 255
 }
 
 // badgeText escapes a name for shields.io's static endpoint, which reads

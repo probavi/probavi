@@ -222,7 +222,7 @@ func TestRunRewritesTheBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"# Title", "Demo Engine", "0.4.0", "`demo_dump`", "tail",
-		"[![Demo Engine](https://img.shields.io/badge/Demo%20Engine-informational)](adapters/demo/README.md)"}
+		"[![Demo Engine](https://img.shields.io/badge/Demo%20Engine-4B5563)](adapters/demo/README.md)"}
 	for _, want := range want {
 		if !strings.Contains(string(got), want) {
 			t.Errorf("README lost %q:\n%s", want, got)
@@ -398,7 +398,7 @@ func TestRunWritesTheBadgeRowIntoEveryTranslation(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	badge := "[![Demo Engine](https://img.shields.io/badge/Demo%20Engine-informational)](adapters/demo/README.md)"
+	badge := "[![Demo Engine](https://img.shields.io/badge/Demo%20Engine-4B5563)](adapters/demo/README.md)"
 	for _, name := range []string{readmeFile, "README.hu.md", "README.de.md"} {
 		got, err := os.ReadFile(filepath.Join(root, name))
 		if err != nil {
@@ -432,5 +432,91 @@ func TestRunReportsATranslationWithoutTheBadgeMarkers(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "README.fr.md") || !strings.Contains(err.Error(), badgeStartMarker) {
 		t.Errorf("err = %v, want it to name the file and the missing marker", err)
+	}
+}
+
+// TestEveryDeclaredAdapterHasABadgeStyle is the gate behind the style
+// table: the map is hand-written, so the failure to design for is an
+// adapter that ships and quietly renders as a grey pill among 20 branded
+// ones. An engine with no icon is fine — it is listed with an empty style,
+// which is a decision — but an engine nobody decided about is not.
+func TestEveryDeclaredAdapterHasABadgeStyle(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", filepath.FromSlash(capabilities.Path)))
+	if err != nil {
+		t.Fatalf("read the committed manifest: %v", err)
+	}
+	doc := &capabilities.Document{}
+	if err := json.Unmarshal(raw, doc); err != nil {
+		t.Fatalf("parse the committed manifest: %v", err)
+	}
+	if len(doc.Adapters) == 0 {
+		t.Fatal("the manifest lists no adapters — this gate would pass vacuously")
+	}
+
+	declared := make(map[string]bool, len(doc.Adapters))
+	for _, a := range doc.Adapters {
+		declared[a.ID] = true
+		if _, ok := engineBadgeStyles[a.ID]; !ok {
+			t.Errorf("adapter %s has no badge style — give it a logo and a brand colour, "+
+				"or an empty entry if simple-icons carries no icon for it", a.ID)
+		}
+	}
+	for id := range engineBadgeStyles {
+		if !declared[id] {
+			t.Errorf("badge style %q names no declared adapter", id)
+		}
+	}
+}
+
+func TestBadgeImageDrawsTheLogoInAColourTheBackgroundShows(t *testing.T) {
+	// ClickHouse yellow and SQLite navy are the two ends of the rule: a
+	// white logo vanishes on one, a dark logo on the other.
+	light, dark := demo(), demo()
+	light.ID, light.Name = "clickhouse", "ClickHouse"
+	dark.ID, dark.Name = "sqlite", "SQLite"
+
+	if got := badgeImage(light); !strings.HasSuffix(got, "logoColor="+darkLogo) {
+		t.Errorf("badge on a light brand colour = %s, want a dark logo", got)
+	}
+	if got := badgeImage(dark); !strings.HasSuffix(got, "logoColor="+lightLogo) {
+		t.Errorf("badge on a dark brand colour = %s, want a light logo", got)
+	}
+}
+
+func TestBadgeImageFallsBackToTheNeutralColour(t *testing.T) {
+	// Two ways an engine has no brand of its own here: an entry that says
+	// so, and an adapter the map has never heard of. Neither may render a
+	// `?logo=` shields.io cannot resolve — an unresolvable slug draws a
+	// blank where the icon should be.
+	for name, a := range map[string]capabilities.Adapter{
+		"an engine with no icon": func() capabilities.Adapter { a := demo(); a.ID = "oracle"; return a }(),
+		"an unknown adapter":     demo(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := badgeImage(a)
+			if !strings.HasSuffix(got, "-"+neutralColour) {
+				t.Errorf("badge = %s, want it to end on the neutral colour", got)
+			}
+			if strings.Contains(got, "logo=") {
+				t.Errorf("badge = %s, want no logo parameter", got)
+			}
+		})
+	}
+}
+
+func TestBrightnessRefusesWhatItCannotRead(t *testing.T) {
+	// A colour that cannot be parsed must not decide the logo by accident.
+	// Zero means "dark background, light logo", which is the conservative
+	// half of the choice.
+	for _, hex := range []string{"", "FFF", "ZZZZZZ", "4B5563AA"} {
+		if got := brightness(hex); got != 0 {
+			t.Errorf("brightness(%q) = %v, want 0", hex, got)
+		}
+	}
+	if got := brightness("FFFFFF"); got != 1 {
+		t.Errorf("brightness(white) = %v, want 1", got)
+	}
+	if got := brightness("000000"); got != 0 {
+		t.Errorf("brightness(black) = %v, want 0", got)
 	}
 }
