@@ -89,3 +89,15 @@ cover.out
 # weaviate adapter binary
 /weaviate
 /adapters/*/weaviate
+
+# aerospike adapter binary
+/aerospike
+/adapters/*/aerospike
+
+# questdb adapter binary
+/questdb
+/adapters/*/questdb
+
+# tdengine adapter binary
+/tdengine
+/adapters/*/tdengine

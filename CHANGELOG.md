@@ -11,6 +11,82 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **TDengine is the twenty-eighth engine** (`adapters/tdengine` 0.1.0),
+  restoring what `taosdump` writes — one output directory, the newest of a
+  directory of them, or a tar archive of one.
+
+  **The tool's exit code is 0 in every case worth telling apart**, and
+  that is what shaped the adapter. Measured on 3.3.6.13: a whole restore
+  prints `OK: 250 row(s) dumped in!`; a backup with one truncated avro
+  file prints `OK: 125 row(s) dumped in!` *and* `ERROR: 1 failures
+  occurred to dump in!`; pointed at the directory `-o` was given it
+  restores nothing and creates no database; asked before the server is
+  ready it prints `Retry to connect` and stops. All four exit 0.
+
+  So the verdict is what the tool said, held against what the artifact
+  claims: the dump's own `# total row count:` has to match the rows the
+  restore reports, a failure line is a corrupt backup, and a run that said
+  nothing about restoring rows is a restore that did not happen. Output
+  carrying none of taosdump's own markers is left alone — the conformance
+  suite's simulated sandbox answers every command with a stand-in, and
+  judging that would refuse a drill on the strength of nothing — with the
+  engine-facing gate still required to find tables.
+
+  **The outer directory resolves to the payload**, by the `CREATE
+  DATABASE` line rather than by a directory name, so a drill may name
+  either level; an outer directory holding several dumps is refused rather
+  than guessed at. An archive is read host-side in one streaming pass, so
+  it says the same things about itself a directory does.
+
+  Issue #166 is the **fence** shape. TDengine's retention is `KEEP`,
+  enforced on write — a row outside the window is refused with `Timestamp
+  data out of range` (measured, error 1547) — and it travels inside the
+  backup, because taosdump writes the operator's own `CREATE DATABASE`
+  line. There is nothing to suspend and nothing that may be widened
+  without rewriting what a check is entitled to read, so a dump older than
+  its own `KEEP` is refused up front, naming both numbers: every row in it
+  is outside the window before the restore starts, and restoring an empty
+  database would be the green this project exists to prevent.
+
+  Sandbox notes, all measured, and the first four were CI's corrections
+  rather than the measurement day's: **two names are mapped to loopback and the
+  engine is pinned to it**, because in a zero-ingress sandbox neither is
+  guaranteed to resolve: Docker writes no `/etc/hosts` line for the
+  container's own hostname, which leaves the image's entrypoint stopped at
+  `taosd -C | grep dataDir` with that process alive and never returning
+  (podman does write the line, which is why this took five rounds of CI
+  and a local Docker daemon to see); and an image can carry a configured
+  name that means nothing here — 3.3.5.8 ships `fqdn buildkitsandbox`, the
+  hostname of the machine that built it, and the engine refuses to start
+  on it with "failed to get ip from fqdn … dnode can not be initialized"; **the sandbox starts idle and
+  the adapter starts the engine**, because the image's own entrypoint does
+  not always finish — on CI's runners, twice, on both images, the container's
+  trace stopped where the entrypoint reads its data directory, with only
+  that config-dump process alive, while the same image serves in 0.6 s on
+  a development machine. And **readiness decides, never the presence of a
+  process** — the entrypoint's own taosd can be alive and already dying,
+  and an adapter that stood back for it waited three minutes for a server
+  that was never coming. Nothing is killed to make room for the one this
+  adapter starts, either: clearing the sandbox first took the container
+  down with it, because the entrypoint is the first process on some hosts
+  and the taosd it spawned is its child (measured, and worse than the
+  problem it was fixing). And both processes are **detached with every
+  standard descriptor closed**: a background process that keeps the exec's
+  own output open keeps the call open with it, which on CI's runtime meant
+  a twenty-minute wait and a sandbox destroyed under it, where the same
+  script returned at once here. Readiness itself is **a node the cluster calls
+  ready**, not a query that answers: `SHOW DATABASES` answers and
+  `SERVER_STATUS()` reads 1 at t+338 ms while `CREATE DATABASE` — the
+  first thing a restore does — still fails with "Out of dnodes", and the
+  node reports ready at t+1006 ms, exactly when the create succeeds. The
+  restore runs at 256 MiB; and
+  `dump_result.txt` lands in the directory taosdump runs in rather than
+  the one `-o` names, which is why the README's example changes directory
+  first — that file is how a dump dates itself. Conformance 15/15,
+  verified against 3.3.6.13 and 3.3.5.8, and a 3.3.6.13 artifact restores
+  into 3.3.5.8.
 ### Fixed
 
 - **Every name in `SHA256SUMS` is written the same way.** The release
