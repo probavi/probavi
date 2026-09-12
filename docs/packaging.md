@@ -22,7 +22,9 @@ evidence records. A leaked repository key would let an attacker ship a
 
 What you get instead:
 
-- **`SHA256SUMS`** covering every artifact of a release.
+- **`SHA256SUMS`** covering every artifact of a release — every archive,
+  package, build recipe and Homebrew formula. The one file outside it is
+  the provenance bundle below, which verifies itself.
 - **A sigstore build-provenance attestation** on every archive and
   package, which proves the file was built by this repository's release
   workflow from a specific commit, and needs no key from anyone:
@@ -209,8 +211,9 @@ CI — a second long-lived secret, which is exactly what §1 avoids.
 ### 5.2 Homebrew, in a tap of your own
 
 Every release attaches ready-made formulae, one per binary, with their
-`sha256` taken from that release's own `SHA256SUMS`. They name no tap, so
-they work in any:
+`sha256` taken from that release's own `SHA256SUMS` — where each formula
+is itself listed, so the file that pins a checksum can be checked before
+it is trusted. They name no tap, so they work in any:
 
 ```console
 $ brew tap-new "$USER/probavi"

@@ -192,6 +192,20 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}" packaging/homebrew/render.sh dist/SHA256SUMS dist/Formula
           ls -1 dist/Formula
 
+      - name: checksum the formulae too
+        # A second pass, because the first one cannot reach them: a formula
+        # pins checksums this file already holds, so no formula exists when
+        # it is written. Everything a release publishes is covered by it
+        # except two files. SHA256SUMS cannot list itself, and
+        # provenance.intoto.jsonl is a sigstore bundle that verifies itself
+        # — a checksum line for it would restate, less strongly, what it
+        # already proves. The names stay bare: sha256sum runs inside
+        # dist/Formula, and the formulae are published flat beside
+        # everything else, which is where `sha256sum -c` looks for them.
+        run: |
+          set -euo pipefail
+          (cd dist/Formula && sha256sum -- *.rb | tee -a ../SHA256SUMS)
+
       - name: attest build provenance
         id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -280,9 +294,10 @@ jobs:
             echo "\`xattr -d com.apple.quarantine probavi\`."
             echo
             echo "The \`.rb\` files attached here are ready-made Homebrew formulae, with"
-            echo "their checksums taken from this release's SHA256SUMS. They name no tap,"
-            echo "so dropping them into one of your own gives a \`brew install\` with no"
-            echo "quarantine step — there is no hosted Probavi tap. See"
+            echo "their checksums taken from this release's SHA256SUMS, where each formula"
+            echo "is listed in turn. They name no tap, so dropping them into one of your"
+            echo "own gives a \`brew install\` with no quarantine step — there is no"
+            echo "hosted Probavi tap. See"
             echo "[docs/packaging.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/docs/packaging.md)."
             echo
             echo "## Reproduce the binaries"

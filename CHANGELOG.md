@@ -11,6 +11,20 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`SHA256SUMS` covers the Homebrew formulae too.** v0.28.0 published 323
+  assets and checksummed 292: the 29 `.rb` formulae had no line in the
+  file, while the `PKGBUILD` and the ebuild — build recipes of the same
+  kind, which also carry a checksum of their own — did. The reason was
+  ordering rather than intent: a formula pins checksums read *from*
+  `SHA256SUMS`, so none exists when the file is written. A second pass
+  after rendering closes it. The only asset still outside the file is
+  `provenance.intoto.jsonl`, a sigstore bundle that verifies itself, and
+  a checksum line for it would restate less strongly what it already
+  proves. `docs/packaging.md` promised "covering every artifact of a
+  release" throughout; that sentence is now true.
+
 ## [0.28.0] - 2026-09-12
 
 ### Added
