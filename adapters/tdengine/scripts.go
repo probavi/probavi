@@ -20,6 +20,8 @@ const (
 	// against an image with different ones is out of scope for this
 	// version rather than silently wrong.
 	credentials = "root:taosdata" //nolint:gosec // G101: the image's own documented default, inside a sandbox with no network and no published ports
+	// httpPort is where taosAdapter listens inside the sandbox.
+	httpPort = "6041"
 	// stagingDir is where a directory artifact lands inside the sandbox,
 	// and where an archive is unpacked to.
 	stagingDir = "/tmp/probavi-tdengine"
@@ -102,6 +104,18 @@ const engineEnv = `export TAOS_FQDN=localhost TAOS_FIRST_EP=localhost:6030
 // runtime the call that started them stayed open for twenty minutes,
 // where the same script returned at once here (measured). A start that
 // answers only when the engine is ready has nothing left to outlive it.
+// Each half starts only if it is not already there, and what counts as
+// "there" is deliberately different for the two. The image's entrypoint
+// may have got one of them up and not the other — on 3.3.5.8 its taosd
+// dies on the name baked into the image while its taosadapter keeps the
+// HTTP port, and starting a second one made that one exit, which the
+// drill then reported as an engine that would not start (measured on CI,
+// where that combination is what the runner produces).
+//
+// For the server, a client that answers is the test. For the endpoint it
+// is the port being bound, not a query succeeding: a taosadapter with no
+// server behind it answers errors, and treating that as absent starts a
+// second one that cannot bind.
 const startScript = `set -u
 for name in "$(hostname)" "$(sed -n 's/^fqdn *\([^ ]*\).*/\1/p' /etc/taos/taos.cfg | head -1)"; do
   [ -n "$name" ] || continue
@@ -109,24 +123,34 @@ for name in "$(hostname)" "$(sed -n 's/^fqdn *\([^ ]*\).*/\1/p' /etc/taos/taos.c
   echo "127.0.0.1 $name" >> /etc/hosts 2>/dev/null || true
 done
 ` + engineEnv + `
-nohup taosd > /tmp/probavi-taosd.log 2>&1 &
-tpid=$!
+bound() { (exec 3<>/dev/tcp/127.0.0.1/` + httpPort + `) 2>/dev/null; }
+if ! taos -s "show databases;" >/dev/null 2>&1; then
+  nohup taosd > /tmp/probavi-taosd.log 2>&1 &
+  tpid=$!
+  i=0
+  while [ $i -lt 60 ]; do
+    kill -0 "$tpid" 2>/dev/null || { echo "taosd exited while starting:" >&2; tail -5 /tmp/probavi-taosd.log >&2; exit 1; }
+    taos -s "show databases;" >/dev/null 2>&1 && break
+    i=$((i+1)); sleep 1
+  done
+fi
+if ! bound; then
+  nohup taosadapter > /tmp/probavi-taosadapter.log 2>&1 &
+  apid=$!
+  i=0
+  while [ $i -lt 60 ]; do
+    bound && break
+    kill -0 "$apid" 2>/dev/null || { echo "taosadapter exited while starting:" >&2; tail -5 /tmp/probavi-taosadapter.log >&2; exit 1; }
+    i=$((i+1)); sleep 1
+  done
+fi
 i=0
 while [ $i -lt 60 ]; do
-  kill -0 "$tpid" 2>/dev/null || { echo "taosd exited while starting" >&2; tail -5 /tmp/probavi-taosd.log >&2; exit 1; }
-  taos -s "show databases;" >/dev/null 2>&1 && break
-  i=$((i+1)); sleep 1
-done
-nohup taosadapter > /tmp/probavi-taosadapter.log 2>&1 &
-apid=$!
-i=0
-while [ $i -lt 60 ]; do
-  kill -0 "$apid" 2>/dev/null || { echo "taosadapter exited while starting" >&2; tail -5 /tmp/probavi-taosadapter.log >&2; exit 1; }
   n=$(curl -sf -u ` + credentials + ` -d "SELECT count(*) FROM information_schema.ins_dnodes WHERE status = 'ready'" "` + serverURL + `/rest/sql" | sed -n 's/.*"data":\[\[\([0-9]*\)\].*/\1/p')
   case "${n:-0}" in ''|0) ;; *) echo started; exit 0;; esac
   i=$((i+1)); sleep 1
 done
-echo "the engine reported no ready node within 60s" >&2
+echo "the engine reported no ready node within 60s:" >&2
 tail -5 /tmp/probavi-taosd.log >&2
 exit 1`
 

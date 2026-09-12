@@ -216,7 +216,7 @@ func startEngine(ctx context.Context, c *core) *protoError {
 		return perr
 	}
 	if start.ExitCode != 0 {
-		return protoErr("engine_not_ready", false, "start the engine: %s", firstLine(stderr))
+		return protoErr("engine_not_ready", false, "start the engine: %s", lastLines(stderr, 4))
 	}
 	return nil
 }
@@ -324,6 +324,23 @@ func opHealthcheck(ctx context.Context, c *core, payload json.RawMessage) (any, 
 func ready(stdout []byte) bool {
 	n, err := strconv.Atoi(strings.TrimSpace(string(stdout)))
 	return err == nil && n >= 1
+}
+
+// lastLines joins the final non-empty lines of engine output. The start
+// script says what failed on its first line and why on the ones after
+// it, and a refusal that kept only the first said "taosadapter exited
+// while starting" without the engine's reason for it.
+func lastLines(b []byte, n int) string {
+	var kept []string
+	for _, line := range strings.Split(string(b), "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			kept = append(kept, s)
+		}
+	}
+	if len(kept) > n {
+		kept = kept[len(kept)-n:]
+	}
+	return strings.Join(kept, " | ")
 }
 
 // firstLine is the first non-empty line of engine output, trimmed.

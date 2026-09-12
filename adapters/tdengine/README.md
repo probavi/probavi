@@ -166,8 +166,8 @@ network and no published ports can serve on. Both travel to `taos` and
 `taosdump` too, which reach the server through the configured endpoint
 rather than the HTTP one. Measured under Docker with nothing else
 changed: the hostname line and these two variables take the engine from
-never starting to serving on the first poll, with a ready node on the
-second.
+never starting to answering its native client at once, with a node the
+cluster calls ready a second later.
 
 An engine that is already serving is left alone — **readiness decides,
 never the presence of a process**. The entrypoint's own `taosd` can be
