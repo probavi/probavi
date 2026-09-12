@@ -51,11 +51,16 @@ always called out explicitly.
   database would be the green this project exists to prevent.
 
   Sandbox notes, all measured, and the first four were CI's corrections
-  rather than the measurement day's: **the engine is pinned to loopback**,
-  because an image can carry a name that resolves to nothing in a sandbox
-  — 3.3.5.8 ships `fqdn buildkitsandbox`, the hostname of the machine that
-  built it, and the engine refuses to start on it with "failed to get ip
-  from fqdn … dnode can not be initialized"; **the sandbox starts idle and
+  rather than the measurement day's: **two names are mapped to loopback and the
+  engine is pinned to it**, because in a zero-ingress sandbox neither is
+  guaranteed to resolve: Docker writes no `/etc/hosts` line for the
+  container's own hostname, which leaves the image's entrypoint stopped at
+  `taosd -C | grep dataDir` with that process alive and never returning
+  (podman does write the line, which is why this took five rounds of CI
+  and a local Docker daemon to see); and an image can carry a configured
+  name that means nothing here — 3.3.5.8 ships `fqdn buildkitsandbox`, the
+  hostname of the machine that built it, and the engine refuses to start
+  on it with "failed to get ip from fqdn … dnode can not be initialized"; **the sandbox starts idle and
   the adapter starts the engine**, because the image's own entrypoint does
   not always finish — on CI's runners, twice, on both images, the container's
   trace stopped where the entrypoint reads its data directory, with only

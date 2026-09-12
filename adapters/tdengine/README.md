@@ -137,11 +137,22 @@ pipeline waits for belongs to the host rather than to the backup, and a
 drill has no business depending on which host it landed on. The adapter
 therefore starts `taosd` and then `taosadapter` itself.
 
-**The name the engine binds to is pinned to loopback.** An image can
-carry one that means nothing in a sandbox: 3.3.5.8 ships
-`fqdn buildkitsandbox` — the hostname of the machine that built it —
-where 3.3.6.13 ships `localhost` (both measured). With that name
-unresolvable the engine refuses to start, in its own words:
+**Two names are mapped to loopback first**, and only when `/etc/hosts`
+does not already carry them.
+
+*The container's own hostname.* Docker writes no line for it when the
+sandbox has no network, so the engine's startup lookup has nothing to
+answer it and no nameserver to ask. Measured: the image's entrypoint
+stops at `taosd -C | grep dataDir` with that process alive and never
+returning, and nothing else in the container ever starts. Podman does
+write the line — which is why this took five rounds of CI to see, and why
+the fix was finally found by running the suite against real Docker.
+
+*The name the configuration names.* An image can carry one that means
+nothing in a sandbox: 3.3.5.8 ships `fqdn buildkitsandbox` — the hostname
+of the machine that built it — where 3.3.6.13 ships `localhost` (both
+measured). With that name unresolvable the engine refuses to start, in
+its own words:
 
 ```
 failed to get ip from fqdn:buildkitsandbox since Resource temporarily
@@ -149,11 +160,14 @@ unavailable, dnode can not be initialized
 failed to start since read config error
 ```
 
-Measured from both sides with the name made unresolvable: a plain start
-fails as above, and the same start with `TAOS_FQDN=localhost` and
-`TAOS_FIRST_EP=localhost:6030` serves. Both travel to `taos` and
+The engine is pinned to loopback as well, with `TAOS_FQDN=localhost` and
+`TAOS_FIRST_EP=localhost:6030` — the only address a sandbox with no
+network and no published ports can serve on. Both travel to `taos` and
 `taosdump` too, which reach the server through the configured endpoint
-rather than the HTTP one.
+rather than the HTTP one. Measured under Docker with nothing else
+changed: the hostname line and these two variables take the engine from
+never starting to serving on the first poll, with a ready node on the
+second.
 
 An engine that is already serving is left alone — **readiness decides,
 never the presence of a process**. The entrypoint's own `taosd` can be

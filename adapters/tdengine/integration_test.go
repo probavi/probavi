@@ -331,15 +331,21 @@ func runnerScriptForTest(t *testing.T) string {
 func awaitServing(t *testing.T, ctx context.Context, sbx *docker.Sandbox) {
 	t.Helper()
 	// The same start the adapter performs, for the same reasons: the
-	// image's entrypoint is not dependable here, and the engine has to be
-	// pinned to loopback because an image can carry a name that resolves
-	// to nothing in a zero-ingress sandbox (scripts.go).
+	// image's entrypoint is not dependable here, and two names have to be
+	// mapped to loopback first — the container's own hostname, which
+	// Docker leaves out of /etc/hosts when the sandbox has no network, and
+	// the one the configuration names (scripts.go has the measurements).
 	// Bounded on its own, so a call that does not return is reported as
 	// that rather than running the whole test out of time.
 	startCtx, cancelStart := context.WithTimeout(ctx, 4*time.Minute)
 	defer cancelStart()
 	if _, err := sbx.Exec(startCtx, sandbox.ExecRequest{Argv: []string{"bash", "-c",
-		`export TAOS_FQDN=localhost TAOS_FIRST_EP=localhost:6030
+		`for name in "$(hostname)" "$(sed -n 's/^fqdn *\([^ ]*\).*/\1/p' /etc/taos/taos.cfg | head -1)"; do
+		   [ -n "$name" ] || continue
+		   grep -qE "[[:space:]]$name([[:space:]]|$)" /etc/hosts && continue
+		   echo "127.0.0.1 $name" >> /etc/hosts 2>/dev/null || true
+		 done
+		 export TAOS_FQDN=localhost TAOS_FIRST_EP=localhost:6030
 		 setsid taosd </dev/null >/tmp/seed-taosd.log 2>&1 &
 		 for i in $(seq 1 40); do taos -s "show databases;" >/dev/null 2>&1 && break; sleep 0.5; done
 		 setsid taosadapter </dev/null >/tmp/seed-taosadapter.log 2>&1 &

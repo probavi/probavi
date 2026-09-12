@@ -60,23 +60,34 @@ curl -sf -u ` + credentials + ` -d "SELECT count(*) FROM information_schema.ins_
 // whatever the pipeline waits for is the host's, not the backup's, and a
 // drill has no business depending on it.
 //
-// The name the server binds to has to resolve before any of that, and an
-// image can carry one that means nothing here: 3.3.5.8 ships
-// `fqdn buildkitsandbox` — the hostname of the machine that built the
-// image — where 3.3.6.13 ships `localhost` (both measured). Under a
-// zero-ingress sandbox that name resolves to nothing and the engine
-// refuses to start, in its own words:
+// Two names have to resolve before any of that, and in a zero-ingress
+// sandbox neither is guaranteed to.
+//
+// **The container's own hostname.** Docker writes no line for it into
+// /etc/hosts when the sandbox has no network, so the engine's startup
+// lookup has nothing to answer it and no nameserver to ask: measured, the
+// image's entrypoint stops at `taosd -C | grep dataDir` with that process
+// alive and never returning, and nothing else in the container ever
+// starts. Podman does write the line, which is why this took five rounds
+// of CI to see — the development machine could not reproduce it.
+//
+// **The name the configuration names.** An image can carry one that means
+// nothing here: 3.3.5.8 ships `fqdn buildkitsandbox`, the hostname of the
+// machine that built the image, where 3.3.6.13 ships `localhost` (both
+// measured). With that name unresolvable the engine refuses to start, in
+// its own words:
 //
 //	failed to get ip from fqdn:buildkitsandbox since Resource temporarily
 //	unavailable, dnode can not be initialized
 //	failed to start since read config error
 //
-// So the engine is pinned to loopback for the drill, which is where a
-// sandbox with no network and no published ports can serve anyway.
-// Measured from both sides with that name made unresolvable: a plain
-// start fails as above, and the same start with the two variables below
-// serves. They travel to the native client too — taos and taosdump reach
-// the server through the configured endpoint, not through the HTTP one.
+// So both names are mapped to loopback — only when /etc/hosts does not
+// already carry them, so a host that resolves its own name is left alone
+// — and the engine is pinned to loopback as well, which is the only
+// address a sandbox with no network and no published ports can serve on.
+// Measured under Docker with nothing else changed: the hostname line and
+// these two variables take the engine from never starting to serving on
+// the first poll, with a ready node on the second.
 //
 // taosd first, then the HTTP endpoint that every check speaks to: the
 // second connects to the first, and starting them the other way round
@@ -92,6 +103,11 @@ const engineEnv = `export TAOS_FQDN=localhost TAOS_FIRST_EP=localhost:6030
 // where the same script returned at once here (measured). A start that
 // answers only when the engine is ready has nothing left to outlive it.
 const startScript = `set -u
+for name in "$(hostname)" "$(sed -n 's/^fqdn *\([^ ]*\).*/\1/p' /etc/taos/taos.cfg | head -1)"; do
+  [ -n "$name" ] || continue
+  grep -qE "[[:space:]]$name([[:space:]]|$)" /etc/hosts && continue
+  echo "127.0.0.1 $name" >> /etc/hosts 2>/dev/null || true
+done
 ` + engineEnv + `
 nohup taosd > /tmp/probavi-taosd.log 2>&1 &
 tpid=$!
