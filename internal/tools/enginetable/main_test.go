@@ -17,6 +17,10 @@ import (
 
 func ptr(s string) *string { return &s }
 
+// blocks is a document carrying both generated regions, which is what every
+// README in the repository looks like to this tool.
+const blocks = startMarker + "\n" + endMarker + "\n\n" + badgeStartMarker + "\n" + badgeEndMarker + "\n"
+
 // demo is the adapter shape the cases start from: one image repository,
 // one released version, two source kinds.
 func demo() capabilities.Adapter {
@@ -161,7 +165,7 @@ func TestReplaceBlockRefusesAMalformedDocument(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := replaceBlock(tt.doc, "table\n")
+			_, err := replaceBlock(tt.doc, "table\n", startMarker, endMarker)
 			if err == nil {
 				t.Fatal("replaceBlock accepted a document it cannot mark up")
 			}
@@ -174,7 +178,7 @@ func TestReplaceBlockRefusesAMalformedDocument(t *testing.T) {
 
 func TestReplaceBlockKeepsEverythingOutsideTheMarkers(t *testing.T) {
 	doc := "before\n\n" + startMarker + "\nstale\n" + endMarker + "\n\nafter\n"
-	got, err := replaceBlock(doc, "fresh\n")
+	got, err := replaceBlock(doc, "fresh\n", startMarker, endMarker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +213,7 @@ func validDoc() *capabilities.Document {
 }
 
 func TestRunRewritesTheBlock(t *testing.T) {
-	root := fixture(t, validDoc(), "# Title\n\n"+startMarker+"\n"+endMarker+"\n\ntail\n")
+	root := fixture(t, validDoc(), "# Title\n\n"+blocks+"\ntail\n")
 	if err := run([]string{"-root", root}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -217,7 +221,9 @@ func TestRunRewritesTheBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"# Title", "Demo Engine", "0.4.0", "`demo_dump`", "tail"} {
+	want := []string{"# Title", "Demo Engine", "0.4.0", "`demo_dump`", "tail",
+		"[![Demo Engine](https://img.shields.io/badge/Demo%20Engine-informational)](adapters/demo/README.md)"}
+	for _, want := range want {
 		if !strings.Contains(string(got), want) {
 			t.Errorf("README lost %q:\n%s", want, got)
 		}
@@ -238,7 +244,7 @@ func TestRunRewritesTheBlock(t *testing.T) {
 }
 
 func TestRunRefusesAManifestItCannotTrust(t *testing.T) {
-	readme := startMarker + "\n" + endMarker + "\n"
+	readme := blocks
 	stale := validDoc()
 	stale.SchemaID = "probavi-capabilities/99"
 	empty := validDoc()
@@ -286,7 +292,7 @@ func TestRunReportsAReadOnlyReadme(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root writes everything")
 	}
-	root := fixture(t, validDoc(), startMarker+"\nstale\n"+endMarker+"\n")
+	root := fixture(t, validDoc(), blocks)
 	path := filepath.Join(root, readmeFile)
 	if err := os.Chmod(path, 0o400); err != nil {
 		t.Fatal(err)
@@ -306,5 +312,125 @@ func TestRunRejectsUnknownArguments(t *testing.T) {
 	}
 	if err := run([]string{"-nope"}, &bytes.Buffer{}); err == nil {
 		t.Error("run accepted an unknown flag")
+	}
+}
+
+func TestRenderBadgesOrdersByTheNameOnTheBadge(t *testing.T) {
+	// Manifest order is by id, and for three adapters the id files the
+	// engine somewhere its name does not: mssql/SQL Server is the clearest.
+	// The badge row is scanned for a name, so it sorts by the name.
+	sqlServer, aerospike := demo(), demo()
+	sqlServer.ID, sqlServer.Name, sqlServer.Docs = "mssql", "SQL Server", ptr("adapters/mssql/README.md")
+	aerospike.ID, aerospike.Name, aerospike.Docs = "aerospike", "Aerospike", ptr("adapters/aerospike/README.md")
+
+	got := renderBadges([]capabilities.Adapter{aerospike, sqlServer})
+	if strings.Index(got, "Aerospike") > strings.Index(got, "SQL%20Server") {
+		t.Errorf("badges are not in name order:\n%s", got)
+	}
+
+	// And the other direction: manifest order must not survive when it
+	// disagrees with the alphabet.
+	got = renderBadges([]capabilities.Adapter{sqlServer, aerospike})
+	if strings.Index(got, "Aerospike") > strings.Index(got, "SQL%20Server") {
+		t.Errorf("badges kept the manifest's order instead of the alphabet:\n%s", got)
+	}
+}
+
+func TestRenderBadgesIsCaseInsensitiveAndStable(t *testing.T) {
+	// etcd is spelled lowercase on purpose (reference/glossary.md), and a
+	// byte-order sort would file every lowercase name after every
+	// uppercase one — etcd after Weaviate, at the end of the row.
+	etcd, weaviate := demo(), demo()
+	etcd.ID, etcd.Name, etcd.Docs = "etcd", "etcd", ptr("adapters/etcd/README.md")
+	weaviate.ID, weaviate.Name, weaviate.Docs = "weaviate", "Weaviate", ptr("adapters/weaviate/README.md")
+
+	got := renderBadges([]capabilities.Adapter{weaviate, etcd})
+	if strings.Index(got, "etcd") > strings.Index(got, "Weaviate") {
+		t.Errorf("lowercase name sorted after every uppercase one:\n%s", got)
+	}
+}
+
+func TestBadgeTextEscapesTheShieldsSeparators(t *testing.T) {
+	// shields.io reads the path as label-message-colour and renders an
+	// underscore as a space, so a name carrying either comes out as
+	// something else entirely — or splits the badge into two fields.
+	tests := map[string]string{
+		"SQL Server":      "SQL%20Server",
+		"Foo-Bar":         "Foo--Bar",
+		"foo_bar":         "foo__bar",
+		"PostgreSQL":      "PostgreSQL",
+		"Oracle Database": "Oracle%20Database",
+	}
+	for name, want := range tests {
+		if got := badgeText(name); got != want {
+			t.Errorf("badgeText(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestAdapterLinkFallsBackToTheDirectory(t *testing.T) {
+	// A badge has nowhere to send a reader without a link, and the manifest
+	// leaves docs optional. The directory is there for every declared
+	// adapter — the release builds one binary per directory.
+	a := demo()
+	a.Docs = nil
+	if got := adapterLink(a); got != "adapters/demo/" {
+		t.Errorf("adapterLink = %q, want the adapter's directory", got)
+	}
+	a.Docs = ptr("")
+	if got := adapterLink(a); got != "adapters/demo/" {
+		t.Errorf("adapterLink on an empty docs field = %q, want the adapter's directory", got)
+	}
+}
+
+func TestRunWritesTheBadgeRowIntoEveryTranslation(t *testing.T) {
+	root := fixture(t, validDoc(), "# Title\n\n"+blocks)
+	for _, name := range []string{"README.hu.md", "README.de.md"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("# Cím\n\n"+badgeStartMarker+"\n"+badgeEndMarker+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Not a README, and not a translation of one: it must be left alone.
+	if err := os.WriteFile(filepath.Join(root, "CHANGELOG.md"), []byte("# Changelog\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"-root", root}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	badge := "[![Demo Engine](https://img.shields.io/badge/Demo%20Engine-informational)](adapters/demo/README.md)"
+	for _, name := range []string{readmeFile, "README.hu.md", "README.de.md"} {
+		got, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(got), badge) {
+			t.Errorf("%s carries no engine badge:\n%s", name, got)
+		}
+	}
+	// The engine table stays English-only: it is prose-headed and the
+	// translations do not carry it.
+	hu, err := os.ReadFile(filepath.Join(root, "README.hu.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(hu), "| Engine |") {
+		t.Errorf("the engine table leaked into a translation:\n%s", hu)
+	}
+}
+
+func TestRunReportsATranslationWithoutTheBadgeMarkers(t *testing.T) {
+	// A language added without the markers must stop the generator rather
+	// than quietly ship a README stating fewer engines than its source.
+	root := fixture(t, validDoc(), "# Title\n\n"+blocks)
+	if err := os.WriteFile(filepath.Join(root, "README.fr.md"), []byte("# Titre\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := run([]string{"-root", root}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("run accepted a translation with no badge block")
+	}
+	if !strings.Contains(err.Error(), "README.fr.md") || !strings.Contains(err.Error(), badgeStartMarker) {
+		t.Errorf("err = %v, want it to name the file and the missing marker", err)
 	}
 }

@@ -3,6 +3,7 @@ package docs_test
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -19,6 +20,8 @@ import (
 const (
 	engineTableStart = "<!-- capabilities:engines:start -->"
 	engineTableEnd   = "<!-- capabilities:engines:end -->"
+	engineBadgeStart = "<!-- capabilities:engine-badges:start -->"
+	engineBadgeEnd   = "<!-- capabilities:engine-badges:end -->"
 	changelog        = "CHANGELOG.md"
 	unreleasedLabel  = "Unreleased"
 )
@@ -214,6 +217,105 @@ func TestEngineTableIsOutsideTheTranslatedSpans(t *testing.T) {
 		delete(open, name)
 		if start < loc[1] && end > from {
 			t.Errorf("the engine table overlaps the %q translated span (%d-%d)", name, from, loc[1])
+		}
+	}
+}
+
+// engineBadges returns the generated badge block of a README, without its
+// markers.
+func engineBadges(t *testing.T, file string) string {
+	t.Helper()
+	doc := read(t, file)
+	start := strings.Index(doc, engineBadgeStart)
+	end := strings.Index(doc, engineBadgeEnd)
+	if start < 0 || end < start {
+		t.Fatalf("%s carries no engine badge block", file)
+	}
+	return doc[start+len(engineBadgeStart) : end]
+}
+
+// TestEngineBadgeRowNamesEveryAdapterOnce is the badge row's half of what
+// TestEngineTableHasOneRowPerAdapter does for the table: the block is the
+// manifest's list, in the order a reader looks a name up in.
+//
+// The two blocks are ordered differently on purpose — the table follows
+// the manifest's id order, the badges the name printed on them — so an
+// engine whose id files it elsewhere (mssql/SQL Server, cassandra and solr
+// under Apache) is exactly where this gate earns its keep.
+func TestEngineBadgeRowNamesEveryAdapterOnce(t *testing.T) {
+	m := readManifest(t)
+	found := readmeBadges(engineBadges(t, sourceDoc))
+	if len(found) != len(m.Adapters) {
+		t.Fatalf("badge row carries %d badges, manifest has %d adapters", len(found), len(m.Adapters))
+	}
+
+	want := make([]string, 0, len(m.Adapters))
+	seen := make(map[string]bool, len(m.Adapters))
+	for _, a := range m.Adapters {
+		want = append(want, a.Name)
+		seen[a.Name] = true
+	}
+	sort.SliceStable(want, func(i, j int) bool {
+		return strings.ToLower(want[i]) < strings.ToLower(want[j])
+	})
+
+	for i, b := range found {
+		if !seen[b.alt] {
+			t.Errorf("badge %d names %q, which the manifest does not declare", i+1, b.alt)
+			continue
+		}
+		if b.alt != want[i] {
+			t.Errorf("badge %d is %q, want %q — the row is not in name order", i+1, b.alt, want[i])
+		}
+		if !strings.HasPrefix(b.image, staticBadgePrefix) {
+			t.Errorf("%s badge reads %s rather than rendering its own text", b.alt, b.image)
+		}
+		if !strings.HasPrefix(b.target, "adapters/") {
+			t.Errorf("%s badge links to %s, not to the adapter that restores it", b.alt, b.target)
+		}
+	}
+}
+
+// TestEngineBadgeRowIsOutsideTheTranslatedSpans is the badge row's half of
+// TestEngineTableIsOutsideTheTranslatedSpans. A generated block inside a
+// translated span would invalidate every translation on the day an adapter
+// shipped, which is the one day nobody would read it as a translation
+// problem.
+func TestEngineBadgeRowIsOutsideTheTranslatedSpans(t *testing.T) {
+	doc := read(t, sourceDoc)
+	start := strings.Index(doc, engineBadgeStart)
+	end := strings.Index(doc, engineBadgeEnd)
+	if start < 0 || end < start {
+		t.Fatalf("%s carries no engine badge block", sourceDoc)
+	}
+	open := map[string]int{}
+	for _, loc := range markerRe.FindAllStringSubmatchIndex(doc, -1) {
+		name, kind := doc[loc[2]:loc[3]], doc[loc[4]:loc[5]]
+		if kind == "start" {
+			open[name] = loc[0]
+			continue
+		}
+		from, ok := open[name]
+		if !ok {
+			continue // translations_test.go reports unbalanced spans.
+		}
+		delete(open, name)
+		if start < loc[1] && end > from {
+			t.Errorf("the engine badge row overlaps the %q translated span (%d-%d)", name, from, loc[1])
+		}
+	}
+}
+
+// TestEveryTranslationCarriesTheBadgeRow keeps the generator's reach
+// honest. TestTranslationsCarryTheSameBadges already compares the whole
+// badge list across languages; this one fails with the reason rather than
+// with a count, and it fails on a translation that carries no block at all
+// — which is the state a new language starts in.
+func TestEveryTranslationCarriesTheBadgeRow(t *testing.T) {
+	want := engineBadges(t, sourceDoc)
+	for _, file := range translationFiles(t) {
+		if got := engineBadges(t, file); got != want {
+			t.Errorf("%s carries a different engine badge row — run `go generate ./...`", file)
 		}
 	}
 }

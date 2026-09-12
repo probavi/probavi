@@ -153,15 +153,23 @@ one side alone.
 ## 6. Regenerating
 
 ```sh
-go generate ./...        # rewrites docs/capabilities.json and the README engine table
+go generate ./...        # rewrites docs/capabilities.json and the generated README blocks
 ```
 
-The same command rewrites the engine table in `README.md`, between its
-`<!-- capabilities:engines:start -->` and `<!-- capabilities:engines:end -->`
-markers. That table is generated **from this file**, not from the code: the
-repository's own README is a consumer of the manifest on the same terms as
-any other, and so cannot state an engine, a version, a release or a source
-kind the manifest does not carry.
+The same command rewrites two blocks of `README.md`, each delimited by HTML
+comments: the engine table between `<!-- capabilities:engines:start -->` and
+`<!-- capabilities:engines:end -->`, and the row of engine badges between
+`<!-- capabilities:engine-badges:start -->` and
+`<!-- capabilities:engine-badges:end -->`. Both are generated **from this
+file**, not from the code: the repository's own README is a consumer of the
+manifest on the same terms as any other, and so cannot state an engine, a
+version, a release or a source kind the manifest does not carry.
+
+The badge row also goes into every translation of the README, which carry
+the same markers — it names engines and links to adapters, and none of that
+is language-dependent. The table stays in the English README alone. Both
+blocks sit outside the translated spans, so regenerating them never
+invalidates a translation.
 
 Run it in the same change as any new adapter, sandbox provider, built-in
 check, CLI command or exit code, notification transport, locale catalog,

@@ -18,6 +18,37 @@
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS-informational)](docs/packaging.md)
 [![Downloads](https://img.shields.io/github/downloads/probavi/probavi/total?label=downloads)](https://github.com/probavi/probavi/releases)
 
+<!-- capabilities:engine-badges:start -->
+[![Aerospike](https://img.shields.io/badge/Aerospike-informational)](adapters/aerospike/README.md)
+[![Apache Cassandra](https://img.shields.io/badge/Apache%20Cassandra-informational)](adapters/cassandra/README.md)
+[![Apache Solr](https://img.shields.io/badge/Apache%20Solr-informational)](adapters/solr/README.md)
+[![ClickHouse](https://img.shields.io/badge/ClickHouse-informational)](adapters/clickhouse/README.md)
+[![CouchDB](https://img.shields.io/badge/CouchDB-informational)](adapters/couchdb/README.md)
+[![DuckDB](https://img.shields.io/badge/DuckDB-informational)](adapters/duckdb/README.md)
+[![Elasticsearch](https://img.shields.io/badge/Elasticsearch-informational)](adapters/elasticsearch/README.md)
+[![etcd](https://img.shields.io/badge/etcd-informational)](adapters/etcd/README.md)
+[![Firebird](https://img.shields.io/badge/Firebird-informational)](adapters/firebird/README.md)
+[![H2](https://img.shields.io/badge/H2-informational)](adapters/h2/README.md)
+[![InfluxDB](https://img.shields.io/badge/InfluxDB-informational)](adapters/influxdb/README.md)
+[![MariaDB](https://img.shields.io/badge/MariaDB-informational)](adapters/mariadb/README.md)
+[![MongoDB](https://img.shields.io/badge/MongoDB-informational)](adapters/mongodb/README.md)
+[![MySQL](https://img.shields.io/badge/MySQL-informational)](adapters/mysql/README.md)
+[![Neo4j](https://img.shields.io/badge/Neo4j-informational)](adapters/neo4j/README.md)
+[![OpenSearch](https://img.shields.io/badge/OpenSearch-informational)](adapters/opensearch/README.md)
+[![Oracle Database](https://img.shields.io/badge/Oracle%20Database-informational)](adapters/oracle/README.md)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-informational)](adapters/postgres/README.md)
+[![Prometheus](https://img.shields.io/badge/Prometheus-informational)](adapters/prometheus/README.md)
+[![Qdrant](https://img.shields.io/badge/Qdrant-informational)](adapters/qdrant/README.md)
+[![QuestDB](https://img.shields.io/badge/QuestDB-informational)](adapters/questdb/README.md)
+[![Redis](https://img.shields.io/badge/Redis-informational)](adapters/redis/README.md)
+[![SQL Server](https://img.shields.io/badge/SQL%20Server-informational)](adapters/mssql/README.md)
+[![SQLite](https://img.shields.io/badge/SQLite-informational)](adapters/sqlite/README.md)
+[![TDengine](https://img.shields.io/badge/TDengine-informational)](adapters/tdengine/README.md)
+[![Valkey](https://img.shields.io/badge/Valkey-informational)](adapters/valkey/README.md)
+[![VictoriaMetrics](https://img.shields.io/badge/VictoriaMetrics-informational)](adapters/victoriametrics/README.md)
+[![Weaviate](https://img.shields.io/badge/Weaviate-informational)](adapters/weaviate/README.md)
+<!-- capabilities:engine-badges:end -->
+
 > **English is authoritative.** Esta es una traducción de la introducción de [README.md](README.md), actualizada a 2026-08-04. En caso de discrepancia, prevalece el texto en inglés: la instalación, los ejemplos y el inventario de capacidades solo están actualizados en inglés.
 
 *Probavi* — del latín **«he probado».** El pretérito perfecto es la clave: no «ponemos a prueba las restauraciones», sino «esta restauración se realizó y quedó probada, aquí está el registro firmado».
