@@ -1155,7 +1155,7 @@
       "id": "tdengine",
       "name": "TDengine",
       "status": "experimental",
-      "since": null,
+      "since": "0.28.0",
       "adapter_version": "0.1.0",
       "engine": {
         "id": "tdengine",
