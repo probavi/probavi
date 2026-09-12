@@ -3,7 +3,7 @@
   "id": "tdengine",
   "name": "TDengine",
   "status": "experimental",
-  "since": null,
+  "since": "0.28.0",
   "engine_name": "TDengine",
   "conformance_verified": true,
   "docs": "adapters/tdengine/README.md",

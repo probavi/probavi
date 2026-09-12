@@ -71,7 +71,7 @@ the exact instant proven.
 | [Redis](adapters/redis/README.md) | 7.2, 7.4, 8.2, 8.10 | 0.8.0 | `redis_aof`, `redis_rdb`, `redis_rdb_dir` |
 | [Apache Solr](adapters/solr/README.md) | 10 | 0.20.0 | `solr_backup`, `solr_backup_dir`, `solr_backup_tar` |
 | [SQLite](adapters/sqlite/README.md) | 3.46, 3.49, 3.50, 3.51, 3.53 | 0.10.0 | `sqlite_db`, `sqlite_db_dir`, `sqlite_dump`, `sqlite_dump_dir` |
-| [TDengine](adapters/tdengine/README.md) | 3.3.6.13, 3.3.5.8 | unreleased | `taosdump`, `taosdump_dir`, `taosdump_tar` |
+| [TDengine](adapters/tdengine/README.md) | 3.3.6.13, 3.3.5.8 | 0.28.0 | `taosdump`, `taosdump_dir`, `taosdump_tar` |
 | [Valkey](adapters/valkey/README.md) | 7.2, 8.0, 8.1, 9.0, 9.1 | 0.9.0 | `valkey_aof`, `valkey_rdb`, `valkey_rdb_dir` |
 | [VictoriaMetrics](adapters/victoriametrics/README.md) | 1.150 | 0.16.0 | `victoriametrics_backup`, `victoriametrics_backup_dir`, `victoriametrics_backup_tar` |
 | [Weaviate](adapters/weaviate/README.md) | 1.39.2, 1.38.13 | 0.25.0 | `weaviate_backup`, `weaviate_backup_dir`, `weaviate_backup_tar` |
@@ -92,7 +92,7 @@ answers.
 The adapter protocol (v0) and evidence schema (v2) specs in `docs/` are normative and frozen, with
 machine-readable JSON Schemas in [docs/schemas/](docs/schemas/); third parties can build adapters in
 any language from [docs/adapter-development.md](docs/adapter-development.md) and validate them with
-`probavi adapter conformance` — no container runtime needed. Released as **v0.27.0**: reproducible
+`probavi adapter conformance` — no container runtime needed. Released as **v0.28.0**: reproducible
 binaries for Linux and macOS (amd64/arm64), the core and each adapter as its own archive, with
 checksums on the [releases page](https://github.com/probavi/probavi/releases) — pre-1.0, minor
 versions may break, every change is in [CHANGELOG.md](CHANGELOG.md). See [ROADMAP.md](ROADMAP.md)
@@ -144,7 +144,7 @@ Every key of the file, what the loader accepts and refuses, and which of these v
 Every release publishes **one archive per binary** for Linux and macOS (amd64/arm64), with a `SHA256SUMS` covering all of them, on the [releases page](https://github.com/probavi/probavi/releases). `probavi` is the orchestrator: it resolves `probavi-adapter-<engine>` on your `PATH`, so take the core **plus an adapter for each engine you drill**.
 
 ```console
-$ tag=v0.27.0 os=linux arch=amd64
+$ tag=v0.28.0 os=linux arch=amd64
 $ base="https://github.com/probavi/probavi/releases/download/${tag}"
 $ curl -fsSLO "${base}/probavi_${tag#v}_${os}_${arch}.tar.gz"
 $ curl -fsSLO "${base}/probavi-adapter-postgres_${tag#v}_${os}_${arch}.tar.gz"
@@ -161,7 +161,7 @@ Verifying an evidence log needs nothing else: `probavi evidence verify` reads a 
 
 **Platforms.** Releases build `linux` and `darwin`, both architectures. From source the core builds on every Unix-like platform Go supports that provides `flock` — the advisory lock that keeps two processes from interleaving records into one evidence log — which leaves out Windows, Solaris and AIX; a build for those stops with a message naming that reason rather than a missing symbol. Verifying is not restricted to any of it: the independent verifier in [`spec/evidence`](spec/evidence) has no dependencies, takes no lock, and builds everywhere Go does, Windows included. An auditor handed a log and a public key uses that.
 
-Distribution packages are attached to every release — `.deb`, `.rpm` and `.apk` for both architectures, plus a `PKGBUILD` and a Gentoo ebuild that build from source. One package per binary, so `sudo apt install ./probavi_0.27.0_amd64.deb ./probavi-adapter-postgres_0.27.0_amd64.deb` is a working install. There is no Probavi apt or yum repository, on purpose: hosting one means a second long-lived signing key to guard, in a project whose trust proposition is how it handles the first one. [docs/packaging.md](docs/packaging.md) has the per-distribution commands, the dependency rationale, and a first drill from a packaged install.
+Distribution packages are attached to every release — `.deb`, `.rpm` and `.apk` for both architectures, plus a `PKGBUILD` and a Gentoo ebuild that build from source. One package per binary, so `sudo apt install ./probavi_0.28.0_amd64.deb ./probavi-adapter-postgres_0.28.0_amd64.deb` is a working install. There is no Probavi apt or yum repository, on purpose: hosting one means a second long-lived signing key to guard, in a project whose trust proposition is how it handles the first one. [docs/packaging.md](docs/packaging.md) has the per-distribution commands, the dependency rationale, and a first drill from a packaged install.
 
 On macOS, take the `darwin` archives above — a directly downloaded file is quarantined, so clear it with `xattr -d com.apple.quarantine`. Each release also attaches ready-made Homebrew formulae that name no tap, so `brew tap-new` plus two `curl`s gives a `brew install` with no quarantine step ([docs/packaging.md](docs/packaging.md) §5). There is no hosted Probavi tap. Note also that macOS has no native container runtime: the docker sandbox provider needs Docker Desktop, colima, OrbStack or a remote `DOCKER_HOST`.
 
