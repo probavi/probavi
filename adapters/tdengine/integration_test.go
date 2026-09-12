@@ -334,13 +334,17 @@ func awaitServing(t *testing.T, ctx context.Context, sbx *docker.Sandbox) {
 	// image's entrypoint is not dependable here, and the engine has to be
 	// pinned to loopback because an image can carry a name that resolves
 	// to nothing in a zero-ingress sandbox (scripts.go).
-	if _, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"bash", "-c",
+	// Bounded on its own, so a call that does not return is reported as
+	// that rather than running the whole test out of time.
+	startCtx, cancelStart := context.WithTimeout(ctx, 4*time.Minute)
+	defer cancelStart()
+	if _, err := sbx.Exec(startCtx, sandbox.ExecRequest{Argv: []string{"bash", "-c",
 		`export TAOS_FQDN=localhost TAOS_FIRST_EP=localhost:6030
 		 setsid taosd </dev/null >/tmp/seed-taosd.log 2>&1 &
 		 for i in $(seq 1 40); do taos -s "show databases;" >/dev/null 2>&1 && break; sleep 0.5; done
 		 setsid taosadapter </dev/null >/tmp/seed-taosadapter.log 2>&1 &
 		 echo started`}}); err != nil {
-		t.Fatalf("start the seed engine: %v", err)
+		t.Fatalf("start the seed engine: %v — %s", err, sandboxDiagnosis(t, ctx, sbx))
 	}
 	deadline := time.Now().Add(3 * time.Minute)
 	for {
@@ -364,6 +368,12 @@ func awaitServing(t *testing.T, ctx context.Context, sbx *docker.Sandbox) {
 // act on, and the container is gone by the time anyone reads the log.
 func sandboxDiagnosis(t *testing.T, ctx context.Context, sbx *docker.Sandbox) string {
 	t.Helper()
+	// On a context of its own, always. The first version of this helper
+	// borrowed the caller's, which is the context that had just expired —
+	// so every probe failed at once and the suite reported "the container
+	// is gone" when the container was fine and the deadline was not.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	var parts []string
 	// Why the container is in the state it is in, before what it said:
 	// a sandbox that died answers no exec, and the reason (an exit code,
