@@ -2,6 +2,7 @@ package docs_test
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -109,4 +110,101 @@ func TestReleaseWorkflowEnumeratesAdaptersByGlob(t *testing.T) {
 		t.Errorf("%s no longer contains %q, so TestReleaseShipsExactlyTheDeclaredAdapters "+
 			"no longer proves anything about what the release publishes", releaseWorkflow, adapterGlob)
 	}
+}
+
+// selfVerifying names the two assets no checksum line may cover.
+// SHA256SUMS cannot list itself, and the sigstore bundle carries its own
+// proof — a checksum for it would restate, less strongly, what verifying
+// the bundle already establishes.
+var selfVerifying = map[string]bool{
+	"SHA256SUMS":              true,
+	"provenance.intoto.jsonl": true,
+}
+
+// uploadArgs returns the dist/ paths the workflow hands `gh release
+// create` — the definitive list of what a release publishes.
+func uploadArgs(t *testing.T) []string {
+	t.Helper()
+	wf := read(t, releaseWorkflow)
+	start := strings.Index(wf, "gh release create ")
+	if start < 0 {
+		t.Fatalf("%s no longer calls `gh release create`, so this gate proves nothing", releaseWorkflow)
+	}
+	end := strings.Index(wf[start:], "--draft")
+	if end < 0 {
+		t.Fatalf("%s: no --draft after `gh release create`; the upload list cannot be read", releaseWorkflow)
+	}
+	var args []string
+	for _, f := range strings.Fields(wf[start : start+end]) {
+		if strings.HasPrefix(f, "dist/") {
+			args = append(args, f)
+		}
+	}
+	if len(args) == 0 {
+		t.Fatalf("%s: `gh release create` names no dist/ artifact", releaseWorkflow)
+	}
+	return args
+}
+
+// checksummed returns the basename patterns every `sha256sum --` call in
+// the workflow covers. The globs are read where they are written rather
+// than restated here, so a glob that stops matching a published class
+// fails this test instead of shipping an unchecksummed asset.
+func checksummed(t *testing.T) map[string]bool {
+	t.Helper()
+	covered := make(map[string]bool)
+	for _, line := range strings.Split(read(t, releaseWorkflow), "\n") {
+		_, rest, found := strings.Cut(line, "sha256sum -- ")
+		if !found {
+			continue
+		}
+		// Stop at the redirection or the pipe that consumes the output.
+		rest, _, _ = strings.Cut(rest, ">")
+		rest, _, _ = strings.Cut(rest, "|")
+		rest = strings.TrimSuffix(strings.TrimSpace(rest), ")")
+		for _, pattern := range strings.Fields(rest) {
+			covered[pattern] = true
+		}
+	}
+	return covered
+}
+
+// TestEveryPublishedAssetIsChecksummed holds the SHA256SUMS file to the
+// upload list.
+//
+// v0.28.0 published 323 assets and checksummed 292: the 29 Homebrew
+// formulae and the provenance bundle were outside every glob. The bundle
+// belongs outside one; the formulae did not, and the reason they were
+// missing is ordering rather than intent — a formula pins checksums read
+// from SHA256SUMS, so none exists when the file is first written, and the
+// second pass that covers them is easy to forget when a new asset class
+// arrives. Whatever a future release adds to the upload list, this test
+// fails until a glob reaches it.
+func TestEveryPublishedAssetIsChecksummed(t *testing.T) {
+	covered := checksummed(t)
+	if len(covered) == 0 {
+		t.Fatal("no `sha256sum --` call in the release workflow — nothing published is checksummed")
+	}
+
+	for _, arg := range uploadArgs(t) {
+		name := path.Base(arg)
+		if selfVerifying[name] {
+			continue
+		}
+		if !covered[name] {
+			t.Errorf("the release uploads %s, which no `sha256sum --` glob in %s covers (%q) — "+
+				"a downloader has nothing to check it against",
+				arg, releaseWorkflow, strings.Join(sortedKeys(covered), " "))
+		}
+	}
+}
+
+// sortedKeys renders a set for an error message, in a stable order.
+func sortedKeys(set map[string]bool) []string {
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
