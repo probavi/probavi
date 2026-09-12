@@ -11,6 +11,32 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **The READMEs carry a row of engine badges**, one per adapter, each
+  carrying that engine's logo on that brand's own colour and linking to the
+  adapter that restores it. The logo slugs and colours come from
+  simple-icons — the catalogue shields.io resolves `?logo=` against, so a
+  slug here is one it can actually draw and a colour is the one that
+  catalogue records rather than one picked by eye. Eight engines have no
+  entry there, several because the brand asked for its icon to be removed;
+  they take a neutral colour that belongs to nobody rather than a guessed
+  one. The logo colour is chosen per badge by the brightness rule
+  shields.io uses for its own text, so a white mark never lands on
+  ClickHouse yellow. Like the engine table
+  below it, the row is generated from `docs/capabilities.json` rather than
+  kept by hand, so it cannot name an engine the manifest does not declare
+  — and it is written into every translation, because engine names and
+  links say the same thing in every language. A translation showing a
+  shorter list than the English README would read as neither a translation
+  lag nor a capability difference, which is the worst of both.
+
+  The two blocks are ordered differently on purpose. The table follows the
+  manifest's own order, the adapters sorted by id; the badge row follows
+  the name printed on the badge, because a row is scanned for one name and
+  a name is looked up under its own first letter — `SQL Server` under S
+  rather than where `mssql` would file it. Neither order ranks anything.
+
 ### Fixed
 
 - **`SHA256SUMS` covers the Homebrew formulae too.** v0.28.0 published 323
