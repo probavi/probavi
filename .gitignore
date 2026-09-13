@@ -45,6 +45,7 @@
 /duckdb
 /prometheus
 /cassandra
+/chroma
 /opensearch
 /influxdb
 /victoriametrics
@@ -64,6 +65,7 @@
 /adapters/*/duckdb
 /adapters/*/prometheus
 /adapters/*/cassandra
+/adapters/*/chroma
 /adapters/*/opensearch
 /adapters/*/influxdb
 /adapters/*/victoriametrics

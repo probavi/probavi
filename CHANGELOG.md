@@ -13,6 +13,57 @@ always called out explicitly.
 
 ### Added
 
+- **Chroma is the twenty-ninth engine** (`adapters/chroma` 0.1.0), restoring
+  a persistence directory or a tar archive of one — the copy taken with the
+  server stopped, which is the whole artifact an operator can hold, because
+  Chroma has no backup command.
+
+  **The measurement day contradicted the plan three times, and one of the
+  contradictions is the reason this adapter exists.** The persistence
+  directory is a SQLite file plus one directory per vector segment, and the
+  second is derived from the first only while the write queue still covers
+  it — Chroma purges that queue once the segments catch up
+  (`{"automatically_purge": true}`; a 2000-record write collapsed a
+  200-entry queue to 1). After the purge, a backup that lost a segment
+  directory **starts, reports every record present, reads every document
+  back, and logs nothing** — while a nearest-neighbour query returns zero
+  of the five asked for. A drill that checked a record count would have
+  recorded a green restore of a vector store that can no longer search. So
+  the verdict is not a count: the adapter takes one embedding out of each
+  collection, queries that collection with that same vector, and requires
+  as many neighbours back as it asked for.
+
+  The other two contradictions were smaller and both reached the README.
+  The catalogue expected the sqlite adapter's fences to apply verbatim;
+  they do not. Chroma's SQLite runs in rollback-journal mode
+  (`journal_mode` reports `delete`, header bytes 18 and 19 are both 1), so
+  there is no WAL sidecar to refuse — `-journal` is the file that betrays a
+  torn copy, and a `-wal` pair means something this adapter has not
+  measured and says so rather than restoring past it. And
+  `PRAGMA integrity_check` cannot run in this sandbox at all: the official
+  image carries no `sqlite3`, no `curl`, no `python3` and no `jq`.
+
+  That last absence shaped the adapter. Its entire HTTP client is bash's
+  own `/dev/tcp`, which the image's bash 5.2.37 supports, so the drill
+  brings its client with it as text and the sandbox needs nothing added.
+  What the sandbox does need is a two-line wrapper clearing the entrypoint,
+  because `chroma` is a CLI that reads its arguments as subcommands and a
+  sandbox `command: sleep infinity` arrives as `chroma sleep infinity` —
+  the prometheus precedent, and the recipe is in the adapter README.
+
+  No newest-in-a-directory kind, and `backup.created_at` is null:
+  nothing inside a persistence directory dates the backup, and ranking by
+  file time would date the copy rather than the data. No version fence
+  either, and the reason is worth recording — nothing states the engine
+  version. The image tag says 1.5.9, `chroma --version` answers `1.4.4`
+  (the CLI), `/api/v2/version` answers `"1.0.0"` (the API), and a 1.5.9
+  artifact restored cleanly under 1.4.1 when measured, so no refusal is
+  asserted where no evidence could support one. Checks are API requests
+  rather than SQL (the mongodb precedent), and the runner resolves a
+  collection's name to the id Chroma's read endpoints demand so a drill
+  config never carries a UUID. Conformance 15/15. Verified against 1.5.9
+  and 1.4.1.
+
 - **The READMEs carry a row of engine badges**, one per adapter, each
   carrying that engine's logo on that brand's own colour and linking to the
   adapter that restores it. The logo slugs and colours come from

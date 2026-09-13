@@ -1,0 +1,28 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead \u2014 never duplicated here. The images listed under verified are the official ones, the baseline on every run and the rest in the scheduled version matrix and before a release tag. Chroma's official image pins `dumb-init -- chroma` as its entrypoint and chroma is a CLI that reads its arguments as subcommands, so a sandbox `command` of `sleep infinity` becomes `chroma sleep infinity` and the container dies (measured 2026-09-13); the suite therefore runs the two-line wrapper the adapter README documents, built FROM the listed image, so the engine exercised is exactly the listed version's \u2014 the prometheus precedent. The wrapper adds nothing: the image already carries bash, and bash's /dev/tcp is this adapter's whole HTTP client, because the image has no curl, no python and no jq. Chroma publishes no end-of-life dates, so supported_until is null and versions_checked records the reading. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "chroma",
+  "name": "Chroma",
+  "status": "experimental",
+  "since": null,
+  "engine_name": "Chroma",
+  "conformance_verified": true,
+  "docs": "adapters/chroma/README.md",
+  "versions_checked": "2026-09-13",
+  "verified": [
+    {
+      "engine_version": "1.5.9",
+      "image": "chromadb/chroma:1.5.9",
+      "supported_until": null,
+      "baseline": true
+    },
+    {
+      "engine_version": "1.4.1",
+      "image": "chromadb/chroma:1.4.1",
+      "supported_until": null
+    }
+  ],
+  "sources": {
+    "chroma_data_tar": "A tar archive of one, plain or gzip \u2014 the compression read from the bytes, never the name",
+    "chroma_data": "The persistence directory `chroma run --path` was given, copied with the server stopped"
+  }
+}
