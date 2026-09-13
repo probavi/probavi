@@ -3,7 +3,7 @@
   "id": "chroma",
   "name": "Chroma",
   "status": "experimental",
-  "since": null,
+  "since": "0.29.0",
   "engine_name": "Chroma",
   "conformance_verified": true,
   "docs": "adapters/chroma/README.md",
