@@ -28,7 +28,10 @@ import (
 )
 
 // teardownGrace bounds cleanup work that runs after the drill context is
-// already dead (PoC finding 3: cleanup never depends on the drill's fate).
+// already dead. Cleanup never depends on the drill's fate: a budget drawn
+// from the drill's own context is already spent exactly when it is needed
+// most, and the timeout and the interrupt are the two failures that would
+// otherwise leave a sandbox holding production data behind.
 const teardownGrace = 60 * time.Second
 
 // AdapterClient is what the core needs from the adapter protocol client.

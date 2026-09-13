@@ -152,7 +152,8 @@ func (p *Provider) Create(ctx context.Context, params map[string]string) (*Sandb
 	sbx := &Sandbox{id: strings.TrimSpace(string(stdout)), p: p}
 	if err := p.awaitRunning(ctx, sbx.id); err != nil {
 		// Cleanup on the failure path runs on a fresh context: the caller's
-		// context may already be dead (PoC finding 3).
+		// context may already be dead, and this is the path that leaks —
+		// the container exists and nothing outside this call knows its id.
 		dctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if derr := sbx.Destroy(dctx); derr != nil {
@@ -408,8 +409,10 @@ func (p *Provider) runArgs(d sandbox.Descriptor, params map[string]string) ([]st
 	return append(args, strings.Fields(params["command"])...), nil
 }
 
-// awaitRunning waits until the container runtime is up (not the engine —
-// that is the adapter's readiness job, see PoC finding 1).
+// awaitRunning waits until the container runtime is up, never until the
+// engine is. Engine readiness is engine-specific and full of traps — an
+// image may answer on one transport while it is still initialising — so it
+// belongs to the adapter's healthcheck, and the core owns only the clock.
 func (p *Provider) awaitRunning(ctx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, p.awaitCap)
 	defer cancel()

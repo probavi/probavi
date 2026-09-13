@@ -1,1 +1,17 @@
-96.0
+# Statement-coverage minimums, one area of the repository per line, enforced
+# in CI by internal/tools/coverage. Raising a floor in a pull request that
+# raises coverage is welcome; lowering one is never acceptable — that is the
+# "coverage must not decrease" gate of AGENTS.md §3.1.
+#
+# Every package in the profile must fall under an area declared here, so a
+# new top-level directory arrives with a decision about its floor attached
+# rather than arriving unmeasured. Areas are matched by whole path segments
+# and the longest one wins, so a stricter floor can be declared inside a
+# broader one — "adapters/<id> 90.0" beside "adapters" holds one adapter to
+# more than the aggregate does.
+#
+# Each floor sits just under what the area measures today: the ratchet starts
+# where the code is, and only ever moves up.
+adapters 82.5
+cmd      87.0
+internal 96.0

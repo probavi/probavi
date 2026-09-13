@@ -332,7 +332,8 @@ func opHealthcheck(ctx context.Context, c *core, payload json.RawMessage) (any, 
 
 // awaitEngine polls pg_isready over TCP until the engine accepts
 // connections. The initdb-phase temporary server only listens on the unix
-// socket, so a TCP probe cannot report ready too early (PoC finding 1).
+// socket, so a TCP probe cannot report ready too early (measured
+// 2026-07-30 on postgres:16).
 func awaitEngine(ctx context.Context, c *core, user string) (float64, *protoError) {
 	start := time.Now()
 	for {
