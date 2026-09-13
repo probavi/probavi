@@ -84,7 +84,8 @@ go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 
 Every PR runs the full gate set in CI, and a red check blocks merge with
 no exceptions: `golangci-lint` with the strict committed config,
-`go test -race`, a coverage ratchet (coverage may not decrease, and
+`go test -race`, a coverage ratchet (`.coverage-floor` holds one minimum
+per area of the repository and none of them may move down, and
 `internal/evidence` and `internal/adapter` are held near 100%),
 `govulncheck`, integration tests against real Docker, and a check that an
 adapter's source cannot change without its `adapterVersion` moving — that

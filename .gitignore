@@ -15,10 +15,12 @@
 # go build ./internal/tools/<name>, and the same build from inside it
 /adapterversion
 /capabilities
+/coverage
 /enginetable
 /versionmatrix
 /internal/tools/*/adapterversion
 /internal/tools/*/capabilities
+/internal/tools/*/coverage
 /internal/tools/*/enginetable
 /internal/tools/*/versionmatrix
 

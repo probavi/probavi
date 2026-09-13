@@ -72,20 +72,17 @@ jobs:
       - name: build
         run: go build ./...
       - name: test with race detector and coverage
-        run: go test -race -coverprofile=cover.out -coverpkg=./internal/... ./...
+        # -coverpkg=./... rather than ./internal/...: the floor can only
+        # govern what the profile contains, and the narrower scope left
+        # adapters/ — most of the code that ships — unmeasured.
+        run: go test -race -coverprofile=cover.out -coverpkg=./... ./...
       - name: coverage ratchet
-        # .coverage-floor holds the committed minimum for ./internal/...
-        # coverage. PRs that raise coverage may raise the floor; lowering it
-        # is never acceptable — that is the "coverage must not decrease"
-        # gate of AGENTS.md §3.1.
-        run: |
-          total=$(go tool cover -func=cover.out | awk '/^total:/ {sub(/%/, "", $3); print $3}')
-          floor=$(cat .coverage-floor)
-          echo "internal coverage: ${total}% (committed floor: ${floor}%)"
-          if ! awk -v t="$total" -v f="$floor" 'BEGIN {exit (t + 0 >= f + 0) ? 0 : 1}'; then
-            echo "::error::coverage ${total}% fell below the committed floor ${floor}% — add tests; never lower the floor"
-            exit 1
-          fi
+        # .coverage-floor holds one committed minimum per area of the
+        # repository. A pull request that raises coverage may raise a floor;
+        # lowering one is never acceptable — that is the "coverage must not
+        # decrease" gate of AGENTS.md §3.1. The comparison is Go rather than
+        # shell because it is a decision, and this one has tests.
+        run: go run ./internal/tools/coverage
       - name: report the profile to Codecov
         # Reporting only. The gate is the ratchet above, against a floor
         # committed to this repository; a number a third party computes may
