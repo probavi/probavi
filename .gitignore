@@ -29,10 +29,6 @@
 /spec/evidence/probavi-evidence-verify
 /spec/evidence/cmd/probavi-evidence-verify/probavi-evidence-verify
 
-# The Phase 0 spike. `go build ./poc` refuses ("build output "poc" already
-# exists and is a directory"), so only the in-place build needs an entry.
-/poc/poc
-
 # go build ./adapters/<name> drops the binary in the repo root
 /postgres
 /mysql
@@ -98,9 +94,6 @@
 coverage.out
 # The name ci.yml and spec/evidence's gate actually write.
 cover.out
-
-# Generated PoC fixtures (created by poc/make-fixture.sh)
-/poc/testdata/
 
 # Local evidence logs and keys (never commit!)
 *.jsonl
