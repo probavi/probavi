@@ -134,3 +134,40 @@ jobs:
           # the manifest, and only for a version the manifest lists.
           PROBAVI_IT_ENGINE_VERSION: ${{ matrix.target.engine_version }}
         run: go test -race -tags integration -timeout 25m ./adapters/${{ matrix.target.adapter }}/...
+
+  # The one job here a branch rule can name.
+  #
+  # Every other job in this workflow is unnameable by a required-checks
+  # rule: `restore` is a fan-out whose check names come from the manifest
+  # at run time (`mariadb 12.2`, and a different set next month), and
+  # `enumerate` is the job that computes them. A rule can only require a
+  # context it can spell in advance, so before this job the entire matrix
+  # — the evidence behind every engine-version claim this repository
+  # publishes — sat outside the merge gate, and a red matrix merged.
+  #
+  # `if: always()` is what makes it a gate rather than a witness. Without
+  # it a job whose dependency failed is *skipped*, and a skipped required
+  # check reports success to the branch rule: the one outcome this must
+  # never produce. For the same reason `skipped` is a failure below. A
+  # matrix that did not run has not proved a claim, and this workflow
+  # exists to say so out loud.
+  gate:
+    # Renaming this renames the status check, which silently un-requires
+    # it in the repository's branch rule. TestVersionMatrixGateCoversEveryJob
+    # pins the name for that reason.
+    name: Version matrix gate
+    needs: [enumerate, restore]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: refuse a matrix that did not pass
+        # The decision is the expression, not the script: shell inside a
+        # workflow is the one place in this repository no test can reach,
+        # so it reports and exits and decides nothing.
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        env:
+          RESULTS: ${{ join(needs.*.result, ', ') }}
+        run: |
+          echo "::error::version matrix results were ${RESULTS} — a claimed engine version did not restore, or never ran"
+          exit 1
