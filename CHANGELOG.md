@@ -39,6 +39,21 @@ always called out explicitly.
 
 ### Changed
 
+- **CI refuses a committed key.** A Probavi signing seed is 64 lowercase hex
+  characters on a line, which is what `probavi evidence keygen` writes —
+  for the public half too, since on disk the two are indistinguishable.
+  GitHub's secret scanning is now enabled on this repository and cannot
+  help with it: that shape matches no provider's pattern, and the
+  non-provider patterns that would catch an adjacent accident are a paid
+  tier. What stood between a seed and a public push was `*.key` and `*.pem`
+  in `.gitignore`, and `keygen` writes wherever the operator points it. The
+  gate reads every file the ignore rules do not cover and refuses a bare
+  key line or a PEM private key, with an allow-list that records why each
+  published key is public — today only the conformance vectors' `signer.pub`,
+  which exists to be read by everyone. It cannot stop a push; nothing in CI
+  can. It stops the merge, and it says rotate rather than delete, because
+  by then the bytes are published rather than merely committed.
+
 - **The coverage ratchet measures the whole repository.** It read
   `-coverpkg=./internal/...` and was understood as measuring what ships:
   11.7k of the 56k lines that do, leaving `adapters/` — 79% of the

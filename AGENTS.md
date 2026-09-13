@@ -107,6 +107,7 @@ golangci-lint run                           # zero warnings required
 - Threat model to keep in mind: the evidence log may be presented to auditors/insurers — assume an attacker wants to forge "everything was fine". Hash chain + signatures defend this; protect key handling accordingly (keys read from file with restrictive perms; never logged; never in config values).
 - Restored sandboxes contain **production data**. Defaults: no published ports, isolated network, ephemeral storage, forced destruction. Document the residual risk clearly.
 - Credentials for reading backups: env vars or file references only; redact from all logs and evidence records.
+- No key material reaches this repository. CI refuses a file carrying a bare 64-lowercase-hex line — the form `probavi evidence keygen` writes for both halves of a pair — or a PEM private key, with an allow-list that carries the reason each published key is public (`internal/docs`). GitHub's secret scanning is enabled and does not cover this: a seed matches no provider pattern. A seed that reaches a public repository is published rather than committed, so the remedy is rotation, never deletion.
 - No telemetry/phone-home. Ever. This is a trust product.
 - Supply chain: pinned dependency versions, `go.sum` committed, releases built reproducibly with checksums and (later) signed artifacts + SBOM.
 
