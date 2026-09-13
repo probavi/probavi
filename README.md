@@ -200,7 +200,7 @@ There is also a container image, `ghcr.io/probavi/probavi`, carrying the core an
 
 ## Quickstart
 
-Prove a PostgreSQL backup restorable in about five minutes, building from source — or install the release binaries above and skip the `go build` steps. You need Go 1.24+, Docker, and a `pg_dump` backup file — custom-format (`-Fc`) or plain SQL, either of them optionally gzip-compressed.
+Prove a PostgreSQL backup restorable in about five minutes, building from source — or install the release binaries above and skip the `go build` steps. You need Go 1.25+, Docker, and a `pg_dump` backup file — custom-format (`-Fc`) or plain SQL, either of them optionally gzip-compressed.
 
 ```console
 $ git clone https://github.com/probavi/probavi.git && cd probavi

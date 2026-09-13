@@ -6,6 +6,41 @@ import (
 	"testing"
 )
 
+// goDirective matches the language version the main module declares. The
+// patch component is optional: go.mod may carry either form.
+var goDirective = regexp.MustCompile(`(?m)^go (\d+\.\d+)(?:\.\d+)?$`)
+
+// goRequirement matches the toolchain version the quickstart asks a reader
+// to have before the first command.
+var goRequirement = regexp.MustCompile(`You need Go (\d+\.\d+)\+`)
+
+// TestQuickstartNamesTheGoVersionTheModuleRequires keeps the first sentence
+// of the quickstart true.
+//
+// It said "Go 1.24+" from the initial public release until go.mod moved to
+// 1.25 and nobody moved the sentence with it. Nothing caught it: the
+// version badge at the top of the same file reads go.mod live, so the
+// README disagreed with itself in two places a reader sees within one
+// screen of each other, and the reader with the older toolchain is the one
+// who finds out — either by downloading a toolchain they did not ask for,
+// or, with GOTOOLCHAIN=local, by a build that stops before the quickstart's
+// first step.
+func TestQuickstartNamesTheGoVersionTheModuleRequires(t *testing.T) {
+	module := goDirective.FindStringSubmatch(read(t, "go.mod"))
+	if module == nil {
+		t.Fatal("go.mod declares no go directive — this gate would pass vacuously")
+	}
+	stated := goRequirement.FindStringSubmatch(read(t, sourceDoc))
+	if stated == nil {
+		t.Fatalf("%s no longer says which Go version it needs; %s expects the form \"You need Go X.Y+\"",
+			sourceDoc, "TestQuickstartNamesTheGoVersionTheModuleRequires")
+	}
+	if stated[1] != module[1] {
+		t.Errorf("%s asks the reader for Go %s+, but go.mod requires %s — a build following the quickstart "+
+			"verbatim needs the newer one", sourceDoc, stated[1], module[1])
+	}
+}
+
 // changelogRelease matches the newest released heading of CHANGELOG.md.
 // [Unreleased] carries no date and is skipped by the date requirement, so
 // the first match is the version this repository currently claims to be.

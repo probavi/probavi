@@ -2,10 +2,36 @@
 /probavi
 /dist/
 *.exe
-# go build ./internal/tools/<name> drops the binary in the repo root too
+
+# `go build ./<dir>` writes the binary into the current directory, named
+# after the package directory, and `go build .` from inside that directory
+# writes it there. Both land in the work tree, and a 4.5 MB adapter binary
+# reached version control this way once already, because the list below was
+# kept by hand and one name was missing from it. It still is a list, but no
+# longer only a list: TestEveryBuiltBinaryIsIgnored enumerates the main
+# packages in the tree and fails when either place a build drops one is not
+# covered here.
+
+# go build ./internal/tools/<name>, and the same build from inside it
 /adapterversion
 /capabilities
+/enginetable
 /versionmatrix
+/internal/tools/*/adapterversion
+/internal/tools/*/capabilities
+/internal/tools/*/enginetable
+/internal/tools/*/versionmatrix
+
+# The CLI, and the independent verifier. The verifier is its own module, so
+# `go build ./cmd/...` for it runs from inside spec/evidence and drops the
+# binary there; the repository root is out of its reach entirely.
+/cmd/probavi/probavi
+/spec/evidence/probavi-evidence-verify
+/spec/evidence/cmd/probavi-evidence-verify/probavi-evidence-verify
+
+# The Phase 0 spike. `go build ./poc` refuses ("build output "poc" already
+# exists and is a directory"), so only the in-place build needs an entry.
+/poc/poc
 
 # go build ./adapters/<name> drops the binary in the repo root
 /postgres
@@ -56,6 +82,16 @@
 /adapters/*/h2
 /couchdb
 /adapters/*/couchdb
+/qdrant
+/adapters/*/qdrant
+/weaviate
+/adapters/*/weaviate
+/aerospike
+/adapters/*/aerospike
+/questdb
+/adapters/*/questdb
+/tdengine
+/adapters/*/tdengine
 
 # Test and coverage artifacts
 *.test
@@ -81,23 +117,3 @@ cover.out
 .idea/
 .vscode/
 .DS_Store
-
-# qdrant adapter binary
-/qdrant
-/adapters/*/qdrant
-
-# weaviate adapter binary
-/weaviate
-/adapters/*/weaviate
-
-# aerospike adapter binary
-/aerospike
-/adapters/*/aerospike
-
-# questdb adapter binary
-/questdb
-/adapters/*/questdb
-
-# tdengine adapter binary
-/tdengine
-/adapters/*/tdengine

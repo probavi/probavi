@@ -37,7 +37,30 @@ always called out explicitly.
   a name is looked up under its own first letter — `SQL Server` under S
   rather than where `mssql` would file it. Neither order ranks anything.
 
+### Changed
+
+- **The version matrix reports one status check a branch rule can
+  require.** Every check it reported was named from the manifest at run
+  time, so no rule could name one in advance, and the run behind every
+  engine-version claim this repository publishes sat outside the merge
+  gate. The new `Version matrix gate` job fails whenever a job in that
+  workflow failed, was cancelled, or never ran.
+
 ### Fixed
+
+- **The quickstart asks for the Go version the module actually requires.**
+  It said 1.24 from the first public release; `go.mod` moved to 1.25 later
+  and the sentence did not follow, while the version badge higher up the
+  same README reads `go.mod` live — so the document disagreed with itself
+  within a screen, and a reader with the older toolchain was the one who
+  found out. A gate now ties the sentence to the directive.
+
+- **`.gitignore` covers every binary a build can drop.** Three were not:
+  the `enginetable` tool, the independent verifier's binary under
+  `spec/evidence`, and the in-place build of every main package outside
+  `adapters/`. A 4.5 MB adapter binary reached version control once through
+  this hole, and the list that let it through was kept by hand; it is now
+  checked against the main packages in the tree.
 
 - **`SHA256SUMS` covers the Homebrew formulae too.** v0.28.0 published 323
   assets and checksummed 292: the 29 `.rb` formulae had no line in the
