@@ -120,6 +120,45 @@
       "docs": "adapters/cassandra/README.md"
     },
     {
+      "id": "chroma",
+      "name": "Chroma",
+      "status": "experimental",
+      "since": null,
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "chroma",
+        "name": "Chroma"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "1.5.9",
+          "image": "chromadb/chroma:1.5.9"
+        },
+        {
+          "engine_version": "1.4.1",
+          "image": "chromadb/chroma:1.4.1"
+        }
+      ],
+      "sources": [
+        {
+          "id": "chroma_data",
+          "name": "The persistence directory `chroma run --path` was given, copied with the server stopped",
+          "pitr": false
+        },
+        {
+          "id": "chroma_data_tar",
+          "name": "A tar archive of one, plain or gzip — the compression read from the bytes, never the name",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/chroma/README.md"
+    },
+    {
       "id": "clickhouse",
       "name": "ClickHouse",
       "status": "experimental",

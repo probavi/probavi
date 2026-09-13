@@ -18,6 +18,7 @@
 [![Aerospike](https://img.shields.io/badge/Aerospike-4B5563)](adapters/aerospike/README.md)
 [![Apache Cassandra](https://img.shields.io/badge/Apache%20Cassandra-1287B1?logo=apachecassandra&logoColor=white)](adapters/cassandra/README.md)
 [![Apache Solr](https://img.shields.io/badge/Apache%20Solr-D9411E?logo=apachesolr&logoColor=white)](adapters/solr/README.md)
+[![Chroma](https://img.shields.io/badge/Chroma-4B5563)](adapters/chroma/README.md)
 [![ClickHouse](https://img.shields.io/badge/ClickHouse-FFCC01?logo=clickhouse&logoColor=333333)](adapters/clickhouse/README.md)
 [![CouchDB](https://img.shields.io/badge/CouchDB-E42528?logo=apachecouchdb&logoColor=white)](adapters/couchdb/README.md)
 [![DuckDB](https://img.shields.io/badge/DuckDB-FFF000?logo=duckdb&logoColor=333333)](adapters/duckdb/README.md)
@@ -80,6 +81,7 @@ the exact instant proven.
 | --- | --- | --- | --- |
 | [Aerospike](adapters/aerospike/README.md) | 8.1.2.4, 7.2.0.21 | 0.26.0 | `asbackup`, `asbackup_dir` |
 | [Apache Cassandra](adapters/cassandra/README.md) | 4.1, 5.0 | 0.13.0 | `cassandra_snapshot`, `cassandra_snapshot_dir`, `cassandra_snapshot_tar` |
+| [Chroma](adapters/chroma/README.md) | 1.5.9, 1.4.1 | unreleased | `chroma_data`, `chroma_data_tar` |
 | [ClickHouse](adapters/clickhouse/README.md) | 26.3, 26.7 | 0.7.0 | `clickhouse_backup`, `clickhouse_backup_dir` |
 | [CouchDB](adapters/couchdb/README.md) | 3.5.2, 3.4.3 | 0.23.0 | `couchbackup`, `couchbackup_dir`, `couchdb_data`, `couchdb_data_tar` |
 | [DuckDB](adapters/duckdb/README.md) | 1.4, 1.5 | 0.11.0 | `duckdb_db`, `duckdb_db_dir`, `duckdb_export` |
@@ -186,7 +188,7 @@ $ tar -xzf "probavi-adapter-postgres_${tag#v}_${os}_${arch}.tar.gz" ./probavi-ad
 $ sudo install -m0755 probavi probavi-adapter-postgres /usr/local/bin/
 ```
 
-Adapters ship for `postgres`, `mysql`, `mariadb`, `mongodb`, `mssql`, `clickhouse`, `etcd`, `redis`, `valkey`, `sqlite`, `duckdb`, `prometheus`, `cassandra`, `opensearch`, `influxdb`, `victoriametrics`, `elasticsearch`, `oracle`, `neo4j`, `solr`, `firebird`, `h2`, `couchdb`, `qdrant`, `weaviate`, `aerospike`, `questdb`, and `tdengine`. Both binaries must sit on the same `PATH`: the core launches the adapter as a child process and finds it by name. Each adapter carries its own version — the one it reports through the protocol and that every evidence record stores as `adapter.version` — which moves independently of the release tag; the compatibility contract between core and adapter is the adapter protocol version, negotiated at handshake. The release notes list both.
+Adapters ship for `postgres`, `mysql`, `mariadb`, `mongodb`, `mssql`, `clickhouse`, `etcd`, `redis`, `valkey`, `sqlite`, `duckdb`, `prometheus`, `cassandra`, `opensearch`, `influxdb`, `victoriametrics`, `elasticsearch`, `oracle`, `neo4j`, `solr`, `firebird`, `h2`, `couchdb`, `qdrant`, `weaviate`, `aerospike`, `questdb`, `tdengine`, and `chroma`. Both binaries must sit on the same `PATH`: the core launches the adapter as a child process and finds it by name. Each adapter carries its own version — the one it reports through the protocol and that every evidence record stores as `adapter.version` — which moves independently of the release tag; the compatibility contract between core and adapter is the adapter protocol version, negotiated at handshake. The release notes list both.
 
 Verifying an evidence log needs nothing else: `probavi evidence verify` reads a log and a public key, so an auditor installs the core alone.
 

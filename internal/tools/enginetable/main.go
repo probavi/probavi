@@ -250,6 +250,7 @@ type badgeStyle struct{ logo, colour string }
 var engineBadgeStyles = map[string]badgeStyle{
 	"aerospike":       {},
 	"cassandra":       {logo: "apachecassandra", colour: "1287B1"},
+	"chroma":          {},
 	"clickhouse":      {logo: "clickhouse", colour: "FFCC01"},
 	"couchdb":         {logo: "apachecouchdb", colour: "E42528"},
 	"duckdb":          {logo: "duckdb", colour: "FFF000"},
