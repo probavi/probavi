@@ -39,12 +39,38 @@ always called out explicitly.
 
 ### Changed
 
+- **The coverage ratchet measures the whole repository.** It read
+  `-coverpkg=./internal/...` and was understood as measuring what ships:
+  11.7k of the 56k lines that do, leaving `adapters/` — 79% of the
+  production code — with no floor at all, and the newest adapter 36 points
+  below the gated core with nothing in CI to say so. `.coverage-floor` now
+  holds one minimum per area (`adapters` 82.5, `cmd` 87.0, `internal` 96.0,
+  each just under what the area measures today), and `internal/tools/coverage`
+  checks each against a profile of `./...`. Every package must fall under a
+  declared area, so a new top-level directory arrives with a decision about
+  its floor attached instead of arriving unmeasured. Areas are matched by
+  whole path segments with the longest winning, so a stricter floor can be
+  declared inside a broader one. The comparison moved from an `awk`
+  one-liner in the workflow into a tested tool, for the reason the workflow
+  already gives about shell: it holds a decision, and nothing could reach it.
+
 - **The version matrix reports one status check a branch rule can
   require.** Every check it reported was named from the manifest at run
   time, so no rule could name one in advance, and the run behind every
   engine-version claim this repository publishes sat outside the merge
   gate. The new `Version matrix gate` job fails whenever a job in that
   workflow failed, was cancelled, or never ran.
+
+### Removed
+
+- **The Phase 0 spike (`poc/`) is gone.** It was a throwaway by its own
+  declaration — "none of this code is production code", to be deleted once
+  `internal/` existed — and it outlived that by six weeks in a tree where
+  everything else is gated: 177 lines with no tests by design, compiled and
+  linted on every pull request, exercised by nothing. All seven of its
+  findings are in the shipped design, which is what it was for, and
+  `ROADMAP.md` now says which is which in place of pointing at a deleted
+  file. Nothing imports it and no published artifact contained it.
 
 ### Fixed
 
