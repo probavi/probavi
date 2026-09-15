@@ -4,9 +4,14 @@ package k8s
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -108,23 +113,39 @@ func TestK8sLifecycle(t *testing.T) {
 		t.Error("a service-account token is mounted — a sandbox holding production data must carry no cluster credentials")
 	}
 
+	// A payload large enough to cross the buffer boundaries a torn exec
+	// stream stops at: the 13-byte fixture this test used until issue #272
+	// fitted inside a single frame and could not have caught a truncated
+	// transfer. Repeated because the tear-down race does not lose the tail
+	// every time — a single green copy proves nothing about the next one.
+	const payloadBytes = 512 * 1024
+	payload := make([]byte, payloadBytes)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatalf("generate payload: %v", err)
+	}
+	wantDigest := fmt.Sprintf("%x", sha256.Sum256(payload))
 	hostFile := filepath.Join(t.TempDir(), "payload.bin")
-	if err := os.WriteFile(hostFile, []byte("payload-bytes"), 0o600); err != nil {
+	if err := os.WriteFile(hostFile, payload, 0o600); err != nil {
 		t.Fatalf("write host file: %v", err)
 	}
-	pf, err := sbx.PutFile(ctx, hostFile, sbx.ScratchDir()+"/payload.bin", "0640")
-	if err != nil {
-		t.Fatalf("PutFile: %v", err)
-	}
-	if pf.BytesCopied != int64(len("payload-bytes")) {
-		t.Errorf("BytesCopied = %d", pf.BytesCopied)
-	}
-	res, err = sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"sh", "-c", "cat /tmp/payload.bin && stat -c %a /tmp/payload.bin"}})
-	if err != nil {
-		t.Fatalf("Exec readback: %v", err)
-	}
-	if !strings.Contains(string(res.Stdout), "payload-bytes") || !strings.Contains(string(res.Stdout), "640") {
-		t.Errorf("readback = %q, want content and mode 640", res.Stdout)
+	for i := 1; i <= 3; i++ {
+		pf, err := sbx.PutFile(ctx, hostFile, sbx.ScratchDir()+"/payload.bin", "0640")
+		if err != nil {
+			t.Fatalf("PutFile transfer %d: %v", i, err)
+		}
+		if pf.BytesCopied != payloadBytes {
+			t.Errorf("transfer %d: BytesCopied = %d, want %d", i, pf.BytesCopied, payloadBytes)
+		}
+		res, err = sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"sh", "-c",
+			"wc -c < /tmp/payload.bin && sha256sum /tmp/payload.bin | cut -d' ' -f1 && stat -c %a /tmp/payload.bin"}})
+		if err != nil {
+			t.Fatalf("transfer %d: Exec readback: %v", i, err)
+		}
+		fields := strings.Fields(string(res.Stdout))
+		want := []string{strconv.Itoa(payloadBytes), wantDigest, "640"}
+		if !slices.Equal(fields, want) {
+			t.Errorf("transfer %d: readback = %v, want size, digest and mode %v", i, fields, want)
+		}
 	}
 
 	if err := sbx.Destroy(ctx); err != nil {

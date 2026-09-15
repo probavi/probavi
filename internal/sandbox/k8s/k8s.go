@@ -265,12 +265,37 @@ func (s *Sandbox) Exec(ctx context.Context, req sandbox.ExecRequest) (*sandbox.E
 	}, nil
 }
 
+// putFileAttempts bounds how often a short copy is re-sent before the
+// transfer is refused. One retry would cover a single unlucky stream; three
+// attempts cover a cluster that drops one regularly without hiding one that
+// drops every time, which the final error then names.
+const putFileAttempts = 3
+
 // PutFile streams a host file into the sandbox pod and applies mode (octal
 // string, default "0600") — adapter protocol §4.2. The copy pipes the file
 // through `sh -c 'cat > "$1"'` with the destination as a positional
 // parameter: no tar dependency in the image (kubectl cp needs one) and no
 // shell interpolation of the path. Path allow-listing is the core's
 // responsibility; the provider only moves bytes.
+//
+// The pod counts what landed and the count is compared with the host file's
+// size, because `kubectl exec -i` can deliver a prefix: the exec stream is
+// torn down when local stdin reaches EOF, before the remote `cat` has
+// drained what is still in flight, and the copy then ends at a buffer
+// boundary with a zero exit code. Reporting the host's own stat as
+// BytesCopied — which this provider did until issue #272 — turns that into
+// a silent success, and the adapter goes on to judge a truncated artifact:
+// the drill records source_corrupt against a backup that is intact, with a
+// verdict that changes from run to run. A short copy is the transport's
+// failure, not the backup's, so it is retried and then refused as a
+// provider error, which reaches the adapter as sandbox_error (§4.3) and
+// never as a statement about the backup.
+//
+// Size is the comparison rather than a digest because the image is the
+// user's: `wc` is POSIX and present wherever the `sh` and `chmod` this
+// function already needs are, while no checksum tool is guaranteed. It
+// catches the truncation that actually happens here; a pod that answers
+// with no count at all fails loudly rather than being taken on trust.
 func (s *Sandbox) PutFile(ctx context.Context, hostPath, destPath, mode string) (*sandbox.PutFileResult, error) {
 	if mode == "" {
 		mode = "0600"
@@ -278,23 +303,15 @@ func (s *Sandbox) PutFile(ctx context.Context, hostPath, destPath, mode string) 
 	if _, err := strconv.ParseUint(mode, 8, 32); err != nil {
 		return nil, fmt.Errorf("%w: mode %q is not octal", sandbox.ErrInvalidParams, mode)
 	}
-	f, err := os.Open(hostPath)
-	if err != nil {
-		return nil, fmt.Errorf("put_file source: %w", err)
-	}
-	defer f.Close() //nolint:errcheck // read-only descriptor
-	info, err := f.Stat()
+	info, err := os.Stat(hostPath)
 	if err != nil {
 		return nil, fmt.Errorf("put_file source: %w", err)
 	}
 
 	start := time.Now()
-	if _, stderr, _, exit, err := s.p.run.Run(ctx, f, nil, s.p.bin,
-		"exec", "-n", s.namespace, "-i", s.pod, "--",
-		"sh", "-c", `cat > "$1"`, "sh", destPath); err != nil {
-		return nil, fmt.Errorf("copy into sandbox %s: %w", s.ID(), err)
-	} else if exit != 0 {
-		return nil, fmt.Errorf("copy into sandbox %s: exited %d: %s", s.ID(), exit, firstLine(stderr))
+	landed, err := s.stream(ctx, hostPath, destPath, info.Size())
+	if err != nil {
+		return nil, err
 	}
 	if _, stderr, _, exit, err := s.p.run.Run(ctx, nil, nil, s.p.bin,
 		"exec", "-n", s.namespace, s.pod, "--", "chmod", mode, destPath); err != nil {
@@ -302,7 +319,52 @@ func (s *Sandbox) PutFile(ctx context.Context, hostPath, destPath, mode string) 
 	} else if exit != 0 {
 		return nil, fmt.Errorf("chmod in sandbox %s: exited %d: %s", s.ID(), exit, firstLine(stderr))
 	}
-	return &sandbox.PutFileResult{BytesCopied: info.Size(), Duration: time.Since(start)}, nil
+	return &sandbox.PutFileResult{BytesCopied: landed, Duration: time.Since(start)}, nil
+}
+
+// stream sends the file and returns the byte count the pod reported, having
+// established that it equals want. The file is reopened per attempt because
+// a retry needs the reader from the beginning.
+func (s *Sandbox) stream(ctx context.Context, hostPath, destPath string, want int64) (int64, error) {
+	var last int64
+	for attempt := 1; attempt <= putFileAttempts; attempt++ {
+		landed, err := s.streamOnce(ctx, hostPath, destPath)
+		if err != nil {
+			return 0, err
+		}
+		if landed == want {
+			return landed, nil
+		}
+		last = landed
+		s.p.logger.Warn("short copy into sandbox, retrying",
+			"id", s.ID(), "dest", destPath, "want_bytes", want,
+			"landed_bytes", landed, "attempt", attempt, "attempts", putFileAttempts)
+	}
+	return 0, fmt.Errorf("copy into sandbox %s: %s received %d of %d bytes on each of %d attempts — the pod is not draining the exec stream; the artifact is not what was sent",
+		s.ID(), destPath, last, want, putFileAttempts)
+}
+
+func (s *Sandbox) streamOnce(ctx context.Context, hostPath, destPath string) (int64, error) {
+	f, err := os.Open(hostPath)
+	if err != nil {
+		return 0, fmt.Errorf("put_file source: %w", err)
+	}
+	defer f.Close() //nolint:errcheck // read-only descriptor
+	stdout, stderr, _, exit, err := s.p.run.Run(ctx, f, nil, s.p.bin,
+		"exec", "-n", s.namespace, "-i", s.pod, "--",
+		"sh", "-c", `cat > "$1" && wc -c < "$1"`, "sh", destPath)
+	if err != nil {
+		return 0, fmt.Errorf("copy into sandbox %s: %w", s.ID(), err)
+	}
+	if exit != 0 {
+		return 0, fmt.Errorf("copy into sandbox %s: exited %d: %s", s.ID(), exit, firstLine(stderr))
+	}
+	landed, err := strconv.ParseInt(strings.TrimSpace(string(stdout)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("copy into sandbox %s: the pod reported no byte count (%q) — the sandbox image needs a POSIX wc for the transfer to be verifiable",
+			s.ID(), firstLine(stdout))
+	}
+	return landed, nil
 }
 
 // Destroy deletes the Job and, through foreground cascading, its pod — the
