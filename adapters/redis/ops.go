@@ -14,7 +14,7 @@ import (
 
 const (
 	adapterName    = "redis"
-	adapterVersion = "0.4.0"
+	adapterVersion = "0.5.0"
 
 	// Where the restored server serves inside the sandbox. No TLS and no
 	// auth: a Probavi sandbox is zero-ingress (--network none, no ports
@@ -24,25 +24,55 @@ const (
 	// the data — so there is nothing to reset either.
 	defaultPort = 6379
 
-	// dataDir is where the RDB is placed and the server started from. It
-	// is adapter-composed under the sandbox's own filesystem, never
-	// operator input.
-	dataDir      = "/probavi-redis/data"
-	rdbName      = "dump.rdb"
-	rdbInSandbox = dataDir + "/" + rdbName
-	// aofDirName is where the append-only set is placed under dataDir;
-	// the server is started with --appenddirname naming it, so the
-	// artifact's original directory name never matters.
-	aofDirName      = "appendonlydir"
-	aofDirInSandbox = dataDir + "/" + aofDirName
-	// serverLog is where the daemonized server writes; the readiness
-	// timeout path reads it so a start failure names the engine's own
-	// reason instead of "never became ready".
-	serverLog = "/probavi-redis/redis.log"
+	rdbName = "dump.rdb"
+	// aofDirName is where the append-only set is placed under the data
+	// directory; the server is started with --appenddirname naming it, so
+	// the artifact's original directory name never matters.
+	aofDirName = "appendonlydir"
 
 	readinessBudget = 2 * time.Minute
 	readinessPoll   = 500 * time.Millisecond
 )
+
+// sandboxPaths is the adapter's own space inside the sandbox. Every part
+// of it is composed from sandbox.scratch_dir, the writable directory the
+// provider guarantees (§6.2) and the only one an adapter may rely on.
+//
+// These were absolute paths under / until issue #287, which the docker
+// provider hid completely: its commands run as root on a disposable
+// filesystem, so a directory at the root costs nothing. The bare-host
+// provider runs every payload as the drill user in a workspace it owns,
+// and the drill died on `mkdir: cannot create directory
+// '/probavi-redis': Permission denied` before the restore began.
+type sandboxPaths struct {
+	// data is the server's --dir: where the artifact is staged and the
+	// engine loads it from.
+	data string
+	// rdb and aofDir are the two artifact shapes inside data.
+	rdb    string
+	aofDir string
+	// log is where the daemonized server writes; the readiness timeout
+	// path reads it so a start failure names the engine's own reason
+	// instead of "never became ready".
+	log string
+}
+
+// newSandboxPaths derives the set from the scratch directory the provision
+// request carried. An empty scratch_dir falls back to /tmp, which every
+// sandbox has and every user may write.
+func newSandboxPaths(scratch string) sandboxPaths {
+	if scratch == "" {
+		scratch = "/tmp"
+	}
+	dir := scratch + "/probavi-redis"
+	data := dir + "/data"
+	return sandboxPaths{
+		data:   data,
+		rdb:    data + "/" + rdbName,
+		aofDir: data + "/" + aofDirName,
+		log:    dir + "/redis.log",
+	}
+}
 
 // probePayload reports identity and capabilities (§6.1). Probe must not
 // touch the sandbox and needs no credentials.
@@ -131,12 +161,13 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		return nil, perr
 	}
 
-	transferSeconds, perr := stageArtifact(ctx, c, src)
+	paths := newSandboxPaths(req.Sandbox.ScratchDir)
+	transferSeconds, perr := stageArtifact(ctx, c, src, paths)
 	if perr != nil {
 		return nil, perr
 	}
 
-	restoreSeconds, readySeconds, perr := startEngine(ctx, c, src.serverArgs())
+	restoreSeconds, readySeconds, perr := startEngine(ctx, c, src.serverArgs(paths), paths.log)
 	if perr != nil {
 		return nil, perr
 	}
@@ -169,7 +200,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 			"transfer_seconds":     transferSeconds,
 			"restore_seconds":      restoreSeconds + censusSeconds,
 		},
-		"state": src.state(),
+		"state": src.state(paths),
 	}, nil
 }
 
@@ -177,32 +208,32 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 // redis-check-* tool vet it before the server is pointed at it. For the
 // append-only kind that is the manifest plus every file it names, into
 // the adapter's own append-only directory.
-func stageArtifact(ctx context.Context, c *core, src *resolvedSource) (float64, *protoError) {
+func stageArtifact(ctx context.Context, c *core, src *resolvedSource, paths sandboxPaths) (float64, *protoError) {
 	if src.aof == nil {
-		if perr := prepareDir(ctx, c, dataDir); perr != nil {
+		if perr := prepareDir(ctx, c, paths.data); perr != nil {
 			return 0, perr
 		}
-		put, perr := c.putFile(ctx, putFileArgs{SourcePath: src.path, DestPath: rdbInSandbox, Mode: "0600"})
+		put, perr := c.putFile(ctx, putFileArgs{SourcePath: src.path, DestPath: paths.rdb, Mode: "0600"})
 		if perr != nil {
 			return 0, perr
 		}
-		return put.DurationSeconds, checkRDB(ctx, c)
+		return put.DurationSeconds, checkRDB(ctx, c, paths.rdb)
 	}
-	if perr := prepareDir(ctx, c, aofDirInSandbox); perr != nil {
+	if perr := prepareDir(ctx, c, paths.aofDir); perr != nil {
 		return 0, perr
 	}
 	total := 0.0
 	for _, name := range src.aof.transferNames() {
 		put, perr := c.putFile(ctx, putFileArgs{
 			SourcePath: filepath.Join(src.aof.dir, name),
-			DestPath:   aofDirInSandbox + "/" + name, Mode: "0600",
+			DestPath:   paths.aofDir + "/" + name, Mode: "0600",
 		})
 		if perr != nil {
 			return 0, perr
 		}
 		total += put.DurationSeconds
 	}
-	return total, checkAOF(ctx, c, src.aof.manifestName)
+	return total, checkAOF(ctx, c, paths.aofDir, src.aof.manifestName)
 }
 
 // serverArgs are the redis-server flags that point the engine at the
@@ -212,20 +243,20 @@ func stageArtifact(ctx context.Context, c *core, src *resolvedSource) (float64, 
 // derives from the staged manifest's own name — an unmatched name would
 // make the server silently start a fresh, empty append-only set, the
 // exact false green this adapter exists to refuse.
-func (src *resolvedSource) serverArgs() []string {
+func (src *resolvedSource) serverArgs(paths sandboxPaths) []string {
 	if src.aof == nil {
-		return []string{"--dir", dataDir, "--dbfilename", rdbName, "--appendonly", "no", "--save", ""}
+		return []string{"--dir", paths.data, "--dbfilename", rdbName, "--appendonly", "no", "--save", ""}
 	}
-	return []string{"--dir", dataDir, "--appendonly", "yes", "--appenddirname", aofDirName,
+	return []string{"--dir", paths.data, "--appendonly", "yes", "--appenddirname", aofDirName,
 		"--appendfilename", src.aof.appendFilename(), "--save", ""}
 }
 
 // state is what healthcheck and teardown are handed back.
-func (src *resolvedSource) state() map[string]any {
+func (src *resolvedSource) state(paths sandboxPaths) map[string]any {
 	if src.aof == nil {
-		return map[string]any{"data_dir": dataDir, "rdb_path": rdbInSandbox}
+		return map[string]any{"data_dir": paths.data, "rdb_path": paths.rdb}
 	}
-	return map[string]any{"data_dir": dataDir, "aof_dir": aofDirInSandbox}
+	return map[string]any{"data_dir": paths.data, "aof_dir": paths.aofDir}
 }
 
 // engineVersionPattern finds the release series in `redis-server
@@ -331,8 +362,8 @@ func prepareDir(ctx context.Context, c *core, dir string) *protoError {
 // RDB before the server is pointed at it. The tool prints its findings to
 // stdout and keeps stderr for usage errors, so the verdict line is taken
 // from whichever spoke.
-func checkRDB(ctx context.Context, c *core) *protoError {
-	val, stdout, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"redis-check-rdb", rdbInSandbox}})
+func checkRDB(ctx context.Context, c *core, rdb string) *protoError {
+	val, stdout, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"redis-check-rdb", rdb}})
 	if perr != nil {
 		return perr
 	}
@@ -351,9 +382,9 @@ func checkRDB(ctx context.Context, c *core) *protoError {
 // walks the base and every incremental segment (measured). Like its RDB
 // sibling it prints findings to stdout and keeps stderr for usage
 // errors.
-func checkAOF(ctx context.Context, c *core, manifestName string) *protoError {
+func checkAOF(ctx context.Context, c *core, aofDir, manifestName string) *protoError {
 	val, stdout, stderr, perr := c.exec(ctx, execArgs{
-		Argv: []string{"redis-check-aof", aofDirInSandbox + "/" + manifestName}})
+		Argv: []string{"redis-check-aof", aofDir + "/" + manifestName}})
 	if perr != nil {
 		return perr
 	}
@@ -377,7 +408,7 @@ func checkAOF(ctx context.Context, c *core, manifestName string) *protoError {
 // follows is the restore this drill measures. A dataset small enough to
 // load between two polls measures as zero restore — a real measurement
 // at the poll's resolution, not an estimate.
-func startEngine(ctx context.Context, c *core, args []string) (restoreSeconds, readySeconds float64, perr *protoError) {
+func startEngine(ctx context.Context, c *core, args []string, serverLog string) (restoreSeconds, readySeconds float64, perr *protoError) {
 	argv := append([]string{"redis-server"}, args...)
 	argv = append(argv, "--port", strconv.Itoa(defaultPort), "--daemonize", "yes", "--logfile", serverLog)
 	start, stderr, perr := execChecked(ctx, c, argv...)
@@ -390,7 +421,7 @@ func startEngine(ctx context.Context, c *core, args []string) (restoreSeconds, r
 	}
 	upSeconds, totalSeconds, perr := awaitEngine(ctx, c)
 	if perr != nil {
-		return 0, 0, describeStartFailure(ctx, c, perr)
+		return 0, 0, describeStartFailure(ctx, c, perr, serverLog)
 	}
 	return totalSeconds - upSeconds, start.DurationSeconds + upSeconds, nil
 }
@@ -436,7 +467,7 @@ func awaitEngine(ctx context.Context, c *core) (upSeconds, totalSeconds float64,
 // describeStartFailure enriches a readiness timeout with the server log's
 // own last error line: an RDB from a newer format version, for instance,
 // makes redis exit immediately with a precise message.
-func describeStartFailure(ctx context.Context, c *core, perr *protoError) *protoError {
+func describeStartFailure(ctx context.Context, c *core, perr *protoError, serverLog string) *protoError {
 	if perr.Code != "engine_not_ready" {
 		return perr
 	}

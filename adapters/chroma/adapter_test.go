@@ -280,8 +280,15 @@ func unpackSandbox(t *testing.T, unpack *string) func(verbCall) (any, *protoErro
 			if err := json.Unmarshal(call.Args, &args); err != nil {
 				t.Fatalf("put_file args: %v", err)
 			}
-			if args.DestPath != archivePath {
-				t.Errorf("archive went to %s, want %s", args.DestPath, archivePath)
+			want := newSandboxPaths(testScratch).archive
+			if args.DestPath != want {
+				t.Errorf("archive went to %s, want %s", args.DestPath, want)
+			}
+			// Whatever the adapter composes, it composes it inside the
+			// directory the provider guaranteed: / is not writable on a
+			// bare host (#287).
+			if !strings.HasPrefix(args.DestPath, testScratch+"/") {
+				t.Errorf("archive went to %s, want it under the scratch directory %s", args.DestPath, testScratch)
 			}
 			return putFileValue{BytesCopied: 16}, nil
 		}

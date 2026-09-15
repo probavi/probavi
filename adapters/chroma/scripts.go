@@ -46,9 +46,10 @@ const httpFn = `http() {
 // created and the destination itself deliberately is not: the transfer
 // creates it, as a copy of the artifact rather than a directory holding
 // one.
+// $1 is the adapter's root inside the sandbox.
 const prepareScript = `set -eu
-rm -rf ` + rootDir + `
-mkdir -p ` + rootDir + `
+rm -rf "$1"
+mkdir -p "$1"
 `
 
 // startScript starts the engine on the restored persistence directory and
@@ -62,8 +63,9 @@ mkdir -p ` + rootDir + `
 // --host 127.0.0.1 rather than 0.0.0.0: the sandbox publishes no ports and
 // every read happens inside it, so there is nothing to gain from listening
 // wider, and a restored database holds production data.
+// $1 is the persistence directory, $2 the engine's log.
 const startScript = `set -u
-nohup chroma run --path ` + dataDir + ` --host 127.0.0.1 --port ` + httpPort + ` >` + engineLog + ` 2>&1 &
+nohup chroma run --path "$1" --host 127.0.0.1 --port ` + httpPort + ` >"$2" 2>&1 &
 echo started`
 
 // readyScript asks whether the engine answers yet. The heartbeat is the
@@ -182,7 +184,8 @@ printf '%s\n' "$payload"`
 // startupErrorScript returns what the engine said while failing to come up,
 // so a readiness timeout names the engine's own reason instead of the
 // budget that expired.
-const startupErrorScript = `tail -c 2000 ` + engineLog + ` 2>/dev/null |
+// $1 is the engine's log.
+const startupErrorScript = `tail -c 2000 "$1" 2>/dev/null |
   sed 's/\x1b\[[0-9;]*m//g' | grep -iE 'error|panic|refus|denied|corrupt' | tail -3`
 
 // exitNoDatabase is the exit code the unpack scripts use to say the
@@ -193,12 +196,13 @@ const exitNoDatabase = 20
 // exitNoDatabaseText is the same code as script text.
 const exitNoDatabaseText = "20"
 
-// placeDirScript moves the staged persistence directory into place.
+// placeDirScript moves the staged persistence directory into place. $1 is
+// the persistence directory, $2 the staging copy.
 const placeDirScript = `set -eu
-rm -rf ` + dataDir + `
-mkdir -p "$(dirname ` + dataDir + `)"
-mv ` + stagingDir + ` ` + dataDir + `
-[ -f ` + dataDir + `/` + sqliteFile + ` ] || exit ` + exitNoDatabaseText
+rm -rf "$1"
+mkdir -p "$(dirname "$1")"
+mv "$2" "$1"
+[ -f "$1"/` + sqliteFile + ` ] || exit ` + exitNoDatabaseText
 
 // placeTarScript extracts the staged archive and finds the persistence
 // directory inside it.
@@ -210,24 +214,26 @@ mv ` + stagingDir + ` ` + dataDir + `
 // at the root and then one level down, and a single wrapping directory
 // holding it is promoted. Two candidates are refused rather than guessed
 // between.
+// $1 is the persistence directory, $2 the extraction directory, $3 the
+// staged archive.
 func placeTarScript(gzip bool) string {
 	flags := "-xf"
 	if gzip {
 		flags = "-xzf"
 	}
 	return `set -eu
-rm -rf ` + dataDir + ` ` + unpackDir + `
-mkdir -p ` + dataDir + ` ` + unpackDir + `
-tar ` + flags + ` ` + archivePath + ` -C ` + unpackDir + `
-if [ -f ` + unpackDir + `/` + sqliteFile + ` ]; then
-  root=` + unpackDir + `
+rm -rf "$1" "$2"
+mkdir -p "$1" "$2"
+tar ` + flags + ` "$3" -C "$2"
+if [ -f "$2"/` + sqliteFile + ` ]; then
+  root="$2"
 else
-  matches=$(find ` + unpackDir + ` -mindepth 2 -maxdepth 2 -name ` + sqliteFile + ` -type f)
+  matches=$(find "$2" -mindepth 2 -maxdepth 2 -name ` + sqliteFile + ` -type f)
   count=$(printf '%s' "$matches" | grep -c . || true)
   [ "$count" = 1 ] || exit ` + exitNoDatabaseText + `
   root=$(dirname "$matches")
 fi
-mv "$root"/* ` + dataDir + `/
-[ -f ` + dataDir + `/` + sqliteFile + ` ] || exit ` + exitNoDatabaseText + `
+mv "$root"/* "$1"/
+[ -f "$1"/` + sqliteFile + ` ] || exit ` + exitNoDatabaseText + `
 `
 }

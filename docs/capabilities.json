@@ -124,7 +124,7 @@
       "name": "Chroma",
       "status": "experimental",
       "since": "0.29.0",
-      "adapter_version": "0.1.0",
+      "adapter_version": "0.2.0",
       "engine": {
         "id": "chroma",
         "name": "Chroma"
@@ -334,7 +334,7 @@
       "name": "etcd",
       "status": "experimental",
       "since": "0.7.0",
-      "adapter_version": "0.3.0",
+      "adapter_version": "0.4.0",
       "engine": {
         "id": "etcd",
         "name": "etcd"
@@ -1047,7 +1047,7 @@
       "name": "Redis",
       "status": "experimental",
       "since": "0.8.0",
-      "adapter_version": "0.4.0",
+      "adapter_version": "0.5.0",
       "engine": {
         "id": "redis",
         "name": "Redis"
@@ -1244,7 +1244,7 @@
       "name": "Valkey",
       "status": "experimental",
       "since": "0.9.0",
-      "adapter_version": "0.3.0",
+      "adapter_version": "0.4.0",
       "engine": {
         "id": "valkey",
         "name": "Valkey"
