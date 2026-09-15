@@ -14,6 +14,7 @@ enough to build an adapter.
 | `pgdump_with_globals` | A directory holding a `pg_dumpall --globals-only` script and one dump; the globals are loaded before the dump. Either member may be gzip-compressed. |
 | `timescaledb_dump`    | One `pg_dump` file of a TimescaleDB database; the restore is framed with the extension's own `timescaledb_pre_restore()`/`timescaledb_post_restore()` procedure. |
 | `timescaledb_dump_dir` | A directory of them, chosen like `pgdump_dir` and framed the same way. |
+| `timescaledb_dump_with_globals` | `pgdump_with_globals` for a TimescaleDB database: the cluster globals load first, then the framed restore. |
 | `pgbackrest`          | A pgBackRest repository directory (filesystem repo) — a physical restore. Declares the `pitr` capability. |
 
 ## How a dump is stored (format and compression)
@@ -129,7 +130,27 @@ pg_restore: error: COPY failed for table "bgw_job": ERROR:  role "app" does not 
 recorded as `restore_failed`. The backup is intact; the sandbox is missing
 a role the backup names.
 
-Give the sandbox that role as its own superuser:
+Bring the roles with the backup, with `timescaledb_dump_with_globals` — the
+framed restore with the cluster globals loaded first, exactly as
+[`pgdump_with_globals`](#the-with_globals-kinds-cluster-globals-first)
+does for a plain dump:
+
+```yaml
+target:
+  source:
+    kind: timescaledb_dump_with_globals
+    path: /backups/timescale/nightly
+    params: {globals: globals.sql}
+```
+
+Whatever roles the policies name, the globals script creates them before the
+catalog copy reaches them, and the restored jobs come back owned by exactly
+the roles the backup gave them. The sandbox needs no role of its own: a stock
+`timescale/timescaledb` image restores a cluster whose every policy belongs
+to an application role.
+
+A drill that already has a sandbox per database can do it the other way, by
+giving the sandbox that role as its superuser:
 
 ```yaml
 sandbox:
@@ -141,12 +162,9 @@ target:
   options: {user: app, database: app}
 ```
 
-This works when the jobs share one owner, which is the common case. It does
-not when they are owned by several roles, and the timescaledb kinds have no
-`with_globals` counterpart that would carry the roles with the backup the
-way [the `pgdump_with_globals` kind](#the-pgdump_with_globals-kind-cluster-globals-first)
-does for a plain dump. If your policies span owners, say so in an issue —
-the shape of the fix is a question of what real dumps look like.
+That covers jobs sharing one owner, and only that — the globals kind covers
+the rest, and is closer to the recovery it stands for: a real recovery runs
+the globals first.
 
 A policy states what a *running* database should keep; a drill proves
 what the backup holds, and the operator's real policy is already
@@ -160,7 +178,7 @@ simply never run. If they cannot be held back, the restore fails
 (`restore_failed`) rather than proving a database that deleted part of
 itself.
 
-## The pgdump_with_globals kind (cluster globals first)
+## The with_globals kinds (cluster globals first)
 
 A logical recovery runs in two steps: the cluster-level objects — roles,
 their memberships, and the grants that reference them — then the database
@@ -170,11 +188,13 @@ path that has two, and it does not fail quietly: `pg_restore --no-owner`
 drops `OWNER TO` but never `GRANT`, so the restore dies on the first grant
 naming a role nothing created.
 
-This kind restores both halves:
+These kinds restore both halves — `pgdump_with_globals` for an ordinary
+database, `timescaledb_dump_with_globals` for a TimescaleDB one, which adds
+the mandated restore frame and nothing else:
 
 ```yaml
 source:
-  kind: pgdump_with_globals
+  kind: pgdump_with_globals      # or timescaledb_dump_with_globals
   path: /backups/prod            # a directory holding both members
   params:
     globals: globals.sql         # a filename inside path, never a path

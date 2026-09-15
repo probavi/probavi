@@ -11,6 +11,34 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **`timescaledb_dump_with_globals`** (`adapters/postgres` 0.15.0, issue
+  #278): the cluster globals loaded first, then the framed TimescaleDB
+  restore — `pgdump_with_globals` for a hypertable database. It is the two
+  behaviours composed and nothing more, which is what made the case for it:
+  every TimescaleDB policy is a row whose `owner` column is a `regrole`,
+  written out as the role's name inside a catalog COPY, so a dump from a
+  database owned by an application role could not be drilled without giving
+  the sandbox that role — and never at all when the jobs were owned by
+  several. With the globals in the source, a stock `timescale/timescaledb`
+  image restores a cluster whose every policy belongs to a role that image
+  never had, and the jobs come back owned by exactly the roles the backup
+  gave them.
+
+### Fixed
+
+- **A restore that dies on a missing role says which source kind carries
+  the roles** (same change). The advice existed only on the plain-SQL path;
+  a custom-format archive — which is what `pg_dump -Fc` writes, and what the
+  TimescaleDB failure above produces — reached the evidence record as
+  `pg_restore failed: … role "rig" does not exist`, with nothing an operator
+  could act on. Both paths now name the kind that fits the drill's own
+  source, and say nothing when the source already carried globals: a role
+  still missing after a globals script ran is a gap in that script, and
+  recommending the kind already in use would be advice to do what was done.
+  Nothing asserted these messages before, which is how the gap opened.
+
 ### Documentation
 
 - **The timescaledb kinds say that every job's owner role must exist in the
@@ -23,8 +51,8 @@ always called out explicitly.
   backup that restores perfectly once the role is there. Nothing said so.
   The README now names the dependency, shows the sandbox configuration that
   satisfies it, and states the case it does not cover — jobs owned by
-  several roles, for which the timescaledb kinds have no `with_globals`
-  counterpart. The suite's fixture was seeded by `postgres`, a role every
+  several roles, and points at `timescaledb_dump_with_globals` as the way to
+  bring them with the backup. The suite's fixture was seeded by `postgres`, a role every
   image has, which is why it never met this; a second fixture is owned by an
   application role, and the drill asserts both that the plain configuration
   fails naming the role and that the documented one restores the same dump.

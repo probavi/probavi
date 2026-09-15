@@ -1581,6 +1581,11 @@ func TestTimescalePolicyOwnerRoleMustExist(t *testing.T) {
 		if !strings.Contains(aerr.Message, owner) || !strings.Contains(aerr.Message, "bgw_job") {
 			t.Errorf("message = %q, want the missing role and the catalog table named", aerr.Message)
 		}
+		// And the remedy, not just the symptom: an operator reading this
+		// record must be able to act on it without reading the source.
+		if !strings.Contains(aerr.Message, "timescaledb_dump_with_globals") {
+			t.Errorf("message = %q, want the source kind that carries the roles", aerr.Message)
+		}
 	})
 
 	t.Run("a sandbox bootstrapped with the owner role restores it", func(t *testing.T) {
@@ -1610,6 +1615,101 @@ func TestTimescalePolicyOwnerRoleMustExist(t *testing.T) {
 			"SELECT count(*) FROM timescaledb_information.jobs WHERE proc_name = 'policy_retention' AND owner::text = '"+owner+"'",
 			"1")
 	})
+}
+
+// TestTimescaleWithGlobalsRestoresThePolicyOwner drills the kind that
+// closes issue #278 properly: the cluster globals travel with the dump, so
+// the role a policy is owned by is created before the catalog COPY reaches
+// it — and the sandbox needs no bootstrap role of its own.
+//
+// This is the case the sandbox-superuser workaround cannot cover. Here the
+// drill restores as postgres into a stock image, and the policy comes back
+// owned by a role that image never had.
+func TestTimescaleWithGlobalsRestoresThePolicyOwner(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-postgres"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	const owner = "rig"
+	provider := docker.New(nil)
+	image := verifiedImage(t)
+	plain := map[string]string{"image": image, "env.POSTGRES_HOST_AUTH_METHOD": "trust",
+		"memory": engineMemoryLimit}
+	asOwner := map[string]string{"image": image, "env.POSTGRES_HOST_AUTH_METHOD": "trust",
+		"env.POSTGRES_USER": owner, "env.POSTGRES_DB": owner, "memory": engineMemoryLimit}
+
+	set := t.TempDir()
+	if !makeTimescaleFixtureOwnedBy(t, ctx, provider, asOwner, owner, filepath.Join(set, "metrics.dump")) {
+		t.Skip("image does not provide the timescaledb extension; the timescaledb matrix job exercises this test")
+	}
+	dumpGlobals(t, ctx, provider, asOwner, owner, filepath.Join(set, "globals.sql"))
+
+	sbx, err := provider.Create(ctx, plain)
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+	awaitReady(t, ctx, sbx)
+
+	runner, err := adapter.New("postgres", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source: adapter.ProvisionSource{
+			Kind: "timescaledb_dump_with_globals", Path: set,
+			Params: map[string]string{"globals": "globals.sql", "dump": "metrics.dump"},
+		},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	assertRunnerRow(t, ctx, sbx, probe, res, "SELECT count(*) FROM metrics", ownedRows)
+	// The role came from the globals script, not from the image.
+	assertRunnerRow(t, ctx, sbx, probe, res,
+		"SELECT count(*) FROM pg_roles WHERE rolname = '"+owner+"'", "1")
+	assertRunnerRow(t, ctx, sbx, probe, res,
+		"SELECT count(*) FROM timescaledb_information.jobs WHERE proc_name = 'policy_retention' AND owner::text = '"+owner+"'",
+		"1")
+	// The frame still ran: the policy pin is what keeps a restored
+	// retention policy from trimming the artifact in the second
+	// timescaledb_post_restore() returns. Asked of the restored policy by
+	// name rather than counted — the pin covers every job in the catalog,
+	// TimescaleDB's own included, and how many of those a version ships is
+	// not this test's business.
+	assertRunnerRow(t, ctx, sbx, probe, res,
+		"SELECT count(*) FROM timescaledb_information.jobs WHERE proc_name = 'policy_retention' AND next_start = 'infinity'", "1")
+}
+
+// dumpGlobals writes a pg_dumpall --globals-only script out of the seed
+// cluster, the second member the with_globals kinds take.
+func dumpGlobals(t *testing.T, ctx context.Context, provider *docker.Provider,
+	params map[string]string, owner, dest string) {
+	t.Helper()
+	seed, err := provider.Create(ctx, params)
+	if err != nil {
+		t.Fatalf("create globals sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+	awaitReady(t, ctx, seed)
+	mustExec(t, ctx, seed, "sh", "-c",
+		"pg_dumpall -h 127.0.0.1 -U "+owner+" --globals-only > /tmp/globals.sql")
+	if out, err := exec.CommandContext(ctx, "docker", "cp",
+		seed.ID()+":/tmp/globals.sql", dest).CombinedOutput(); err != nil {
+		t.Fatalf("extract globals: %v: %s", err, out)
+	}
 }
 
 // ownedRows is deliberately small: this fixture exists to carry a policy

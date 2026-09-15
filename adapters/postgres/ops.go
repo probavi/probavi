@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "postgres"
-	adapterVersion = "0.14.0"
+	adapterVersion = "0.15.0"
 
 	// psqlConnectionRefused is psql's exit code for a connection that could
 	// not be established — distinct from 1 (psql's own fatal error) and 3
@@ -42,6 +42,7 @@ func probePayload() any {
 			{"kind": "pgdump_with_globals", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "timescaledb_dump", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "timescaledb_dump_dir", "capabilities": map[string]bool{"pitr": false}},
+			{"kind": "timescaledb_dump_with_globals", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "pgbackrest", "capabilities": map[string]bool{"pitr": true}},
 		},
 		"sql_runner": map[string]any{
@@ -127,7 +128,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		return nil, perr
 	}
 
-	restoreSeconds, perr := restoreDump(ctx, c, user, database, dump, src.timescale)
+	restoreSeconds, perr := restoreDump(ctx, c, user, database, dump, src.timescale, src.globalsPath != "")
 	if perr != nil {
 		return nil, perr
 	}
@@ -153,7 +154,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 // restoreDump runs the restore — framed with the timescale procedure
 // when the source demands it — and returns the measured seconds of
 // everything the real recovery path cannot skip.
-func restoreDump(ctx context.Context, c *core, user, database string, dump sandboxFile, framed bool) (float64, *protoError) {
+func restoreDump(ctx context.Context, c *core, user, database string, dump sandboxFile, framed, carriedGlobals bool) (float64, *protoError) {
 	var framingSeconds float64
 	if framed {
 		var perr *protoError
@@ -167,7 +168,7 @@ func restoreDump(ctx context.Context, c *core, user, database string, dump sandb
 		return 0, perr
 	}
 	if restore.ExitCode != 0 {
-		return 0, mapRestoreFailure(restore.ExitCode, stderr, dump.storage)
+		return 0, mapRestoreFailure(restore.ExitCode, stderr, dump.storage, globalsKind(framed, carriedGlobals))
 	}
 	if framed {
 		pin, perr := pinPolicyJobs(ctx, c, user, database)
@@ -579,6 +580,42 @@ const (
 	timescaleFencedExit  = 93
 )
 
+// globalsKind names the source kind that would have brought the cluster's
+// roles along with this dump, for a diagnostic to recommend. It is empty
+// when the drill's source already carried them: a role still missing after
+// a globals script ran is a gap in that script, and pointing at the kind
+// the operator is already using would be advice to do what they did.
+func globalsKind(framed, carriedGlobals bool) string {
+	switch {
+	case carriedGlobals:
+		return ""
+	case framed:
+		return "timescaledb_dump_with_globals"
+	default:
+		return "pgdump_with_globals"
+	}
+}
+
+// missingRole reports whether a restore diagnostic is the one a dump
+// produces when the cluster lacks a role the backup names.
+func missingRole(line string) bool {
+	return strings.Contains(line, "role") && strings.Contains(line, "does not exist")
+}
+
+// adviseGlobals turns a missing-role diagnostic into the error a drill
+// should record: the backup is intact, the sandbox is short a role, and
+// there is a source kind that brings it.
+func adviseGlobals(kind, carries, line string) *protoError {
+	if kind == "" {
+		return protoErr("restore_failed", false,
+			"the backup names a role the restored cluster does not have, and the cluster globals "+
+				"in this drill's source did not create it: %s", line)
+	}
+	return protoErr("restore_failed", false,
+		"the backup names a role the restored cluster does not have; %s, so the cluster globals "+
+			"belong in the drill with it (source kind %s): %s", carries, kind, line)
+}
+
 // mapScriptExit classifies the verdicts a replay script reaches on its own,
 // as opposed to the client's; what names the member in diagnostics. It
 // returns nil for every other exit code, which means the client failed and
@@ -601,23 +638,33 @@ func mapScriptExit(exitCode int, stderr []byte, what string) *protoError {
 			"%s creates the timescaledb extension, and restoring it without the "+
 				"timescaledb_pre_restore()/timescaledb_post_restore() frame breaks hypertable state — "+
 				"measured: a dump with compressed chunks restores partially ('could not find "+
-				"hypertable') — use the timescaledb_dump source kind, which frames the restore", what)
+				"hypertable') — use the timescaledb_dump source kind, or "+
+				"timescaledb_dump_with_globals if the drill carries cluster globals too", what)
 	}
 	return nil
 }
 
 // mapRestoreFailure classifies a failed restore into protocol error codes.
 // Partial restores must never look like success (§5).
-func mapRestoreFailure(exitCode int, stderr []byte, storage dumpStorage) *protoError {
+func mapRestoreFailure(exitCode int, stderr []byte, storage dumpStorage, globalsKind string) *protoError {
 	if perr := mapScriptExit(exitCode, stderr, "the backup"); perr != nil {
 		return perr
 	}
 	if storage.plain {
-		return mapScriptRestoreFailure(stderr)
+		return mapScriptRestoreFailure(stderr, globalsKind)
 	}
 	line := firstLine(stderr)
 	if strings.Contains(line, "not appear to be a valid archive") {
 		return protoErr("source_corrupt", false, "pg_restore rejected the archive: %s", line)
+	}
+	// A custom-format archive reaches this with --no-owner, so ownership is
+	// not what named the role: the value is data the flag cannot touch —
+	// a TimescaleDB policy's owner column is a regrole, written out as the
+	// role's name inside a COPY (issue #278). Without this the operator got
+	// pg_restore's line and no way to act on it.
+	if missingRole(line) {
+		return adviseGlobals(globalsKind,
+			"a regrole column is data, which pg_restore --no-owner cannot drop", line)
 	}
 	return protoErr("restore_failed", false, "pg_restore failed: %s", line)
 }
@@ -626,7 +673,7 @@ func mapRestoreFailure(exitCode int, stderr []byte, storage dumpStorage) *protoE
 // is named because it is the one a plain-SQL dump produces by construction:
 // the script carries its ownership and grants inline, and unlike
 // pg_restore's --no-owner there is no flag that drops them.
-func mapScriptRestoreFailure(stderr []byte) *protoError {
+func mapScriptRestoreFailure(stderr []byte, globalsKind string) *protoError {
 	line := restoreDiagnostic(stderr)
 	// A dump the server cannot parse is not a dump. pg_restore says so
 	// about an archive in as many words ("does not appear to be a valid
@@ -635,11 +682,9 @@ func mapScriptRestoreFailure(stderr []byte) *protoError {
 	if strings.Contains(line, "syntax error") {
 		return protoErr("source_corrupt", false, "psql rejected the dump: %s", line)
 	}
-	if strings.Contains(line, "role") && strings.Contains(line, "does not exist") {
-		return protoErr("restore_failed", false,
-			"the dump assigns ownership or grants to a role the restored cluster does not have; "+
-				"a plain-SQL dump carries those inline, so the cluster globals belong in the drill "+
-				"with it (source kind pgdump_with_globals): %s", line)
+	if missingRole(line) {
+		return adviseGlobals(globalsKind,
+			"a plain-SQL dump carries ownership and grants inline", line)
 	}
 	return protoErr("restore_failed", false, "psql failed replaying the dump: %s", line)
 }

@@ -826,7 +826,7 @@
       "name": "PostgreSQL",
       "status": "experimental",
       "since": "0.1.0",
-      "adapter_version": "0.14.0",
+      "adapter_version": "0.15.0",
       "engine": {
         "id": "postgresql",
         "name": "PostgreSQL"
@@ -897,6 +897,11 @@
         {
           "id": "timescaledb_dump_dir",
           "name": "A directory of them; the one whose own head records the newest time is restored, framed the same way",
+          "pitr": false
+        },
+        {
+          "id": "timescaledb_dump_with_globals",
+          "name": "A directory holding a pg_dumpall --globals-only script and one TimescaleDB dump; the globals load first, then the framed restore",
           "pitr": false
         }
       ],
