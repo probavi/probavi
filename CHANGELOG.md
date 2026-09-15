@@ -13,6 +13,27 @@ always called out explicitly.
 
 ### Fixed
 
+- **InfluxDB custom checks can pass** (`adapters/influxdb` 0.4.0, issue
+  #274). The README documented `expect: "500"` against a Flux query, and no
+  check written that way could ever match: the declared runner was `influx
+  query` with no `--raw`, and the CLI draws a table — a `Result:` line, a
+  `Table:` line, a header, a rule, and only then the value. The core
+  compares `expect` against the runner's whole trimmed stdout, so every
+  custom check on this adapter failed, on every kind, in every release that
+  shipped it. The runner now asks for annotated CSV and reduces it to the
+  result: annotations, header and the two bookkeeping columns dropped, CRLF
+  removed, rows one per line with tab-separated columns as the protocol
+  requires. The fields are read as CSV rather than split on commas, because
+  a value containing a comma arrives quoted and splitting it would turn one
+  value into two.
+- **The integration suite compares checks the way the core does** (same
+  change). `assertCheck` asserted `strings.Contains`, which the drawn table
+  satisfied while the core's equality could not — which is why the suite
+  stayed green through every release in which no custom check could pass. It
+  now compares the whole trimmed output for equality. The README's example
+  gains `keep(columns:["_value"])` and says why: a bare `count()` still
+  carries `_start` and `_stop`, and `expect` is written for what the query
+  actually returns.
 - **The pgbackrest kind honours `options.user` and `options.database`**
   (`adapters/postgres` 0.14.0, issue #273). The README documented both
   options without restricting them to the logical kinds, and the physical
