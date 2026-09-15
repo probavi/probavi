@@ -13,6 +13,20 @@ always called out explicitly.
 
 ### Fixed
 
+- **`AGENTS.md` names the linter version CI installs.** It said
+  `golangci-lint run` and left the version to whatever the reader happened
+  to have, while the merge gate installs a pinned one — so the local run and
+  the gate were only the same check by coincidence. The direction the drift
+  runs in is the dangerous one: the pinned version reports nothing on this
+  repository, and an older gosec reports `G602` five times against the
+  two-byte gzip sniff in the cassandra, influxdb, mongodb, opensearch and
+  prometheus adapters, where the buffer is two bytes long by construction
+  and `io.ReadFull` has already refused a shorter read. A finding CI does
+  not have cannot be resolved by fixing anything, so the obvious next move
+  is a `//nolint` on correct code — suppressing the linter the project
+  forbids suppressing, to silence a warning that was never real. A gate now
+  ties the documented version to the line CI runs, and fails if either side
+  moves or stops naming one.
 - **TDengine's `table_exists` and `row_count` work** (`adapters/tdengine`
   0.2.0, issue #276). The core composes its generating built-ins with
   SQL-standard quoted identifiers, and TDengine refuses them: `SELECT

@@ -92,8 +92,19 @@ go build ./...
 go test ./...
 go test ./internal/evidence -run TestName   # single test
 go test -tags integration ./...             # integration tests (real Docker)
+
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 golangci-lint run                           # zero warnings required
 ```
+
+The linter's version is part of the gate, not a detail of your machine: a
+different one is a different set of findings. Installing it is in the list
+above because the mismatch does not announce itself as one — an older gosec
+reports `G602` against the two-byte gzip sniff in five adapters, where the
+buffer is two bytes long by construction and `io.ReadFull` has already
+refused anything shorter. A warning CI does not have invites a `//nolint` on
+correct code, which §3 forbids in the same breath as weakening the linter.
+The version here and the one CI installs are held together by a test.
 
 ### 3.2 Repository conventions
 
