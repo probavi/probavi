@@ -11,6 +11,26 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Three adapters now prove the built-in claim their READMEs make**
+  (firebird, duckdb, sqlite). Each said the core's generating built-ins
+  apply, and no test ran one: the suites asserted hand-written SQL beside a
+  comment saying it was "exactly as internal/checks would run the generating
+  built-ins", which it was not — the core quotes the identifiers it composes
+  and those statements named the table bare, so the one thing that could
+  differ was the one thing untested. That is how the same claim came to be
+  false in three other adapters this release. All three prove out; the
+  firebird case also asserts the README's own case-sensitivity sentence from
+  both sides, because a claim about case that tests one case proves nothing
+  about the other.
+- **The CouchDB README no longer reads as if the built-ins apply.** Its
+  check section is unambiguous — CouchDB speaks HTTP, a check is a path —
+  but a later sentence, "the core has generating built-in checks for exactly
+  this", could send an operator to `builtin: row_count`, which composes SQL
+  this runner would post as a URL path. It now says plainly that the
+  built-ins do not apply, the way the mongodb, redis and etcd adapters do.
+
 ### Added
 
 - **`timescaledb_dump_with_globals`** (`adapters/postgres` 0.15.0, issue

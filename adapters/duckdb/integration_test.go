@@ -17,6 +17,8 @@ import (
 
 	"github.com/probavi/probavi/internal/adapter"
 	"github.com/probavi/probavi/internal/capabilities"
+	"github.com/probavi/probavi/internal/checks"
+	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/sandbox"
 	"github.com/probavi/probavi/internal/sandbox/docker"
 )
@@ -82,8 +84,8 @@ func makeFixtures(t *testing.T, ctx context.Context, provider *docker.Provider, 
 	defer destroy(t, seed)
 
 	seedScript := `set -e
-duckdb /tmp/seed.duckdb "CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR);
-INSERT INTO t SELECT r, 'row'||r FROM range(1,501) x(r);
+duckdb /tmp/seed.duckdb "CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR, created_at TIMESTAMP);
+INSERT INTO t SELECT r, 'row'||r, now() FROM range(1,501) x(r);
 CREATE TABLE meta(k VARCHAR PRIMARY KEY, v VARCHAR);
 INSERT INTO meta VALUES('origin','` + marker + `');
 EXPORT DATABASE '/tmp/exp';"`
@@ -167,6 +169,8 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database, "SELECT count(*) FROM t;", "500")
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database, "SELECT v FROM meta WHERE k='origin';", "restored-ok")
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database, "SELECT id, v FROM t WHERE id = 1;", "1\trow1")
+
+	assertBuiltins(t, ctx, sbx, probe, res)
 
 	teardown, err := runner.Teardown(ctx, res.State, "completed", sbx)
 	if err != nil {
@@ -542,4 +546,54 @@ func engineProcesses(t *testing.T, ctx context.Context, sbx *docker.Sandbox) int
 		t.Fatalf("process count = %q: %v", res.Stdout, convErr)
 	}
 	return count
+}
+
+// assertBuiltins runs the generating built-ins the way the core runs them,
+// through internal/checks against the probe-declared runner.
+//
+// The suite asserted hand-written SQL beside a comment saying it was
+// "exactly as internal/checks would run the generating built-ins". It was
+// not: the core quotes the identifiers it composes and the hand-written
+// statements name the table bare, so the one thing that could differ was
+// the one thing untested. Three adapters that made the same claim turned
+// out to be broken — quoted identifiers the engine refused, a decorated
+// value, a timestamp the core could not parse — each in a suite that was
+// green throughout.
+func assertBuiltins(t *testing.T, ctx context.Context, sbx *docker.Sandbox,
+	probe *adapter.ProbeResult, res *adapter.ProvisionResult) {
+	t.Helper()
+	deps := checks.Deps{
+		Exec:   sbx,
+		Runner: checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
+		Target: checks.Target{User: res.Connection.User, Database: res.Connection.Database},
+	}
+	min1, tooMany := int64(1), int64(100000)
+	results, err := checks.Run(ctx, []config.Check{
+		{Builtin: config.CheckTableExists, Table: "t"},
+		{Builtin: config.CheckTableExists, Table: "nosuch"},
+		{Builtin: config.CheckRowCount, Table: "t", Min: &min1},
+		{Builtin: config.CheckRowCount, Table: "t", Min: &tooMany},
+		// The fixture was written moments ago by this test, so it is inside
+		// an hour and outside a millisecond whatever the machine.
+		{Builtin: config.CheckFreshness, Table: "t", Column: "created_at", MaxAge: config.Duration(time.Hour)},
+		{Builtin: config.CheckFreshness, Table: "t", Column: "created_at", MaxAge: config.Duration(time.Millisecond)},
+	}, deps)
+	if err != nil {
+		t.Fatalf("checks.Run: %v", err)
+	}
+	for i, want := range []bool{true, false, true, false, true, false} {
+		if results[i].OK != want {
+			t.Errorf("check %d (%s) = ok:%v detail:%q, want ok:%v",
+				i, results[i].Name, results[i].OK, results[i].Detail, want)
+		}
+	}
+	// Each failing case must fail for its own reason. A statement the engine
+	// refuses fails every check the same way, and that sameness is what hid
+	// this elsewhere.
+	if !strings.Contains(results[3].Detail, "rows") {
+		t.Errorf("row_count detail = %q, want the count read and compared against the bound", results[3].Detail)
+	}
+	if strings.Contains(results[5].Detail, "unparseable") {
+		t.Errorf("freshness detail = %q, want the instant read and compared", results[5].Detail)
+	}
 }
