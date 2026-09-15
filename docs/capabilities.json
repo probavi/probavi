@@ -826,7 +826,7 @@
       "name": "PostgreSQL",
       "status": "experimental",
       "since": "0.1.0",
-      "adapter_version": "0.15.0",
+      "adapter_version": "0.15.1",
       "engine": {
         "id": "postgresql",
         "name": "PostgreSQL"

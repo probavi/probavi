@@ -127,6 +127,31 @@ always called out explicitly.
 
 ### Fixed
 
+- **A readiness timeout says whether there was an engine to wait for**
+  (`adapters/postgres` 0.15.1, issue #285). The logical source kinds restore
+  into a running engine and start none — under docker the image's entrypoint
+  has already started it. The bare-host provider establishes a slice and a
+  workspace and starts nothing, so the whole drill was this wait, ending in
+  "engine did not accept TCP connections within 2m0s": a sentence blaming an
+  engine for not accepting connections when there was no engine to accept
+  them, which sent operators to look at a server that was never there. The
+  two cases are now told apart by `pg_isready`'s own exit code — 2 is
+  "nothing answered", 1 is a server answering that it is still starting — and
+  the message names which happened, and what a sandbox for these kinds has
+  to provide.
+
+### Documentation
+
+- **The bare-host provider's requirements include an adapter that starts its
+  own engine** (issue #285). `docs/sandbox-bare-host.md` §2 said the adapter
+  starts and owns the engine as a description of the provider; it is a
+  requirement on the adapter, and an adapter written against a sandbox whose
+  image boots the engine has nothing to wait for there. Both the spec and
+  the README's remotehost requirements now say so, and say to prove one
+  drill per adapter against a target before scheduling it.
+
+### Fixed
+
 - **`AGENTS.md` names the linter version CI installs.** It said
   `golangci-lint run` and left the version to whatever the reader happened
   to have, while the merge gate installs a pinned one — so the local run and

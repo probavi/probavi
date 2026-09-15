@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "postgres"
-	adapterVersion = "0.15.0"
+	adapterVersion = "0.15.1"
 
 	// psqlConnectionRefused is psql's exit code for a connection that could
 	// not be established — distinct from 1 (psql's own fatal error) and 3
@@ -336,12 +336,30 @@ func opHealthcheck(ctx context.Context, c *core, payload json.RawMessage) (any, 
 	}, nil
 }
 
+// pgIsReadyNoResponse is pg_isready's exit code for "nothing answered at
+// all", as distinct from 1, which is a server that answered by rejecting
+// the connection because it is still starting. The number carries no
+// language, and the difference between the two is the difference between
+// a slow engine and no engine.
+const pgIsReadyNoResponse = 2
+
 // awaitEngine polls pg_isready over TCP until the engine accepts
 // connections. The initdb-phase temporary server only listens on the unix
 // socket, so a TCP probe cannot report ready too early (measured
 // 2026-07-30 on postgres:16).
+//
+// The logical kinds restore into an engine that is already running: under
+// docker the image's entrypoint starts it before the adapter is called.
+// They do not start one, and on a sandbox where nothing does — the
+// bare-host provider establishes a slice and a workspace and starts no
+// engine — this wait was the whole drill, ending in "engine did not accept
+// TCP connections within 2m0s" (issue #285). That sentence blames an engine
+// for not accepting connections when there was no engine to accept them,
+// and it sent operators to look at a server that was never there. So the
+// budget's expiry now says which of the two happened.
 func awaitEngine(ctx context.Context, c *core, user string) (float64, *protoError) {
 	start := time.Now()
+	answered := false
 	for {
 		val, _, _, perr := c.exec(ctx, execArgs{
 			Argv:           []string{"pg_isready", "-h", "127.0.0.1", "-U", user, "-q"},
@@ -353,9 +371,11 @@ func awaitEngine(ctx context.Context, c *core, user string) (float64, *protoErro
 		if val.ExitCode == 0 {
 			return time.Since(start).Seconds(), nil
 		}
+		if val.ExitCode != pgIsReadyNoResponse {
+			answered = true
+		}
 		if time.Since(start) > readinessBudget {
-			return 0, protoErr("engine_not_ready", true,
-				"engine did not accept TCP connections within %s", readinessBudget)
+			return 0, engineNeverReady(answered)
 		}
 		select {
 		case <-ctx.Done():
@@ -363,6 +383,24 @@ func awaitEngine(ctx context.Context, c *core, user string) (float64, *protoErro
 		case <-time.After(readinessPoll):
 		}
 	}
+}
+
+// engineNeverReady is the verdict the readiness budget's expiry reaches,
+// and answered is what separates the two ways of getting there: a server
+// that answered — by rejecting, while it starts — is a slow engine, and a
+// server that never answered at all was never started.
+func engineNeverReady(answered bool) *protoError {
+	if answered {
+		return protoErr("engine_not_ready", true,
+			"engine answered but never accepted connections within %s — it is still starting, "+
+				"or refusing", readinessBudget)
+	}
+	return protoErr("engine_not_ready", true,
+		"no PostgreSQL server answered on 127.0.0.1 in %s — nothing ever listened, so none was "+
+			"started. The logical source kinds restore into a running engine and do not start "+
+			"one: give the drill a sandbox that runs postgres itself, which the docker and k8s "+
+			"providers do through the image's entrypoint and the bare-host provider does not do "+
+			"at all", readinessBudget)
 }
 
 // sandboxFile is one file placed inside the sandbox, and how it is stored

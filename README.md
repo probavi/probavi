@@ -337,6 +337,7 @@ Target requirements — the provider probes and refuses what it can check, the r
 
 - systemd ≥ 244 as PID 1 (probed at first contact; older targets are refused).
 - The engine toolchain installed **at versions matching the backups under test** — with no container image to pin versions, keeping them aligned is on you; a mismatch surfaces as an honest failed drill, never a silent wrong-version pass.
+- **An adapter that starts its own engine.** There is no container entrypoint here: `Create` establishes the slice and the workspace, and nothing else runs until the adapter says so. An adapter written against a sandbox whose image boots the engine has nothing to wait for on a bare host — the PostgreSQL adapter's logical kinds poll for a server rather than starting one — and the drill ends in a readiness timeout saying exactly that. Prove one drill per adapter against your target before you schedule it.
 - A dedicated OS user for drills, key-based SSH only (the provider never weakens host key verification and never prompts). Root is not required: grant the drill user transient-unit rights with this polkit rule (as root, drop it into `/etc/polkit-1/rules.d/50-probavi-drill.rules`, adjusting the user name):
 
   ```js

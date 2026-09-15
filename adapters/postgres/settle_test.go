@@ -265,3 +265,37 @@ func TestMissingRoleDiagnosticNamesTheKindThatCarriesTheRoles(t *testing.T) {
 		}
 	})
 }
+
+// TestReadinessTimeoutSaysWhichKindOfFailureItWas covers issue #285: the
+// logical kinds restore into a running engine and start none, so on a
+// sandbox where nothing does — the bare-host provider establishes a slice
+// and a workspace and no engine — the whole drill was this wait, ending in
+// "engine did not accept TCP connections within 2m0s". That blamed an
+// engine for not accepting connections when there was no engine to accept
+// them, and sent operators to look at a server that was never there.
+func TestReadinessTimeoutSaysWhichKindOfFailureItWas(t *testing.T) {
+	t.Run("nothing ever answered", func(t *testing.T) {
+		perr := engineNeverReady(false)
+		if perr.Code != "engine_not_ready" {
+			t.Errorf("code = %s", perr.Code)
+		}
+		for _, want := range []string{"nothing ever listened", "do not start one", "bare-host"} {
+			if !strings.Contains(perr.Message, want) {
+				t.Errorf("message = %q, want it to contain %q", perr.Message, want)
+			}
+		}
+		if strings.Contains(perr.Message, "did not accept TCP connections") {
+			t.Error("the message still blames an engine that was never started")
+		}
+	})
+
+	t.Run("the engine answered but never opened", func(t *testing.T) {
+		perr := engineNeverReady(true)
+		if !strings.Contains(perr.Message, "still starting") {
+			t.Errorf("message = %q, want the slow-engine reading", perr.Message)
+		}
+		if strings.Contains(perr.Message, "bare-host") {
+			t.Error("a slow engine must not be described as a missing one")
+		}
+	})
+}
