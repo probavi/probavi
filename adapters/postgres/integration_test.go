@@ -5,6 +5,7 @@ package main_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -373,6 +374,113 @@ func TestPgBackRestEndToEnd(t *testing.T) {
 	}
 	if _, err := runner.Teardown(ctx, res.State, "completed", sbx); err != nil {
 		t.Fatalf("teardown: %v", err)
+	}
+}
+
+// TestPgBackRestNonDefaultRoleAndDatabase drills a cluster that has no
+// postgres role and keeps its data outside the postgres database — the
+// shape issue #273 was reported against, and the one the official image
+// produces for anybody who sets POSTGRES_USER. Until the physical path read
+// options.user and options.database, this restore succeeded and the drill
+// then reported engine_not_ready after two minutes of polling a role that
+// was never in the backup.
+func TestPgBackRestNonDefaultRoleAndDatabase(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	image := buildPgBackRestImage(t, ctx)
+
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-postgres"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	hostRepo := filepath.Join(t.TempDir(), "repo")
+	makeBackRestRepoAs(t, ctx, image, hostRepo, "rig", "rigdb")
+
+	provider := docker.New(nil)
+	sbx, err := provider.Create(ctx, map[string]string{"image": image, "command": "sleep infinity", "memory": engineMemoryLimit})
+	if err != nil {
+		t.Fatalf("create idle sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("postgres", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source: adapter.ProvisionSource{
+			Kind: "pgbackrest", Path: hostRepo, Params: map[string]string{"stanza": "demo"},
+		},
+		Options: map[string]string{"user": "rig", "database": "rigdb"},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if res.Connection.User != "rig" || res.Connection.Database != "rigdb" {
+		t.Errorf("connection = %+v, want the checks pointed at the configured role and database", res.Connection)
+	}
+
+	health, err := runner.Healthcheck(ctx, &res.Connection, res.State, sbx)
+	if err != nil || !health.Healthy {
+		t.Fatalf("healthcheck = %+v err=%v", health, err)
+	}
+
+	// The rows live in rigdb, which no connection to the postgres database
+	// could ever see: PostgreSQL does not query across databases.
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{
+		"psql", "-h", "127.0.0.1", "-U", "rig", "-d", "rigdb", "-tA", "-c",
+		"SELECT count(*) FROM events"}})
+	if err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if count := strings.TrimSpace(string(out.Stdout)); out.ExitCode != 0 || count != "500" {
+		t.Fatalf("row count = %q (exit %d, stderr %s), want 500", count, out.ExitCode, out.Stderr)
+	}
+	if _, err := runner.Teardown(ctx, res.State, "completed", sbx); err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+}
+
+// makeBackRestRepoAs seeds a repo whose cluster is bootstrapped with a
+// superuser other than postgres and whose data lives in its own database —
+// what initdb -U does, and what the official image does for POSTGRES_USER.
+// The cluster has no postgres role at all, so pgbackrest itself has to be
+// told which role to connect as.
+func makeBackRestRepoAs(t *testing.T, ctx context.Context, image, dest, user, database string) {
+	t.Helper()
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d",
+		"--label", docker.LabelSandbox+"=1", "--label", "com.probavi.pid="+strconv.Itoa(os.Getpid()),
+		"--network", "none", image, "sleep", "infinity").Output()
+	if err != nil {
+		t.Fatalf("start seed container: %v", err)
+	}
+	id := strings.TrimSpace(string(out))
+	defer exec.Command("docker", "rm", "-f", "-v", id).Run() //nolint:errcheck // best-effort cleanup
+
+	seedScript := fmt.Sprintf(`set -e
+mkdir -p /tmp/repo /etc/pgbackrest "$PGDATA"
+printf '[global]\nrepo1-path=/tmp/repo\n\n[demo]\npg1-path=%%s\npg1-user=%s\n' "$PGDATA" > /etc/pgbackrest/pgbackrest.conf
+chown -R postgres:postgres /tmp/repo /etc/pgbackrest "$PGDATA"
+gosu postgres initdb -U %s -D "$PGDATA"
+printf "archive_mode=on\narchive_command='pgbackrest --stanza=demo archive-push %%%%p'\n" >> "$PGDATA"/postgresql.conf
+gosu postgres pg_ctl -D "$PGDATA" -w -l /tmp/pg.log start
+gosu postgres psql -U %s -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE %s"
+gosu postgres psql -U %s -d %s -v ON_ERROR_STOP=1 -c "CREATE TABLE events (id bigserial PRIMARY KEY, total numeric(10,2)); INSERT INTO events (total) SELECT (random()*100)::numeric(10,2) FROM generate_series(1,500);"
+gosu postgres pgbackrest --stanza=demo stanza-create
+gosu postgres pgbackrest --stanza=demo --type=full backup
+gosu postgres psql -U %s -d %s -v ON_ERROR_STOP=1 -c "SELECT pg_switch_wal();" > /dev/null
+gosu postgres pg_ctl -D "$PGDATA" -w stop`,
+		user, user, user, database, user, database, user, database)
+	if out, err := exec.CommandContext(ctx, "docker", "exec", id, "sh", "-c", seedScript).CombinedOutput(); err != nil {
+		t.Fatalf("seed pgbackrest repo: %v: %s", err, out)
+	}
+	if out, err := exec.CommandContext(ctx, "docker", "cp", id+":/tmp/repo", dest).CombinedOutput(); err != nil {
+		t.Fatalf("extract repo: %v: %s", err, out)
 	}
 }
 
