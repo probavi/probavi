@@ -242,6 +242,11 @@ func TestFreshness(t *testing.T) {
 	}{
 		{"fresh with offset tz", withAge(2 * time.Hour), value("2026-07-31 01:00:00+00"), true, "newest row is 1h0m0s old (max_age 2h0m0s)"},
 		{"fresh with colon tz and fraction", withAge(2 * time.Hour), value("2026-07-31 03:00:00.123+02:00"), true, "59m59s old"},
+		// The basic-format offset, which cqlsh prints and which this list
+		// did not carry until issue #277: a value the runner delivered
+		// correctly was read as "unparseable output".
+		{"fresh with basic-format tz", withAge(2 * time.Hour), value("2026-07-31 01:00:00.294000+0000"), true, "59m59s old (max_age 2h0m0s)"},
+		{"stale with basic-format tz", withAge(30 * time.Minute), value("2026-07-31 01:00:00.294000+0000"), false, "59m59s old (max_age 30m0s)"},
 		{"stale", withAge(30 * time.Minute), value("2026-07-31 01:00:00+00"), false, "1h0m0s old (max_age 30m0s)"},
 		{"naive timestamp treated as UTC", withAge(2 * time.Hour), value("2026-07-31 01:30:00"), true, "30m0s old"},
 		{"future timestamp counts as fresh", withAge(time.Hour), value("2026-07-31 02:30:00+00"), true, "0s old"},
