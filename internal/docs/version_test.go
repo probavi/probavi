@@ -41,6 +41,56 @@ func TestQuickstartNamesTheGoVersionTheModuleRequires(t *testing.T) {
 	}
 }
 
+// linterPin matches the golangci-lint version a `go install` line names.
+var linterPin = regexp.MustCompile(`golangci-lint@v(\d+\.\d+\.\d+)`)
+
+// TestAgentsNamesTheLinterVersionCIInstalls keeps the contributor's linter
+// and CI's linter the same one.
+//
+// The zero-warnings policy is only meaningful if everyone is reading the
+// same list, and golangci-lint's findings move between releases: the
+// version installed here reports nothing on this repository, while the one
+// a developer happened to install six months earlier reports G602 five
+// times against `head := make([]byte, 2)` indexed at 0 and 1 — in range by
+// construction, and guarded by an io.ReadFull that has already refused a
+// shorter read. That is the dangerous direction for a drift to run. A
+// finding CI does not have cannot be resolved by fixing anything, so the
+// obvious next move is a //nolint on correct code — suppressing a linter
+// the project forbids suppressing, to silence a warning that was never
+// real.
+//
+// So AGENTS.md tells a contributor which version to install, and this gate
+// holds that sentence to the line CI actually runs.
+func TestAgentsNamesTheLinterVersionCIInstalls(t *testing.T) {
+	const (
+		workflow  = ".github/workflows/ci.yml"
+		agentsDoc = "AGENTS.md"
+	)
+	installed := linterPin.FindAllStringSubmatch(read(t, workflow), -1)
+	if len(installed) == 0 {
+		t.Fatalf("%s no longer installs a pinned golangci-lint — this gate would pass vacuously", workflow)
+	}
+	want := installed[0][1]
+	for _, m := range installed[1:] {
+		if m[1] != want {
+			t.Errorf("%s installs golangci-lint at both v%s and v%s — there is no single version to document",
+				workflow, want, m[1])
+		}
+	}
+	stated := linterPin.FindAllStringSubmatch(read(t, agentsDoc), -1)
+	if len(stated) == 0 {
+		t.Fatalf("%s no longer names the golangci-lint version to install; this gate expects a "+
+			"`go install …/golangci-lint@vX.Y.Z` line", agentsDoc)
+	}
+	for _, m := range stated {
+		if m[1] != want {
+			t.Errorf("%s tells a contributor to install golangci-lint v%s, but %s runs v%s — "+
+				"the local run and the merge gate would report different findings",
+				agentsDoc, m[1], workflow, want)
+		}
+	}
+}
+
 // changelogRelease matches the newest released heading of CHANGELOG.md.
 // [Unreleased] carries no date and is skipped by the date requirement, so
 // the first match is the version this repository currently claims to be.
