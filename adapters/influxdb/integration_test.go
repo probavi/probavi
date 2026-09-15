@@ -110,9 +110,9 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 	// The check dialect this adapter documents: one Flux query through
 	// the probe-declared runner, exactly as internal/checks runs it.
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database,
-		`from(bucket:"metrics") |> range(start:0) |> group() |> count()`, "500")
+		`from(bucket:"metrics") |> range(start:0) |> group() |> count() |> keep(columns:["_value"])`, "500")
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database,
-		`from(bucket:"events") |> range(start:0) |> group() |> count()`, "1")
+		`from(bucket:"events") |> range(start:0) |> group() |> count() |> keep(columns:["_value"])`, "1")
 
 	teardown, err := runner.Teardown(ctx, res.State, "completed", sbx)
 	if err != nil || !teardown.Released {
@@ -158,7 +158,7 @@ func TestReusedTargetDirRestoresTheNewest(t *testing.T) {
 		t.Fatalf("provision: %v", err)
 	}
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database,
-		`from(bucket:"later") |> range(start:0) |> group() |> count()`, "1")
+		`from(bucket:"later") |> range(start:0) |> group() |> count() |> keep(columns:["_value"])`, "1")
 }
 
 // TestArchiveDrillUnpacksAndRestores proves the tar kind end to end: a
@@ -206,7 +206,7 @@ func TestArchiveDrillUnpacksAndRestores(t *testing.T) {
 		t.Errorf("database = %q, want the organization from the archive's own manifest", res.Connection.Database)
 	}
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database,
-		`from(bucket:"metrics") |> range(start:0) |> group() |> count()`, "500")
+		`from(bucket:"metrics") |> range(start:0) |> group() |> count() |> keep(columns:["_value"])`, "500")
 }
 
 // TestCorruptShardVerdict proves a damaged member yields a verdict about
@@ -253,9 +253,16 @@ func TestCorruptShardVerdict(t *testing.T) {
 
 // assertCheck runs one Flux query through the probe-declared runner —
 // exactly how internal/checks runs checks without engine knowledge — and
-// asserts the output carries the wanted fragment.
+// compares the result the way the core does.
+//
+// The comparison is equality on the whole trimmed stdout, because that is
+// what internal/checks does with a check's `expect`. It used to be
+// strings.Contains, which the CLI's drawn table satisfied while the core's
+// equality could not: the suite stayed green through every release in which
+// no custom check on this adapter could pass (issue #274). A test that
+// accepts more than the thing it stands in for is not a test of it.
 func assertCheck(t *testing.T, ctx context.Context, sbx *docker.Sandbox,
-	probe *adapter.ProbeResult, database, checkText, wantFragment string) {
+	probe *adapter.ProbeResult, database, checkText, want string) {
 	t.Helper()
 	argv := make([]string, 0, len(probe.SQLRunner.Argv))
 	for _, a := range probe.SQLRunner.Argv {
@@ -266,9 +273,9 @@ func assertCheck(t *testing.T, ctx context.Context, sbx *docker.Sandbox,
 	if err != nil {
 		t.Fatalf("runner exec: %v", err)
 	}
-	if out.ExitCode != 0 || !strings.Contains(string(out.Stdout), wantFragment) {
-		t.Fatalf("check %q = %q (exit %d, stderr %s), want it to carry %q",
-			checkText, out.Stdout, out.ExitCode, out.Stderr, wantFragment)
+	if got := strings.TrimSpace(string(out.Stdout)); out.ExitCode != 0 || got != want {
+		t.Fatalf("check %q = %q (exit %d, stderr %s), want exactly %q",
+			checkText, got, out.ExitCode, out.Stderr, want)
 	}
 }
 

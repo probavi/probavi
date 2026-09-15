@@ -35,6 +35,67 @@ always called out explicitly.
   `internal/checks` — bounds drawn around the fixture's own newest row, one
   the data is inside and one it is not, so the test proves the instant is
   read *and* compared, and does not expire.
+- **InfluxDB custom checks can pass** (`adapters/influxdb` 0.4.0, issue
+  #274). The README documented `expect: "500"` against a Flux query, and no
+  check written that way could ever match: the declared runner was `influx
+  query` with no `--raw`, and the CLI draws a table — a `Result:` line, a
+  `Table:` line, a header, a rule, and only then the value. The core
+  compares `expect` against the runner's whole trimmed stdout, so every
+  custom check on this adapter failed, on every kind, in every release that
+  shipped it. The runner now asks for annotated CSV and reduces it to the
+  result: annotations, header and the two bookkeeping columns dropped, CRLF
+  removed, rows one per line with tab-separated columns as the protocol
+  requires. The fields are read as CSV rather than split on commas, because
+  a value containing a comma arrives quoted and splitting it would turn one
+  value into two.
+- **The integration suite compares checks the way the core does** (same
+  change). `assertCheck` asserted `strings.Contains`, which the drawn table
+  satisfied while the core's equality could not — which is why the suite
+  stayed green through every release in which no custom check could pass. It
+  now compares the whole trimmed output for equality. The README's example
+  gains `keep(columns:["_value"])` and says why: a bare `count()` still
+  carries `_start` and `_stop`, and `expect` is written for what the query
+  actually returns.
+- **The pgbackrest kind honours `options.user` and `options.database`**
+  (`adapters/postgres` 0.14.0, issue #273). The README documented both
+  options without restricting them to the logical kinds, and the physical
+  path read neither: it connected as `postgres` to `postgres`, always. Two
+  consequences, both measured. A cluster bootstrapped with a different
+  `POSTGRES_USER` has no `postgres` role at all, so the restore succeeded,
+  recovery finished in under a second, and the drill then polled a role that
+  was never in the backup until the readiness budget expired — recording
+  `engine_not_ready`, "recovery did not finish within 2m0s", a message that
+  blamed recovery for a name the drill config had chosen. And because
+  PostgreSQL cannot query across databases, the checks could only ever read
+  the `postgres` database, whatever the config said — a physical restore
+  brings back every database, and a drill could validate none of the others.
+  Both options now apply to every kind, and the README says which role and
+  database a pgbackrest drill needs: ones the backup holds, since the
+  adapter creates neither.
+- **A refused connection ends the wait instead of timing out** (same
+  change). `pg_isready` answers 0 for a role that does not exist, so the
+  server looked ready and the refusal surfaced only in `psql`. The wait now
+  stops on psql's exit code 2 — the one signal here that carries no
+  language, the server's own text being translated by the restored
+  cluster's `lc_messages` — and reports `invalid_request` naming the role,
+  the database and the engine's own words, because no amount of waiting
+  creates a role the backup does not contain.
+- **The k8s provider no longer reports a truncated transfer as a success**
+  (issue #272). `put_file` streams the backup as the stdin of `kubectl
+  exec -i`, and that stream can be torn down when local stdin reaches EOF,
+  before the pod's `cat` has drained what is in flight: the copy ends at a
+  buffer boundary and still exits zero. `BytesCopied` was the host file's
+  own `stat`, so nothing noticed — the adapter then judged a truncated
+  artifact and the drill recorded `source_corrupt` against a backup that
+  was intact, with a verdict that changed from run to run. The pod now
+  counts what landed, the count is compared with what was sent, a short
+  copy is retried and then refused as a sandbox error, and `BytesCopied`
+  reports the verified number. The transfer needs `wc` in the sandbox image
+  alongside the `sh` and `chmod` it already used; an image that cannot
+  answer with a count fails loudly instead of being taken on trust. The
+  integration suite's fixture grew from 13 bytes — which fitted in a single
+  frame and could never have caught this — to 512 KiB transferred three
+  times, each verified by size and digest inside the pod.
 
 ## [0.29.0] - 2026-09-13
 
