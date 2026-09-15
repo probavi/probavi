@@ -55,6 +55,14 @@ disabled by the provider).
   through `exec` verbs. Because those verbs run inside the slice, the
   engine cannot escape the sandbox's lifetime: stopping the slice kills
   the whole process tree, however it was started.
+- That is a requirement on the adapter, not only a description of the
+  provider. An adapter written against a sandbox whose image boots the
+  engine has nothing to wait for here — the PostgreSQL adapter's logical
+  kinds poll `pg_isready` because under docker the entrypoint has already
+  started the server, and on a bare host the drill waits out its readiness
+  budget against a server nobody started (issue #285). The provider cannot
+  detect this and does not pretend to: the adapter's own readiness verdict
+  is where it surfaces, and it says which of the two happened.
 
 Lifecycle mapping (command shapes, subject to implementation detail):
 
