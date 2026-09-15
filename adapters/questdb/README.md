@@ -84,8 +84,9 @@ QuestDB speaks SQL, so the core's generating built-ins apply unchanged —
 `table_exists`, `row_count` and `freshness` all work, quoted identifiers
 included, and `max(ts)` prints an RFC 3339 instant the freshness check
 reads. A `sql` check is one statement, run through the engine's HTTP
-endpoint inside the sandbox; the runner drops the CSV header and the
-quoting around text values so a check compares the value, not the markup.
+endpoint inside the sandbox; the runner reads the engine's CSV and prints
+the values — header dropped, quoting undone, columns separated by tabs — so
+a check compares the value, not the markup.
 
 ```yaml
 checks:
