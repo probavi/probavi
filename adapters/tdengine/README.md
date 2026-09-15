@@ -92,9 +92,21 @@ guessing.
 
 ## Checks
 
-TDengine speaks SQL, so the core's generating built-ins apply unchanged —
-`table_exists`, `row_count` and `freshness` all work. A `sql` check is one
-statement, run through the engine's HTTP endpoint inside the sandbox:
+TDengine speaks SQL, and `table_exists` and `row_count` work. The core
+composes them with SQL-standard quoted identifiers — `SELECT count(*) FROM
+"power"."meters"` — which TDengine refuses (error 9728, `syntax error`); the
+runner translates that into the engine's backtick form, so the drill config
+names a table the ordinary way. A `sql` check is one statement, run through
+the engine's HTTP endpoint inside the sandbox, and reaches the engine
+exactly as written — write those with bare or backtick-quoted names, as
+TDengine's own documentation does.
+
+**`freshness` does not apply to this adapter.** It reads `SELECT max(<column>)
+FROM <table>`, and TDengine's `max()` refuses a TIMESTAMP argument — error
+10242, `Invalid parameter data type : max`, measured on 3.3.6.13 with bare,
+quoted and backtick-quoted names alike. There is no wording of the built-in's
+query this engine accepts. Write the check the engine's way instead: `last()`
+does take a timestamp, and the comparison fits an `expect`.
 
 ```yaml
 checks:
@@ -105,6 +117,10 @@ checks:
   - name: no-impossible-voltage
     sql: "SELECT count(*) FROM power.meters WHERE voltage < 0"
     expect: 0
+  # freshness, the engine's way: 1 when the newest row is under a day old
+  - name: meters-are-fresh
+    sql: "SELECT CAST(last(ts) > NOW - 1d AS INT) FROM power.meters"
+    expect: 1
 ```
 
 ## Sandbox
