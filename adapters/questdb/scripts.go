@@ -86,17 +86,55 @@ const startupErrorScript = `grep -iE "error|exception|caused by" /tmp/probavi-qu
 // generating built-ins (table_exists, row_count, freshness) apply here
 // unchanged, quoted identifiers included (measured). $1 is the statement.
 //
-// The CSV endpoint answers with a header line and then the rows, and
-// quotes text values, so the header is dropped and the surrounding quotes
-// with it: a check compares the value, not the engine's markup. A failed
-// statement answers HTTP 400 with the engine's own words in a JSON body,
-// which go to stderr while the exit code carries the verdict — the core
-// records that a check failed and with what exit code, never the engine's
-// diagnostic text (evidence redaction).
+// The CSV endpoint answers with a header line and then the rows, and the
+// rows are RFC 4180: CRLF line endings, a value quoted when it contains a
+// comma or a quote, and a quote inside a value doubled. §6.1 asks a runner
+// for the values and nothing else, one row per line with tab-separated
+// columns, so the header goes and the rest is read as CSV rather than
+// trimmed as text.
+//
+// It was trimmed as text until issue #275, and each part of that markup
+// reached a check as if it were data. `sed 's/"$//'` never matched, because
+// the line ends in a carriage return, not the quote — so a timestamp
+// arrived with a quote still on it and every freshness check failed as
+// "unparseable output" while row_count passed, numbers being unquoted. A
+// value containing a quote arrived with the doubling intact, which is a
+// different value. And a second column arrived separated by a comma, which
+// a value containing a comma is indistinguishable from. All measured on the
+// baseline image.
+//
+// A failed statement answers HTTP 400 with the engine's own words in a JSON
+// body, which go to stderr while the exit code carries the verdict — the
+// core records that a check failed and with what exit code, never the
+// engine's diagnostic text (evidence redaction).
 const runnerScript = `set -u
 out=$(curl -s -w '\n%{http_code}' -G "` + serverURL + `/exp" --data-urlencode "query=$1") || {
   echo "the engine could not be reached" >&2; exit 1; }
 code=${out##*$'\n'}
 body=${out%$'\n'*}
+body=${body%$'\n'}
 [ "$code" = 200 ] || { printf '%s\n' "$body" >&2; exit 1; }
-printf '%s\n' "$body" | tail -n +2 | sed 's/^"//; s/"$//'`
+printf '%s\n' "$body" | tr -d '\r' | awk '
+  function split_csv(line, fields,   i, c, n, field, quoted) {
+    n = 0; field = ""; quoted = 0
+    for (i = 1; i <= length(line); i++) {
+      c = substr(line, i, 1)
+      if (quoted) {
+        if (c != "\"") { field = field c }
+        else if (substr(line, i + 1, 1) == "\"") { field = field "\""; i++ }
+        else { quoted = 0 }
+      }
+      else if (c == "\"") { quoted = 1 }
+      else if (c == ",") { fields[++n] = field; field = "" }
+      else { field = field c }
+    }
+    fields[++n] = field
+    return n
+  }
+  NR == 1 { next }
+  {
+    n = split_csv($0, f)
+    row = f[1]
+    for (i = 2; i <= n; i++) row = row "\t" f[i]
+    print row
+  }'`

@@ -250,6 +250,123 @@ func TestProvisionPhysicalFailures(t *testing.T) {
 	}
 }
 
+// pgbackrestPayloadAs is the physical payload with the drill config naming
+// a role and a database, as a cluster whose bootstrap superuser is not
+// "postgres" has to.
+func pgbackrestPayloadAs(repo, user, database string) string {
+	return fmt.Sprintf(
+		`{"source":{"kind":"pgbackrest","path":%q,"params":{"stanza":"demo"}},"sandbox":{"scratch_dir":"/scratch"},"options":{"user":%q,"database":%q}}`,
+		repo, user, database)
+}
+
+// TestPhysicalRestoreConnectsAsTheConfiguredRole pins what issue #273
+// found: the physical path read neither option, so it always connected as
+// postgres to postgres. A cluster bootstrapped with another POSTGRES_USER
+// has no postgres role, and PostgreSQL cannot query across databases, so
+// the checks could only ever read one database whatever the config said.
+func TestPhysicalRestoreConnectsAsTheConfiguredRole(t *testing.T) {
+	repo := writeRepoFixture(t)
+	var sequence []string
+	line, calls, exit := driveOp(t, "provision", pgbackrestPayloadAs(repo, "rig", "rigdb"), physicalHandler(t, &sequence))
+	if exit != 0 {
+		t.Fatalf("exit = %d", exit)
+	}
+	f := parseFinal(t, line)
+	if !f.OK {
+		t.Fatalf("final = %+v", f)
+	}
+
+	promotion := ""
+	for _, call := range calls {
+		args := execArgs{}
+		if err := json.Unmarshal(call.Args, &args); err != nil || len(args.Argv) == 0 {
+			continue
+		}
+		if args.Argv[0] == "psql" {
+			promotion = strings.Join(args.Argv, " ")
+		}
+	}
+	if promotion == "" {
+		t.Fatal("no psql call: the adapter never waited for recovery to finish")
+	}
+	if !strings.Contains(promotion, "-U rig") || !strings.Contains(promotion, "-d rigdb") {
+		t.Errorf("promotion wait = %q, want it to connect as the configured role and database", promotion)
+	}
+
+	res := provisionWire{}
+	if err := json.Unmarshal(f.Payload, &res); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if res.Connection.User != "rig" || res.Connection.Database != "rigdb" {
+		t.Errorf("connection = %+v, want the checks pointed at the configured role and database", res.Connection)
+	}
+	if res.State["user"] != "rig" || res.State["database"] != "rigdb" {
+		t.Errorf("state = %+v, want healthcheck and teardown to see the same pair", res.State)
+	}
+}
+
+// refusesConnection simulates a restored cluster that starts and answers
+// pg_isready — which it does even for a role that does not exist — and then
+// refuses psql with exit code 2.
+func refusesConnection(t *testing.T) func(verbCall) (any, *protoError) {
+	psqlCalls, readyCalls := 0, 0
+	return func(call verbCall) (any, *protoError) {
+		if call.Verb == "put_file" {
+			return putFileValue{}, nil
+		}
+		args := execArgs{}
+		if err := json.Unmarshal(call.Args, &args); err != nil {
+			t.Fatalf("args: %v", err)
+		}
+		switch {
+		case isPGDataProbe(args):
+			return outExec(sandboxPGData), nil
+		case args.Argv[0] == "pg_isready":
+			readyCalls++
+			if readyCalls == 1 {
+				return okExec(2), nil // the idle check before the restore
+			}
+			// The measured behaviour that makes this failure mode possible:
+			// pg_isready answers 0 for a role that does not exist, so the
+			// server looks ready and the refusal only surfaces in psql.
+			return okExec(0), nil
+		case args.Argv[0] == "psql":
+			psqlCalls++
+			if psqlCalls > 1 {
+				t.Errorf("psql attempt %d: a refused connection must end the wait, not be polled until the budget expires", psqlCalls)
+			}
+			return errExec(psqlConnectionRefused,
+				`psql: error: connection to server at "127.0.0.1", port 5432 failed: FATAL:  role "postgres" does not exist`), nil
+		default:
+			return okExec(0), nil
+		}
+	}
+}
+
+// TestPhysicalRestoreStopsWhenTheClusterRefusesTheRole covers the second
+// half of issue #273: the drill used to spin out the readiness budget and
+// report that recovery had not finished — blaming the backup for a role the
+// config chose — because pg_isready answers 0 for a role that is not there.
+func TestPhysicalRestoreStopsWhenTheClusterRefusesTheRole(t *testing.T) {
+	repo := writeRepoFixture(t)
+	line, _, _ := driveOp(t, "provision", pgbackrestPayloadAs(repo, "rig", "rigdb"), refusesConnection(t))
+	f := parseFinal(t, line)
+	if f.OK {
+		t.Fatal("a cluster that refuses every connection is not a provisioned instance")
+	}
+	if f.Error.Code == "engine_not_ready" {
+		t.Error("code = engine_not_ready: recovery finished, the connection was refused — and a retry cannot create the role")
+	}
+	if f.Error.Code != "invalid_request" {
+		t.Errorf("code = %s, want invalid_request", f.Error.Code)
+	}
+	for _, want := range []string{"rig", "rigdb", "role 'postgres' does not exist"} {
+		if !strings.Contains(f.Error.Message, want) {
+			t.Errorf("message = %q, want it to contain %q", f.Error.Message, want)
+		}
+	}
+}
+
 func pitrPayload(repo, target string) string {
 	return fmt.Sprintf(
 		`{"source":{"kind":"pgbackrest","path":%q,"params":{"stanza":"demo"}},"sandbox":{"scratch_dir":"/scratch"},"options":{},"pitr":{"target_time":%q}}`,

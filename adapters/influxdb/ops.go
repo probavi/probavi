@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "influxdb"
-	adapterVersion = "0.3.0"
+	adapterVersion = "0.4.0"
 
 	// Where the restored instance serves inside the sandbox. No TLS and
 	// no operator credentials: a Probavi sandbox is zero-ingress
@@ -51,6 +51,65 @@ const (
 	readinessPoll   = 500 * time.Millisecond
 )
 
+// runnerScript is the declared check runner. It exists because §6.1 of the
+// protocol requires the runner to print "result rows to stdout, one row per
+// line, tab-separated columns, no decoration", and `influx query` prints a
+// drawn table instead:
+//
+//	Result: _result
+//	Table: keys: [_start, _stop]
+//	                   _start:time                      _stop:time      _value:int
+//	------------------------------  ------------------------------  --------------
+//	1970-01-01T00:00:00.000000000Z  2026-09-14T17:57:45.549050293Z             626
+//
+// The core compares a check's `expect` against the runner's whole trimmed
+// stdout, so no `expect` could ever match and custom checks were unusable
+// (issue #274) — the same defect the prometheus adapter carried until #175.
+//
+// --raw asks for annotated CSV, which is not undecorated either: three
+// annotation lines, a header, two bookkeeping columns before the data, and
+// CRLF throughout. What is left after those is the result, and the rows are
+// joined with tabs because a Flux table has as many columns as the query
+// left in it — a scalar `expect` wants `keep(columns:["_value"])`, which the
+// README now says.
+//
+// The fields are read as CSV rather than split on commas: a value
+// containing a comma arrives quoted (measured), and splitting would turn
+// one value into two. A value containing a quote arrives doubled, and is
+// halved again here. The first three fields never contain either — they are
+// the empty leader, the result name and the table index.
+//
+// The query still travels as a single argv element, so no check text is
+// ever word-split or interpreted by the shell.
+const runnerScript = `set -u
+out=$(influx query --raw --host ` + serverURL + ` -t ` + sandboxToken + ` -o "$1" "$2") || exit $?
+printf '%s\n' "$out" | tr -d '\r' | awk '
+  function split_csv(line, fields,   i, c, n, field, quoted) {
+    n = 0; field = ""; quoted = 0
+    for (i = 1; i <= length(line); i++) {
+      c = substr(line, i, 1)
+      if (quoted) {
+        if (c != "\"") { field = field c }
+        else if (substr(line, i + 1, 1) == "\"") { field = field "\""; i++ }
+        else { quoted = 0 }
+      }
+      else if (c == "\"") { quoted = 1 }
+      else if (c == ",") { fields[++n] = field; field = "" }
+      else { field = field c }
+    }
+    fields[++n] = field
+    return n
+  }
+  /^#/ { next }
+  {
+    n = split_csv($0, f)
+    if (n < 4) next
+    if (f[2] == "result" && f[3] == "table") next
+    row = f[4]
+    for (i = 5; i <= n; i++) row = row "\t" f[i]
+    print row
+  }'`
+
 // probePayload reports identity and capabilities (§6.1). Probe must not
 // touch the sandbox and needs no credentials.
 func probePayload() any {
@@ -70,10 +129,10 @@ func probePayload() any {
 			// argv element — no shell anywhere. {{database}} carries the
 			// organization provision returned; the token is the documented
 			// sandbox constant above. The engine dialect is absorbed here,
-			// declaratively — the core never learns it (§6.1).
-			"argv": []string{"influx", "query", "--host", serverURL,
-				"-t", sandboxToken, "-o", "{{database}}", "{{sql}}"},
-			"env": map[string]string{},
+			// declaratively — the core never learns it (§6.1), and so is
+			// the CLI's decoration (see runnerScript).
+			"argv": []string{"sh", "-c", runnerScript, "sh", "{{database}}", "{{sql}}"},
+			"env":  map[string]string{},
 		},
 		"verbs_required": []string{"exec", "put_file"},
 	}

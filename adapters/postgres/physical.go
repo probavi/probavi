@@ -78,7 +78,7 @@ func resolvePITRTarget(req *provisionRequest) (string, *protoError) {
 
 // provisionPhysical runs the pgbackrest provision flow and returns the
 // §6.2 response payload.
-func provisionPhysical(ctx context.Context, c *core, req *provisionRequest, src *resolvedSource, logger *slog.Logger) (any, *protoError) {
+func provisionPhysical(ctx context.Context, c *core, req *provisionRequest, src *resolvedSource, user, database string, logger *slog.Logger) (any, *protoError) {
 	stanza := req.Source.Params["stanza"]
 	if !stanzaPattern.MatchString(stanza) {
 		return nil, protoErr("invalid_request", false,
@@ -134,7 +134,7 @@ func provisionPhysical(ctx context.Context, c *core, req *provisionRequest, src 
 	}
 	logger.Info("pgbackrest restore complete", "seconds", restore.DurationSeconds)
 
-	readySeconds, perr := startEngine(ctx, c, pgdata)
+	readySeconds, perr := startEngine(ctx, c, pgdata, user, database)
 	if perr != nil {
 		return nil, perr
 	}
@@ -143,7 +143,7 @@ func provisionPhysical(ctx context.Context, c *core, req *provisionRequest, src 
 	return map[string]any{
 		"connection": map[string]any{
 			"scheme": "postgresql", "host": "127.0.0.1", "port": defaultPort,
-			"database": defaultDatabase, "user": defaultUser,
+			"database": database, "user": user,
 		},
 		"source_identity": map[string]any{
 			"checksum": src.checksum, "size_bytes": src.sizeBytes, "created_at": src.createdAt,
@@ -154,7 +154,7 @@ func provisionPhysical(ctx context.Context, c *core, req *provisionRequest, src 
 			"restore_seconds":      restore.DurationSeconds,
 		},
 		"state": map[string]any{
-			"database": defaultDatabase, "user": defaultUser, "mode": "physical", "stanza": stanza,
+			"database": database, "user": user, "mode": "physical", "stanza": stanza,
 		},
 	}, nil
 }
@@ -253,7 +253,7 @@ chown -R postgres:postgres %s %s /etc/pgbackrest`,
 // sandbox has no network exposure, so trust is confined to the container),
 // starts the server, and waits until recovery finishes and queries are
 // accepted. Returns the measured wait in seconds.
-func startEngine(ctx context.Context, c *core, pgdata string) (float64, *protoError) {
+func startEngine(ctx context.Context, c *core, pgdata, user, database string) (float64, *protoError) {
 	script := fmt.Sprintf(
 		`set -e
 printf 'local all all trust\nhost all all 127.0.0.1/32 trust\nhost all all ::1/128 trust\n' > %s/pg_hba.conf
@@ -277,11 +277,11 @@ chown postgres:postgres %s/pg_hba.conf`, pgdata, pgdata)
 	if start.ExitCode != 0 {
 		return 0, mapStartFailure(stderr)
 	}
-	readySeconds, perr := awaitEngine(ctx, c, defaultUser)
+	readySeconds, perr := awaitEngine(ctx, c, user)
 	if perr != nil {
 		return 0, perr
 	}
-	promoteSeconds, perr := awaitPromotion(ctx, c)
+	promoteSeconds, perr := awaitPromotion(ctx, c, user, database)
 	if perr != nil {
 		return 0, perr
 	}
@@ -303,11 +303,26 @@ func mapStartFailure(stderr []byte) *protoError {
 // writable. Hot standby answers pg_isready during WAL replay, so readiness
 // alone would let checks run against a still-recovering — for pitr,
 // possibly pre-target — instance.
-func awaitPromotion(ctx context.Context, c *core) (float64, *protoError) {
+//
+// It connects as the role and database the drill configured, which a
+// physical restore brings back from the backup along with everything else.
+//
+// A refused connection ends the wait immediately. awaitEngine has already
+// established that the server accepts connections normally — pg_isready
+// answers 0 for a role that does not exist, which is why this used to spin
+// out its whole budget and then report that recovery had not finished,
+// blaming the backup for a role the drill config chose (issue #273). Once
+// the server is answering, a connection it then refuses is refused for what
+// it asks for, not for when it asked, and no amount of waiting creates a
+// role or a database the backup does not contain. psql's exit code 2 is
+// that refusal, and it carries no language: the server's own text is
+// translated by the restored cluster's lc_messages, so matching on it would
+// work in one operator's locale and not the next one's.
+func awaitPromotion(ctx context.Context, c *core, user, database string) (float64, *protoError) {
 	start := time.Now()
 	for {
-		val, stdout, _, perr := c.exec(ctx, execArgs{
-			Argv: []string{"psql", "-h", "127.0.0.1", "-U", defaultUser, "-d", defaultDatabase,
+		val, stdout, stderr, perr := c.exec(ctx, execArgs{
+			Argv: []string{"psql", "-h", "127.0.0.1", "-U", user, "-d", database,
 				"-tA", "-c", "SELECT pg_is_in_recovery()"},
 			TimeoutSeconds: 5,
 		})
@@ -316,6 +331,11 @@ func awaitPromotion(ctx context.Context, c *core) (float64, *protoError) {
 		}
 		if val.ExitCode == 0 && strings.TrimSpace(string(stdout)) == "f" {
 			return time.Since(start).Seconds(), nil
+		}
+		if val.ExitCode == psqlConnectionRefused {
+			return 0, protoErr("invalid_request", false,
+				"the restored cluster refused a connection as role '%s' to database '%s': %s — a physical restore brings back the roles and databases the backup holds, so name one of those in options.user and options.database",
+				user, database, firstLine(stderr))
 		}
 		if time.Since(start) > readinessBudget {
 			return 0, protoErr("engine_not_ready", true, "recovery did not finish within %s", readinessBudget)

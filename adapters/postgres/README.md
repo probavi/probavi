@@ -190,6 +190,13 @@ adapter waits until `pg_is_in_recovery()` reports false — checks never run
 against a still-recovering instance — and the measured `engine_ready` phase
 covers server start plus the full recovery.
 
+That wait connects as `options.user` to `options.database`, both of which
+come out of the backup here rather than out of the image. If the cluster
+refuses the connection the drill stops there and says so, naming the role
+and the database: `pg_isready` answers happily for a role that does not
+exist, so waiting out the readiness budget would only end in a timeout that
+blamed recovery for a name the drill config chose.
+
 Before anything is transferred, the adapter compares the repository's own
 manifest (`db-version` in `backup.info`'s `[db]` section) against the
 sandbox engine's `postgres --version`: a physical backup restores only
@@ -388,8 +395,16 @@ Set under `source.params` in the drill config.
 
 | Option     | Default    | Meaning                              |
 |------------|------------|--------------------------------------|
-| `user`     | `postgres` | Superuser inside the sandbox engine. |
-| `database` | `postgres` | Database to restore into.            |
+| `user`     | `postgres` | Role the adapter connects as, and that the checks then use. On the logical kinds it is the superuser the dump is replayed by, and it exists in the sandbox image; on `pgbackrest` it is a role the **backup** contains. |
+| `database` | `postgres` | Database to restore into on the logical kinds; on `pgbackrest` the database of the restored cluster that the checks read. |
+
+Both apply to every kind, `pgbackrest` included. That matters most there: a
+physical restore brings back the whole cluster, PostgreSQL cannot query
+across databases, and the checks run in exactly one of them — so a cluster
+whose application data does not live in `postgres` needs `database` set, and
+one bootstrapped with a different `POSTGRES_USER` has no `postgres` role to
+connect as at all. Name a role and a database the backup holds; the adapter
+does not create either.
 
 ## Environment
 

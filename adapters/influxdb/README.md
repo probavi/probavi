@@ -85,9 +85,17 @@ anywhere):
 ```yaml
 checks:
   - kind: query
-    sql: from(bucket:"metrics") |> range(start:0) |> group() |> count()
+    sql: from(bucket:"metrics") |> range(start:0) |> group() |> count() |> keep(columns:["_value"])
     expect: "500"
 ```
+
+`expect` is compared against the runner's whole output, and a Flux table has
+as many columns as the query left in it: a bare `count()` still carries
+`_start` and `_stop`, which arrive as three tab-separated columns. `keep`
+reduces the table to the one value the check is about. A query that leaves
+several columns is not an error — the rows print one per line, columns
+separated by tabs, as the protocol asks — but write the `expect` for what
+the query actually returns.
 
 ## Retention is not enforced in the drill
 

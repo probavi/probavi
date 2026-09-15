@@ -13,7 +13,12 @@ import (
 
 const (
 	adapterName    = "postgres"
-	adapterVersion = "0.13.1"
+	adapterVersion = "0.14.0"
+
+	// psqlConnectionRefused is psql's exit code for a connection that could
+	// not be established — distinct from 1 (psql's own fatal error) and 3
+	// (a script error). It is the same number in every locale.
+	psqlConnectionRefused = 2
 
 	defaultUser     = "postgres"
 	defaultDatabase = "postgres"
@@ -90,7 +95,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	logger.Info("source resolved", "path", src.path, "size_bytes", src.sizeBytes)
 
 	if req.Source.Kind == "pgbackrest" {
-		return provisionPhysical(ctx, c, req, src, logger)
+		return provisionPhysical(ctx, c, req, src, user, database, logger)
 	}
 
 	readySeconds, perr := awaitEngine(ctx, c, user)

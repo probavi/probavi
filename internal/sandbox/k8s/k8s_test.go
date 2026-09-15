@@ -391,7 +391,7 @@ func writeSource(t *testing.T) string {
 
 func TestPutFile(t *testing.T) {
 	t.Run("streams through cat with positional dest", func(t *testing.T) {
-		sbx, fake := testSandbox(t, response{}, response{})
+		sbx, fake := testSandbox(t, response{stdout: "10\n"}, response{})
 		res, err := sbx.PutFile(context.Background(), writeSource(t), "/tmp/x.dump", "0644")
 		if err != nil {
 			t.Fatalf("PutFile: %v", err)
@@ -400,7 +400,7 @@ func TestPutFile(t *testing.T) {
 			t.Errorf("BytesCopied = %d", res.BytesCopied)
 		}
 		wantCopy := []string{"kubectl", "exec", "-n", "drills", "-i", "probavi-sbx-1-abc", "--",
-			"sh", "-c", `cat > "$1"`, "sh", "/tmp/x.dump"}
+			"sh", "-c", `cat > "$1" && wc -c < "$1"`, "sh", "/tmp/x.dump"}
 		if !slices.Equal(fake.calls[0], wantCopy) {
 			t.Errorf("copy call = %v\nwant      %v", fake.calls[0], wantCopy)
 		}
@@ -414,7 +414,7 @@ func TestPutFile(t *testing.T) {
 	})
 
 	t.Run("default mode is 0600", func(t *testing.T) {
-		sbx, fake := testSandbox(t, response{}, response{})
+		sbx, fake := testSandbox(t, response{stdout: "10\n"}, response{})
 		if _, err := sbx.PutFile(context.Background(), writeSource(t), "/tmp/x", ""); err != nil {
 			t.Fatalf("PutFile: %v", err)
 		}
@@ -423,6 +423,62 @@ func TestPutFile(t *testing.T) {
 		}
 	})
 
+}
+
+// TestPutFileVerifiesTheBytesLanded covers the guarantee the transfer makes
+// about itself, which until issue #272 it did not make at all.
+func TestPutFileVerifiesTheBytesLanded(t *testing.T) {
+	// The count BytesCopied reports is the pod's, not the host file's stat.
+	// Reading it from the host is what made a truncated transfer look like a
+	// success (issue #272), so a report that cannot tell the two apart is not
+	// a report at all: here the pod's number is deliberately the wrong one
+	// and the transfer must be refused rather than agreed with.
+	t.Run("the count comes from the pod, not the host stat", func(t *testing.T) {
+		short := response{stdout: "4\n"}
+		sbx, fake := testSandbox(t, short, short, short)
+		_, err := sbx.PutFile(context.Background(), writeSource(t), "/tmp/x", "")
+		if err == nil {
+			t.Fatal("a copy that landed 4 of 10 bytes must not be reported as a success")
+		}
+		for _, want := range []string{"received 4 of 10 bytes", "not what was sent"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %v, want it to contain %q", err, want)
+			}
+		}
+		if len(fake.calls) != putFileAttempts {
+			t.Errorf("made %d calls, want %d attempts before refusing", len(fake.calls), putFileAttempts)
+		}
+	})
+
+	// A torn exec stream is the transport failing, not the cluster being
+	// broken, so the send is repeated — and a later attempt that lands every
+	// byte is the successful transfer it is.
+	t.Run("a short copy is retried and the full one accepted", func(t *testing.T) {
+		sbx, fake := testSandbox(t, response{stdout: "4\n"}, response{stdout: "10\n"}, response{})
+		res, err := sbx.PutFile(context.Background(), writeSource(t), "/tmp/x", "")
+		if err != nil {
+			t.Fatalf("PutFile: %v", err)
+		}
+		if res.BytesCopied != 10 {
+			t.Errorf("BytesCopied = %d, want the 10 the second attempt landed", res.BytesCopied)
+		}
+		if fake.stdins[1] != "dump-bytes" {
+			t.Errorf("retry stdin = %q, want the file re-sent from the beginning", fake.stdins[1])
+		}
+		if len(fake.calls) != 3 {
+			t.Errorf("made %d calls, want copy, retry, chmod", len(fake.calls))
+		}
+	})
+
+	// An image without wc cannot answer, and an unanswerable transfer is
+	// refused rather than taken on trust — the whole point of the check.
+	t.Run("a pod that reports no count is an error", func(t *testing.T) {
+		sbx, _ := testSandbox(t, response{stdout: "sh: wc: not found\n"})
+		_, err := sbx.PutFile(context.Background(), writeSource(t), "/tmp/x", "")
+		if err == nil || !strings.Contains(err.Error(), "POSIX wc") {
+			t.Errorf("error = %v, want the missing byte count named", err)
+		}
+	})
 }
 
 func TestPutFileFailures(t *testing.T) {
@@ -439,7 +495,7 @@ func TestPutFileFailures(t *testing.T) {
 	if _, err := sbx.PutFile(context.Background(), src, "/tmp/x", ""); err == nil || !strings.Contains(err.Error(), "no space") {
 		t.Errorf("copy failure: %v", err)
 	}
-	sbx, _ = testSandbox(t, response{}, response{exit: 1, stderr: "chmod: not permitted"})
+	sbx, _ = testSandbox(t, response{stdout: "10\n"}, response{exit: 1, stderr: "chmod: not permitted"})
 	if _, err := sbx.PutFile(context.Background(), src, "/tmp/x", ""); err == nil || !strings.Contains(err.Error(), "chmod") {
 		t.Errorf("chmod failure: %v", err)
 	}
