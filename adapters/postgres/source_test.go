@@ -67,6 +67,52 @@ func TestResolveSourceKinds(t *testing.T) {
 			t.Errorf("picked %s, want deterministic tie-break to %s", src.path, zeta)
 		}
 	})
+}
+
+// TestResolveSourceGlobalsKinds separates the two kinds that take a
+// cluster-globals script from the ones that take a dump alone: which of the
+// two the restore frames is the whole difference between them.
+func TestResolveSourceGlobalsKinds(t *testing.T) {
+	base := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+
+	// The framed globals kind is the two existing behaviours composed: the
+	// two-member resolution of pgdump_with_globals, and the timescale mark
+	// that frames the restore. Both must land on the same source.
+	t.Run("timescaledb_dump_with_globals carries both members and the frame", func(t *testing.T) {
+		set := t.TempDir()
+		touch(t, set, "globals.sql", base)
+		dump := touch(t, set, "metrics.dump", base)
+		src, perr := resolveSource(context.Background(), "timescaledb_dump_with_globals", set,
+			map[string]string{"globals": "globals.sql"})
+		if perr != nil {
+			t.Fatalf("resolveSource: %+v", perr)
+		}
+		if src.path != dump {
+			t.Errorf("dump = %s, want %s", src.path, dump)
+		}
+		if src.globalsPath != filepath.Join(set, "globals.sql") {
+			t.Errorf("globalsPath = %q, want the globals script beside the dump", src.globalsPath)
+		}
+		if !src.timescale {
+			t.Error("timescale = false: the restore would run unframed, which breaks hypertable state")
+		}
+	})
+
+	// The plain globals kind must not acquire the frame by being adjacent
+	// to it: the fence exists so an operator names the framed kind.
+	t.Run("pgdump_with_globals stays unframed", func(t *testing.T) {
+		set := t.TempDir()
+		touch(t, set, "globals.sql", base)
+		touch(t, set, "orders.dump", base)
+		src, perr := resolveSource(context.Background(), "pgdump_with_globals", set,
+			map[string]string{"globals": "globals.sql"})
+		if perr != nil {
+			t.Fatalf("resolveSource: %+v", perr)
+		}
+		if src.timescale {
+			t.Error("timescale = true: the plain kind must reach the fence, not the frame")
+		}
+	})
 
 }
 

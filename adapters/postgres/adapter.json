@@ -1,5 +1,5 @@
 {
-  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run, the rest in the scheduled version matrix and before a release tag — so neither can drift. See docs/capabilities.md and docs/engine-versions.md.",
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead \u2014 never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified \u2014 the baseline on every run, the rest in the scheduled version matrix and before a release tag \u2014 so neither can drift. See docs/capabilities.md and docs/engine-versions.md.",
   "id": "postgres",
   "name": "PostgreSQL",
   "status": "experimental",
@@ -57,6 +57,7 @@
     "pgdump_with_globals": "One pg_dump file plus the cluster globals (roles and grants) loaded before it; either member may be gzip-compressed",
     "pgbackrest": "A pgBackRest filesystem repository (physical restore)",
     "timescaledb_dump": "One pg_dump file of a TimescaleDB database; the restore is framed with timescaledb_pre_restore()/timescaledb_post_restore()",
-    "timescaledb_dump_dir": "A directory of them; the one whose own head records the newest time is restored, framed the same way"
+    "timescaledb_dump_dir": "A directory of them; the one whose own head records the newest time is restored, framed the same way",
+    "timescaledb_dump_with_globals": "A directory holding a pg_dumpall --globals-only script and one TimescaleDB dump; the globals load first, then the framed restore"
   }
 }

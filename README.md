@@ -97,7 +97,7 @@ the exact instant proven.
 | [Neo4j](adapters/neo4j/README.md) | 5.26 | 0.19.0 | `neo4j_dump`, `neo4j_dump_dir` |
 | [OpenSearch](adapters/opensearch/README.md) | 2.19.6, 3.8.0 | 0.14.0 | `opensearch_repo`, `opensearch_repo_tar` |
 | [Oracle Database](adapters/oracle/README.md) | 23.26.3.0 | 0.18.0 | `oracle_datapump` |
-| [PostgreSQL](adapters/postgres/README.md) | 14, 15, 16, 17, 18, pgvector 0.8.6-pg17, timescaledb 2.29.1-pg17, postgis 17-3.5 | 0.1.0 | `pgbackrest`, `pgdump`, `pgdump_dir`, `pgdump_with_globals`, `timescaledb_dump`, `timescaledb_dump_dir` |
+| [PostgreSQL](adapters/postgres/README.md) | 14, 15, 16, 17, 18, pgvector 0.8.6-pg17, timescaledb 2.29.1-pg17, postgis 17-3.5 | 0.1.0 | `pgbackrest`, `pgdump`, `pgdump_dir`, `pgdump_with_globals`, `timescaledb_dump`, `timescaledb_dump_dir`, `timescaledb_dump_with_globals` |
 | [Prometheus](adapters/prometheus/README.md) | 3.13 | 0.12.0 | `prometheus_snapshot`, `prometheus_snapshot_dir`, `prometheus_snapshot_tar` |
 | [Qdrant](adapters/qdrant/README.md) | 1.19.0, 1.18.1 | 0.24.0 | `qdrant_full_snapshot`, `qdrant_full_snapshot_dir`, `qdrant_snapshot`, `qdrant_snapshot_dir` |
 | [QuestDB](adapters/questdb/README.md) | 10.0.1, 9.4.3 | 0.27.0 | `questdb_checkpoint`, `questdb_checkpoint_dir`, `questdb_data` |
