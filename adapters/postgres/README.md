@@ -114,6 +114,40 @@ closed, with the restore reported successful. Nothing is racing there:
 `bgw_job_stat` is absent from the dump, so a restored job has no
 `next_start` and the scheduler treats it as due immediately.
 
+**Every job's owner role must exist in the sandbox.** A policy is a row in
+the restored catalog whose `owner` column is a `regrole`, and a `regrole`
+is written out as the role's name. That is *data*: `pg_restore --no-owner`
+rewrites `ALTER … OWNER TO` statements, and there is no such statement
+here, so the flag cannot reach it. A dump from a database owned by an
+application role — the ordinary shape, `POSTGRES_USER=app` with the
+policies created by that role — therefore stops at
+
+```
+pg_restore: error: COPY failed for table "bgw_job": ERROR:  role "app" does not exist
+```
+
+recorded as `restore_failed`. The backup is intact; the sandbox is missing
+a role the backup names.
+
+Give the sandbox that role as its own superuser:
+
+```yaml
+sandbox:
+  params:
+    image: timescale/timescaledb:2.29.1-pg17
+    env.POSTGRES_USER: app          # the role the policies are owned by
+    env.POSTGRES_DB: app
+target:
+  options: {user: app, database: app}
+```
+
+This works when the jobs share one owner, which is the common case. It does
+not when they are owned by several roles, and the timescaledb kinds have no
+`with_globals` counterpart that would carry the roles with the backup the
+way [the `pgdump_with_globals` kind](#the-pgdump_with_globals-kind-cluster-globals-first)
+does for a plain dump. If your policies span owners, say so in an issue —
+the shape of the fix is a question of what real dumps look like.
+
 A policy states what a *running* database should keep; a drill proves
 what the backup holds, and the operator's real policy is already
 expressed in which chunks the dump contains. The lever is deliberately

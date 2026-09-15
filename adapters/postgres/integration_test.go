@@ -1512,6 +1512,158 @@ func TestTimescaleDumpIsFencedFromThePlainKind(t *testing.T) {
 	}
 }
 
+// TestTimescalePolicyOwnerRoleMustExist pins both halves of what issue
+// #278 found, and of the sentence the README now carries.
+//
+// Every TimescaleDB policy is a row in the restored catalog whose owner
+// column is a regrole, and a regrole is written out as the role's name. It
+// is data, so `pg_restore --no-owner` cannot touch it — the flag rewrites
+// ALTER … OWNER TO statements, and there is no such statement here. A dump
+// from a database owned by an application role therefore needs that role in
+// the sandbox, and until this test there was no fixture with one: the
+// suite's hypertable was seeded by postgres, a role every image has.
+//
+// The remedy is to give the sandbox that role as its own superuser. It is
+// not discoverable, which is the actual defect, so both sides are asserted:
+// the plain configuration fails naming the role, and the documented one
+// restores the same dump.
+func TestTimescalePolicyOwnerRoleMustExist(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-postgres"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	const owner = "rig"
+	provider := docker.New(nil)
+	image := verifiedImage(t)
+	plain := map[string]string{"image": image, "env.POSTGRES_HOST_AUTH_METHOD": "trust",
+		"memory": engineMemoryLimit}
+	asOwner := map[string]string{"image": image, "env.POSTGRES_HOST_AUTH_METHOD": "trust",
+		"env.POSTGRES_USER": owner, "env.POSTGRES_DB": owner, "memory": engineMemoryLimit}
+
+	fixture := filepath.Join(t.TempDir(), "owned.dump")
+	if !makeTimescaleFixtureOwnedBy(t, ctx, provider, asOwner, owner, fixture) {
+		t.Skip("image does not provide the timescaledb extension; the timescaledb matrix job exercises this test")
+	}
+
+	runner, err := adapter.New("postgres", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+
+	t.Run("a sandbox without the owner role fails naming it", func(t *testing.T) {
+		sbx, err := provider.Create(ctx, plain)
+		if err != nil {
+			t.Fatalf("create sandbox: %v", err)
+		}
+		defer destroy(t, sbx)
+		awaitReady(t, ctx, sbx)
+
+		_, err = runner.Provision(ctx, &adapter.ProvisionRequest{
+			Source:  adapter.ProvisionSource{Kind: "timescaledb_dump", Path: fixture},
+			Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+		}, sbx)
+		var aerr *adapter.Error
+		if err == nil || !errors.As(err, &aerr) {
+			t.Fatalf("provision error = %v, want an adapter error", err)
+		}
+		if aerr.Code != "restore_failed" {
+			t.Errorf("code = %s, want restore_failed", aerr.Code)
+		}
+		// The engine's own words carry the remedy. A message that did not
+		// name the role would leave the operator with nothing to act on,
+		// and the README's sentence would have nothing to point at.
+		if !strings.Contains(aerr.Message, owner) || !strings.Contains(aerr.Message, "bgw_job") {
+			t.Errorf("message = %q, want the missing role and the catalog table named", aerr.Message)
+		}
+	})
+
+	t.Run("a sandbox bootstrapped with the owner role restores it", func(t *testing.T) {
+		sbx, err := provider.Create(ctx, asOwner)
+		if err != nil {
+			t.Fatalf("create sandbox: %v", err)
+		}
+		defer destroy(t, sbx)
+		awaitReady(t, ctx, sbx)
+
+		probe, err := runner.Probe(ctx)
+		if err != nil {
+			t.Fatalf("probe: %v", err)
+		}
+		res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+			Source:  adapter.ProvisionSource{Kind: "timescaledb_dump", Path: fixture},
+			Options: map[string]string{"user": owner, "database": owner},
+			Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+		}, sbx)
+		if err != nil {
+			t.Fatalf("provision: %v", err)
+		}
+		assertRunnerRow(t, ctx, sbx, probe, res, "SELECT count(*) FROM metrics", ownedRows)
+		// The policy is back, still owned by the role the backup named —
+		// the restore reproduced the catalog rather than rewriting it.
+		assertRunnerRow(t, ctx, sbx, probe, res,
+			"SELECT count(*) FROM timescaledb_information.jobs WHERE proc_name = 'policy_retention' AND owner::text = '"+owner+"'",
+			"1")
+	})
+}
+
+// ownedRows is deliberately small: this fixture exists to carry a policy
+// owned by a non-superuser role, and the hypertable's shape is proven by
+// TestTimescaleRestoreDrill.
+const ownedRows = "200"
+
+// makeTimescaleFixtureOwnedBy seeds a hypertable and a retention policy as
+// the role the sandbox was bootstrapped with, so the dump's bgw_job row
+// names that role rather than postgres. false reports an image without the
+// extension.
+func makeTimescaleFixtureOwnedBy(t *testing.T, ctx context.Context, provider *docker.Provider,
+	params map[string]string, owner, dest string) bool {
+	t.Helper()
+	seed, err := provider.Create(ctx, params)
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+	awaitReady(t, ctx, seed)
+
+	avail, err := seed.Exec(ctx, sandbox.ExecRequest{Argv: []string{
+		"psql", "-h", "127.0.0.1", "-U", owner, "-d", owner, "-tA", "-c",
+		"SELECT count(*) FROM pg_available_extensions WHERE name = 'timescaledb'"}})
+	if err != nil {
+		t.Fatalf("probe extension: %v", err)
+	}
+	if avail.ExitCode != 0 || strings.TrimSpace(string(avail.Stdout)) != "1" {
+		return false
+	}
+
+	for _, sql := range []string{
+		"CREATE EXTENSION IF NOT EXISTS timescaledb",
+		"CREATE TABLE metrics (ts timestamptz NOT NULL, device int NOT NULL, value double precision)",
+		"SELECT create_hypertable('metrics', 'ts', chunk_time_interval => interval '7 days')",
+		"INSERT INTO metrics SELECT now() - (i || ' hours')::interval, i % 10, random() FROM generate_series(1, " +
+			ownedRows + ") i",
+		// Parked on creation for the reason makeTimescaleFixture gives: a
+		// policy that ran before pg_dump reached it would leave a fixture
+		// proving something else.
+		"SELECT alter_job(add_retention_policy('metrics', interval '90 days'), next_start => 'infinity')",
+	} {
+		mustExec(t, ctx, seed, "psql", "-h", "127.0.0.1", "-U", owner, "-d", owner, "-v", "ON_ERROR_STOP=1", "-c", sql)
+	}
+	mustExec(t, ctx, seed, "pg_dump", "-h", "127.0.0.1", "-U", owner, "-Fc", "--no-owner",
+		"-f", "/tmp/owned.dump", owner)
+
+	if out, err := exec.CommandContext(ctx, "docker", "cp",
+		seed.ID()+":/tmp/owned.dump", dest).CombinedOutput(); err != nil {
+		t.Fatalf("extract fixture: %v: %s", err, out)
+	}
+	return true
+}
+
 // timescaleRows is one hourly sample per row, so the fixture's hypertable
 // spans 200 days — more than the 90-day retention policy it also carries.
 // That is the ordinary shape of a metrics database kept for compliance,

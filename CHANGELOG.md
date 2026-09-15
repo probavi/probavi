@@ -11,6 +11,24 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Documentation
+
+- **The timescaledb kinds say that every job's owner role must exist in the
+  sandbox** (issue #278). A policy is a row in the restored catalog whose
+  `owner` column is a `regrole`, written out as the role's name — data, not
+  an `ALTER … OWNER TO` statement, so `pg_restore --no-owner` cannot reach
+  it. A dump from a database owned by an application role, which is the
+  ordinary shape, stopped at `COPY failed for table "bgw_job": ERROR: role
+  "app" does not exist` and recorded `restore_failed`: a drill blaming a
+  backup that restores perfectly once the role is there. Nothing said so.
+  The README now names the dependency, shows the sandbox configuration that
+  satisfies it, and states the case it does not cover — jobs owned by
+  several roles, for which the timescaledb kinds have no `with_globals`
+  counterpart. The suite's fixture was seeded by `postgres`, a role every
+  image has, which is why it never met this; a second fixture is owned by an
+  application role, and the drill asserts both that the plain configuration
+  fails naming the role and that the documented one restores the same dump.
+
 ### Fixed
 
 - **`AGENTS.md` names the linter version CI installs.** It said
