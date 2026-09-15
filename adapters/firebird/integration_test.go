@@ -13,6 +13,8 @@ import (
 
 	"github.com/probavi/probavi/internal/adapter"
 	"github.com/probavi/probavi/internal/capabilities"
+	"github.com/probavi/probavi/internal/checks"
+	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/sandbox"
 	"github.com/probavi/probavi/internal/sandbox/docker"
 )
@@ -66,10 +68,10 @@ func makeFixture(t *testing.T, ctx context.Context, provider *docker.Provider, i
 	seedScript := `set -e
 printf "%s\n" \
   "CREATE DATABASE '/tmp/seed.fdb';" \
-  "CREATE TABLE ORDERS (ID INTEGER NOT NULL PRIMARY KEY, TOTAL NUMERIC(9,2));" \
-  "INSERT INTO ORDERS VALUES (1, 10.50);" \
-  "INSERT INTO ORDERS VALUES (2, 99.00);" \
-  "INSERT INTO ORDERS VALUES (3, 7.25);" \
+  "CREATE TABLE ORDERS (ID INTEGER NOT NULL PRIMARY KEY, TOTAL NUMERIC(9,2), CREATED_AT TIMESTAMP);" \
+  "INSERT INTO ORDERS VALUES (1, 10.50, CURRENT_TIMESTAMP);" \
+  "INSERT INTO ORDERS VALUES (2, 99.00, CURRENT_TIMESTAMP);" \
+  "INSERT INTO ORDERS VALUES (3, 7.25, CURRENT_TIMESTAMP);" \
   "COMMIT;" \
   "SET TERM ^ ;" \
   "CREATE TRIGGER PURGE ON CONNECT POSITION 0 AS BEGIN DELETE FROM ORDERS WHERE TOTAL < ` + purgedBelow + `; END^" \
@@ -214,6 +216,47 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database, "SELECT count(*) FROM ORDERS", "3")
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database,
 		"SELECT count(*) FROM ORDERS WHERE TOTAL < 0", "0")
+
+	// The README's own section — "Checks: identifiers are case-sensitive" —
+	// asserted rather than described. The core quotes what the drill config
+	// names, Firebird honours the quotes exactly, and the dictionary holds
+	// what CREATE TABLE stored: upper case unless the table was created
+	// quoted. Both halves are proved here, because a claim about case that
+	// only ever tests one case proves nothing about the other.
+	t.Run("the generating built-ins work, named as the dictionary stores them", func(t *testing.T) {
+		deps := checks.Deps{
+			Exec:   sbx,
+			Runner: checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
+			Target: checks.Target{User: res.Connection.User, Database: res.Connection.Database},
+		}
+		min1, tooMany := int64(1), int64(100)
+		results, err := checks.Run(ctx, []config.Check{
+			{Builtin: config.CheckTableExists, Table: "ORDERS"},
+			// The name an operator would write by habit. Firebird folded the
+			// unquoted CREATE to ORDERS, so this one is a different table.
+			{Builtin: config.CheckTableExists, Table: "orders"},
+			{Builtin: config.CheckRowCount, Table: "ORDERS", Min: &min1},
+			{Builtin: config.CheckRowCount, Table: "ORDERS", Min: &tooMany},
+			{Builtin: config.CheckFreshness, Table: "ORDERS", Column: "CREATED_AT", MaxAge: config.Duration(time.Hour)},
+			{Builtin: config.CheckFreshness, Table: "ORDERS", Column: "CREATED_AT", MaxAge: config.Duration(time.Millisecond)},
+		}, deps)
+		if err != nil {
+			t.Fatalf("checks.Run: %v", err)
+		}
+		for i, want := range []bool{true, false, true, false, true, false} {
+			if results[i].OK != want {
+				t.Errorf("check %d (%s) = ok:%v detail:%q, want ok:%v",
+					i, results[i].Name, results[i].OK, results[i].Detail, want)
+			}
+		}
+		if !strings.Contains(results[3].Detail, "rows") {
+			t.Errorf("row_count detail = %q, want the count read and compared against the bound", results[3].Detail)
+		}
+		if strings.Contains(results[5].Detail, "unparseable") {
+			t.Errorf("freshness detail = %q, want the instant read and compared — isql's timestamp "+
+				"form has to be one internal/checks parses", results[5].Detail)
+		}
+	})
 
 	teardown, err := runner.Teardown(ctx, res.State, "completed", sbx)
 	if err != nil {

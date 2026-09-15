@@ -108,12 +108,17 @@ Two things do close part of the gap, and both are real:
   to learn which databases exist, and a tree without it serves none of them
   (measured).
 
-**For the rest, write a row-count check.** The core has generating built-in
-checks for exactly this, and against an engine whose backups do not state
-their own size, the drill's own assertion is what proves completeness.
-`options.database` names the database those checks query, and for the
-data-directory kinds the adapter refuses if that database is not there
-after the restore.
+**For the rest, assert the count yourself.** Against an engine whose backups
+do not state their own size, the drill's own assertion is what proves
+completeness — `_all_docs?limit=0` and the forms above it, in the shape this
+adapter's checks take. `options.database` names the database a check reads,
+and for the data-directory kinds the adapter refuses if that database is not
+there after the restore.
+
+The core's generating built-ins (`row_count`, `table_exists`, `freshness`)
+do **not** apply here — they compose SQL, and this runner takes a path — the
+same trade the mongodb, redis and etcd adapters document, and the protocol's
+design working as intended (§6.1).
 
 ## Compaction is suspended for the drill's duration
 
