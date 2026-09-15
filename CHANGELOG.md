@@ -59,6 +59,39 @@ always called out explicitly.
 
 ### Fixed
 
+- **Cassandra's `table_exists` works** (`adapters/cassandra` 0.4.0, issue
+  #277). The core probes existence with `SELECT count(*) FROM <table> WHERE
+  1=0`, and CQL has no such predicate — a `WHERE` clause must name a column,
+  so cqlsh answers `SyntaxException: no viable alternative at input '1'` and
+  the check failed on every drill while the README said the built-ins work.
+  The runner now sends `DESCRIBE TABLE <table>` for that probe: the engine's
+  own way to ask the question, answered from the schema rather than by
+  scanning, non-zero for a table that is not there, and — because its output
+  carries no separator line for the filter to key on — returning nothing at
+  all, so an existence probe no longer puts a row of restored production
+  data on stdout. The rewrite is guarded by the whole statement, so a check
+  the operator wrote reaches cqlsh exactly as written.
+- **`freshness` reads a timestamp whose offset has no colon** (issue #277,
+  found while fixing it). `internal/checks` accepted the extended (`+00:00`)
+  and hours-only (`+00`) ISO 8601 offsets but not the basic one (`+0000`),
+  which is what cqlsh prints — so freshness failed as "timestamp column
+  returned unparseable output" on every Cassandra drill, against a value the
+  runner had delivered correctly. The format list is where a rendering of a
+  timestamp belongs, and it now carries all three spellings; an adapter
+  rewriting its engine's offset to suit the core would have moved the gap
+  rather than closed it. Fourteen adapters' READMEs claim `freshness` works,
+  and all of them read this list.
+- **The integration suite runs Cassandra's built-ins** (same change). It
+  exercised none — the only mention was a comment — which is why two of the
+  three documented built-ins were broken in every release that shipped the
+  adapter. The end-to-end drill now runs `table_exists` (present and
+  absent), `row_count` (a bound the data meets and one it does not) and
+  `freshness` (inside an hour, outside a millisecond) through
+  `internal/checks`, and the fixture gains the timestamp column that makes
+  the last of those possible.
+
+### Fixed
+
 - **`AGENTS.md` names the linter version CI installs.** It said
   `golangci-lint run` and left the version to whatever the reader happened
   to have, while the merge gate installs a pinned one — so the local run and
