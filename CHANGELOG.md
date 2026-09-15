@@ -27,9 +27,57 @@ always called out explicitly.
   forbids suppressing, to silence a warning that was never real. A gate now
   ties the documented version to the line CI runs, and fails if either side
   moves or stops naming one.
-
-### Fixed
-
+- **TDengine's `table_exists` and `row_count` work** (`adapters/tdengine`
+  0.2.0, issue #276). The core composes its generating built-ins with
+  SQL-standard quoted identifiers, and TDengine refuses them: `SELECT
+  count(*) FROM "rig"."events"` answers error 9728, `syntax error`. The
+  README claimed all three built-ins applied and the adapter did nothing to
+  make them, so every built-in check failed on every drill of this engine.
+  The runner now translates the core's generated statement into the engine's
+  backtick form — the dialect absorbed in the declaration, as protocol §6.1
+  intends, and as the mysql and mariadb adapters do with a session
+  `sql_mode` that TDengine has no equivalent of.
+  The translation is guarded by the whole statement rather than by position,
+  because TDengine also reads `"a"` as a string literal (measured): a check
+  the operator wrote could carry a double-quoted string that a positional
+  rewrite would turn into an identifier — a different query, answering a
+  different number, into a signed record. A statement that is not one of the
+  core's own reaches the engine byte for byte as written.
+- **`freshness` is documented as not applying to TDengine** (same change).
+  It reads `SELECT max(<column>) FROM <table>`, and the engine's `max()`
+  refuses a TIMESTAMP argument — error 10242, `Invalid parameter data type :
+  max` — with bare, quoted and backtick-quoted names alike, so no wording of
+  the built-in's query works. The README says so and shows the check to
+  write instead: `last()` does take a timestamp, and the comparison fits an
+  `expect`.
+- **The integration suite runs the built-ins** (same change). It exercised
+  none, which is why a claim that was false in every release went unnoticed.
+  The end-to-end drill now runs `table_exists` and two `row_count` checks
+  through `internal/checks` — one bound the data meets and one it does not,
+  so a refused statement cannot be mistaken for a comparison — and asserts
+  that a statement with a double-quoted string literal is not rewritten.
+- **QuestDB freshness checks — and any check expecting text — can pass**
+  (`adapters/questdb` 0.1.1, issue #275). The engine's CSV endpoint answers
+  RFC 4180: CRLF line endings, a value quoted when it contains a comma or a
+  quote, and a quote inside a value doubled. The runner trimmed that as
+  text, and each part of the markup reached a check as if it were data.
+  `sed 's/"$//'` never matched, because the line ends in the carriage
+  return rather than the quote, so a timestamp arrived as
+  `2026-09-14T18:21:08.718148Z"` and every `freshness` check failed as
+  "timestamp column returned unparseable output" — while `row_count` passed,
+  numbers being unquoted, which is why the gap looked like nothing. Two more
+  the same trim caused, both measured on the baseline image and neither
+  reported: a value containing a quote arrived with the doubling intact,
+  which is a different value; and a second column arrived separated by a
+  comma, which a value containing a comma is indistinguishable from and
+  which §6.1 asks to be a tab. The runner now reads the answer as CSV.
+- **The integration suite runs the built-ins it documents** (same change).
+  It exercised no `freshness` check, so the README's claim that all three
+  generating built-ins work was never tested. The end-to-end drill now runs
+  `table_exists`, `row_count` and two `freshness` checks through
+  `internal/checks` — bounds drawn around the fixture's own newest row, one
+  the data is inside and one it is not, so the test proves the instant is
+  read *and* compared, and does not expire.
 - **InfluxDB custom checks can pass** (`adapters/influxdb` 0.4.0, issue
   #274). The README documented `expect: "500"` against a Flux query, and no
   check written that way could ever match: the declared runner was `influx

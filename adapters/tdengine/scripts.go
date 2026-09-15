@@ -195,16 +195,53 @@ const databaseScript = `set -u
 curl -sf -u ` + credentials + ` -d "SELECT count(*) FROM information_schema.ins_tables WHERE db_name = '$1'" "` +
 	serverURL + `/rest/sql" | sed -n 's/.*"data":\[\[\([0-9]*\)\].*/\1/p'`
 
+// backtick is the identifier quote TDengine takes. It cannot be written
+// inside the raw string literal below, which is delimited by one.
+const backtick = "`"
+
 // runnerScript absorbs the check dialect declaratively.
 //
-// TDengine speaks SQL, so the core's generating built-ins apply here
-// unchanged. $1 is the statement. The endpoint answers JSON: a scalar
-// query comes back as data:[[value]], and a refusal as a non-zero code
-// with the engine's own words in desc, which go to stderr while the exit
-// code carries the verdict — the core records that a check failed and
-// with what exit code, never the engine's diagnostic text.
+// TDengine speaks SQL, and the core composes its generating built-ins with
+// SQL-standard quoted identifiers (drill-config §3.5) — `SELECT count(*)
+// FROM "rig"."events"`. TDengine takes bare or backtick-quoted names and
+// refuses that one outright: error 9728, `syntax error near ""rig"."events""`
+// (measured on 3.3.6.13). So table_exists and row_count failed on every
+// drill while the README promised they worked (issue #276). Absorbing that
+// here is what §6.1 is for; the mysql and mariadb adapters absorb the same
+// gap with a session sql_mode, which TDengine has no equivalent of — its 92
+// configuration variables carry nothing about quoting.
+//
+// The translation is guarded by the whole statement, not by position. A
+// looser rule is not safe here: TDengine also accepts "a" as a string
+// literal (measured), so a check of the operator's own could carry a
+// double-quoted string that a positional rewrite would turn into an
+// identifier — a different query, answering a different number, into a
+// signed record. When the statement matches the grammar the core generates
+// end to end, every quote in it is an identifier quote and the rewrite is
+// exact; when it does not, the statement reaches the engine byte for byte
+// as it was written.
+//
+// freshness is not rescued by this and cannot be: TDengine's max() refuses
+// a TIMESTAMP argument — error 10242, `Invalid parameter data type : max` —
+// with backticks exactly as with quotes. The generated statement is
+// translated all the same, so what comes back is the engine explaining
+// that, rather than a complaint about quoting. The README names the
+// limitation and the check to write instead.
+//
+// $1 is the statement. The endpoint answers JSON: a scalar query comes back
+// as data:[[value]], and a refusal as a non-zero code with the engine's own
+// words in desc, which go to stderr while the exit code carries the verdict
+// — the core records that a check failed and with what exit code, never the
+// engine's diagnostic text.
 const runnerScript = `set -u
-out=$(curl -s -w '\n%{http_code}' -u ` + credentials + ` --data-binary "$1" "` + serverURL + `/rest/sql") || {
+ident='"[A-Za-z_][A-Za-z0-9_]*"'
+table="$ident(\.$ident)?"
+generated="^SELECT count\(\*\) FROM $table( WHERE 1=0)?$|^SELECT max\($ident\) FROM $table$"
+stmt=$1
+if printf '%s' "$stmt" | grep -Eq "$generated"; then
+  stmt=$(printf '%s' "$stmt" | tr '"' '` + backtick + `')
+fi
+out=$(curl -s -w '\n%{http_code}' -u ` + credentials + ` --data-binary "$stmt" "` + serverURL + `/rest/sql") || {
   echo "the engine could not be reached" >&2; exit 1; }
 code=${out##*$'\n'}
 body=${out%$'\n'*}

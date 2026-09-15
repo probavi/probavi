@@ -11,7 +11,7 @@ import (
 
 const (
 	adapterName    = "tdengine"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.2.0"
 	// defaultPort is where taosAdapter serves HTTP inside the sandbox.
 	// Nothing is published: checks run in-sandbox through the runner.
 	defaultPort = 6041
