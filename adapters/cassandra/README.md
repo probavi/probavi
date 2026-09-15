@@ -162,7 +162,7 @@ The declared runner absorbs cqlsh's decorated output — header, dash
 separator, padded columns, `(N rows)` footer (measured) — into the
 undecorated tab-separated rows the protocol requires, via an awk filter
 in the template; pipefail carries cqlsh's own exit code through. That
-means **the core's generating built-in checks apply unchanged**
+means **the core's generating built-in checks work here**
 (`row_count`, `table_exists`, `freshness`, user-defined CQL), evaluated
 against the restored keyspace `{{database}}` delivers:
 
@@ -173,6 +173,15 @@ checks:
     table: orders
     min: 100000
 ```
+
+One of the three is rewritten on the way through, because CQL cannot
+express it. `table_exists` probes with `SELECT count(*) FROM <table> WHERE
+1=0`, and a CQL `WHERE` clause must name a column — cqlsh answers
+`SyntaxException`. The runner sends `DESCRIBE TABLE <table>` instead: the
+engine's own way to ask the question, answered from the schema, non-zero
+for a table that is not there, and carrying no row of restored data on its
+way back. The rewrite matches the core's generated probe end to end, so a
+check you write reaches cqlsh exactly as you wrote it.
 
 With several keyspaces in one artifact, `connection.database` is the
 alphabetically first; checks against the others use qualified names.
