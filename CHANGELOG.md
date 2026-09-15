@@ -11,6 +11,85 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **`timescaledb_dump_with_globals`** (`adapters/postgres` 0.15.0, issue
+  #278): the cluster globals loaded first, then the framed TimescaleDB
+  restore — `pgdump_with_globals` for a hypertable database. It is the two
+  behaviours composed and nothing more, which is what made the case for it:
+  every TimescaleDB policy is a row whose `owner` column is a `regrole`,
+  written out as the role's name inside a catalog COPY, so a dump from a
+  database owned by an application role could not be drilled without giving
+  the sandbox that role — and never at all when the jobs were owned by
+  several. With the globals in the source, a stock `timescale/timescaledb`
+  image restores a cluster whose every policy belongs to a role that image
+  never had, and the jobs come back owned by exactly the roles the backup
+  gave them.
+
+### Fixed
+
+- **A restore that dies on a missing role says which source kind carries
+  the roles** (same change). The advice existed only on the plain-SQL path;
+  a custom-format archive — which is what `pg_dump -Fc` writes, and what the
+  TimescaleDB failure above produces — reached the evidence record as
+  `pg_restore failed: … role "rig" does not exist`, with nothing an operator
+  could act on. Both paths now name the kind that fits the drill's own
+  source, and say nothing when the source already carried globals: a role
+  still missing after a globals script ran is a gap in that script, and
+  recommending the kind already in use would be advice to do what was done.
+  Nothing asserted these messages before, which is how the gap opened.
+
+### Documentation
+
+- **The timescaledb kinds say that every job's owner role must exist in the
+  sandbox** (issue #278). A policy is a row in the restored catalog whose
+  `owner` column is a `regrole`, written out as the role's name — data, not
+  an `ALTER … OWNER TO` statement, so `pg_restore --no-owner` cannot reach
+  it. A dump from a database owned by an application role, which is the
+  ordinary shape, stopped at `COPY failed for table "bgw_job": ERROR: role
+  "app" does not exist` and recorded `restore_failed`: a drill blaming a
+  backup that restores perfectly once the role is there. Nothing said so.
+  The README now names the dependency, shows the sandbox configuration that
+  satisfies it, and states the case it does not cover — jobs owned by
+  several roles, and points at `timescaledb_dump_with_globals` as the way to
+  bring them with the backup. The suite's fixture was seeded by `postgres`, a role every
+  image has, which is why it never met this; a second fixture is owned by an
+  application role, and the drill asserts both that the plain configuration
+  fails naming the role and that the documented one restores the same dump.
+
+### Fixed
+
+- **Cassandra's `table_exists` works** (`adapters/cassandra` 0.4.0, issue
+  #277). The core probes existence with `SELECT count(*) FROM <table> WHERE
+  1=0`, and CQL has no such predicate — a `WHERE` clause must name a column,
+  so cqlsh answers `SyntaxException: no viable alternative at input '1'` and
+  the check failed on every drill while the README said the built-ins work.
+  The runner now sends `DESCRIBE TABLE <table>` for that probe: the engine's
+  own way to ask the question, answered from the schema rather than by
+  scanning, non-zero for a table that is not there, and — because its output
+  carries no separator line for the filter to key on — returning nothing at
+  all, so an existence probe no longer puts a row of restored production
+  data on stdout. The rewrite is guarded by the whole statement, so a check
+  the operator wrote reaches cqlsh exactly as written.
+- **`freshness` reads a timestamp whose offset has no colon** (issue #277,
+  found while fixing it). `internal/checks` accepted the extended (`+00:00`)
+  and hours-only (`+00`) ISO 8601 offsets but not the basic one (`+0000`),
+  which is what cqlsh prints — so freshness failed as "timestamp column
+  returned unparseable output" on every Cassandra drill, against a value the
+  runner had delivered correctly. The format list is where a rendering of a
+  timestamp belongs, and it now carries all three spellings; an adapter
+  rewriting its engine's offset to suit the core would have moved the gap
+  rather than closed it. Fourteen adapters' READMEs claim `freshness` works,
+  and all of them read this list.
+- **The integration suite runs Cassandra's built-ins** (same change). It
+  exercised none — the only mention was a comment — which is why two of the
+  three documented built-ins were broken in every release that shipped the
+  adapter. The end-to-end drill now runs `table_exists` (present and
+  absent), `row_count` (a bound the data meets and one it does not) and
+  `freshness` (inside an hour, outside a millisecond) through
+  `internal/checks`, and the fixture gains the timestamp column that makes
+  the last of those possible.
+
 ### Fixed
 
 - **Four adapters compose their working paths from `sandbox.scratch_dir`**

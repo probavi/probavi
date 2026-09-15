@@ -14,6 +14,8 @@ import (
 
 	"github.com/probavi/probavi/internal/adapter"
 	"github.com/probavi/probavi/internal/capabilities"
+	"github.com/probavi/probavi/internal/checks"
+	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/sandbox"
 	"github.com/probavi/probavi/internal/sandbox/docker"
 )
@@ -67,10 +69,10 @@ done
 cqlsh -e "SELECT release_version FROM system.local;" >/dev/null
 {
   echo "CREATE KEYSPACE probavi WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};"
-  echo "CREATE TABLE probavi.orders (id int PRIMARY KEY, v text);"
+  echo "CREATE TABLE probavi.orders (id int PRIMARY KEY, v text, created_at timestamp);"
   echo "CREATE TABLE probavi.meta (k text PRIMARY KEY, v text);"
   echo "INSERT INTO probavi.meta (k, v) VALUES ('origin', 'restored-ok');"
-  for i in $(seq 1 500); do echo "INSERT INTO probavi.orders (id, v) VALUES ($i, 'row$i');"; done
+  for i in $(seq 1 500); do echo "INSERT INTO probavi.orders (id, v, created_at) VALUES ($i, 'row$i', toTimestamp(now()));"; done
 } > /tmp/seed.cql
 cqlsh -f /tmp/seed.cql
 nodetool flush
@@ -270,6 +272,50 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 	// decorated output into the contract's undecorated rows (measured).
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database, "SELECT count(*) FROM orders;", "500")
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database, "SELECT k, v FROM meta;", "origin\trestored-ok")
+
+	// The built-ins the README claims, run through internal/checks rather
+	// than asserted on the runner's output — the core composes the
+	// statements, and two of the three were statements this engine could
+	// not answer. table_exists probed with `WHERE 1=0`, which is not CQL at
+	// all; freshness read a value the runner delivered correctly and the
+	// core could not parse, cqlsh printing its offset as +0000 (issue
+	// #277). The suite exercised no built-in, so neither was visible.
+	t.Run("the generating built-ins work", func(t *testing.T) {
+		deps := checks.Deps{
+			Exec:   sbx,
+			Runner: checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
+			Target: checks.Target{User: res.Connection.User, Database: res.Connection.Database},
+		}
+		min1, tooMany := int64(1), int64(501)
+		results, err := checks.Run(ctx, []config.Check{
+			{Builtin: config.CheckTableExists, Table: "orders"},
+			{Builtin: config.CheckTableExists, Table: "nosuch"},
+			{Builtin: config.CheckRowCount, Table: "orders", Min: &min1},
+			{Builtin: config.CheckRowCount, Table: "orders", Min: &tooMany},
+			// The fixture was written moments ago by this test, so it is
+			// inside an hour and outside a millisecond whatever the machine.
+			{Builtin: config.CheckFreshness, Table: "orders", Column: "created_at", MaxAge: config.Duration(time.Hour)},
+			{Builtin: config.CheckFreshness, Table: "orders", Column: "created_at", MaxAge: config.Duration(time.Millisecond)},
+		}, deps)
+		if err != nil {
+			t.Fatalf("checks.Run: %v", err)
+		}
+		for i, want := range []bool{true, false, true, false, true, false} {
+			if results[i].OK != want {
+				t.Errorf("check %d (%s) = ok:%v detail:%q, want ok:%v",
+					i, results[i].Name, results[i].OK, results[i].Detail, want)
+			}
+		}
+		// Each failing case must fail for its own reason. A statement the
+		// engine refuses fails every check the same way, and that sameness
+		// is what hid this.
+		if !strings.Contains(results[3].Detail, "rows") {
+			t.Errorf("row_count detail = %q, want the count read and compared against the bound", results[3].Detail)
+		}
+		if strings.Contains(results[5].Detail, "unparseable") {
+			t.Errorf("freshness detail = %q, want the instant read and compared", results[5].Detail)
+		}
+	})
 
 	teardown, err := runner.Teardown(ctx, res.State, "completed", sbx)
 	if err != nil {

@@ -21,7 +21,7 @@ type resolvedSource struct {
 	// creation time; nil if unavailable.
 	createdAt *string
 	// globalsPath is the cluster-globals script to load before the dump,
-	// for the pgdump_with_globals kind; empty for every other kind.
+	// for the two with_globals kinds; empty for every other kind.
 	globalsPath string
 	// storage is what the artifact turned out to be, which decides how it
 	// is restored; globalsStorage is the same for the globals script,
@@ -46,6 +46,9 @@ type resolvedSource struct {
 //	                      the restore is framed with the extension's own
 //	                      pre/post-restore procedure (ops.go)
 //	timescaledb_dump_dir — a directory of them, chosen like pgdump_dir
+//	timescaledb_dump_with_globals — pgdump_with_globals for a TimescaleDB
+//	                      database: the globals load first, then the framed
+//	                      restore
 //	pgbackrest          — path is a pgBackRest repository directory (filesystem repo)
 func resolveSource(ctx context.Context, kind, path string, params map[string]string) (*resolvedSource, *protoError) {
 	loc, perr := backupLocation(params)
@@ -71,12 +74,15 @@ func resolveSource(ctx context.Context, kind, path string, params map[string]str
 			return nil, perr
 		}
 		return timescaleSource(resolveFile(latest, loc))
+	case "timescaledb_dump_with_globals":
+		return timescaleSource(resolveWithGlobals(ctx, path, params, loc))
 	case "pgbackrest":
 		return resolveRepo(path, params["stanza"])
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: pgdump, pgdump_dir, pgdump_with_globals, "+
-				"timescaledb_dump, timescaledb_dump_dir, pgbackrest)", kind)
+				"timescaledb_dump, timescaledb_dump_dir, timescaledb_dump_with_globals, "+
+				"pgbackrest)", kind)
 	}
 }
 

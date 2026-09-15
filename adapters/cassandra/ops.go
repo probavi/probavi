@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "cassandra"
-	adapterVersion = "0.3.0"
+	adapterVersion = "0.4.0"
 
 	// workDirName is created under the provider's scratch directory.
 	workDirName = "probavi-cassandra"
@@ -42,8 +42,31 @@ const (
 // cqlsh's own exit code through the pipe. Measured end to end: a count
 // yields the bare number, a two-column row yields tab-separated values,
 // and a CQL error exits 2.
+//
+// The script also rewrites one statement the core generates. table_exists
+// probes with `SELECT count(*) FROM <table> WHERE 1=0`, and CQL has no such
+// predicate — a WHERE clause must name a column, so cqlsh answers
+// `SyntaxException: no viable alternative at input '1'` and the check
+// failed on every drill while the README said it worked (issue #277).
+// `DESCRIBE TABLE` is the engine's own way to ask the question: it exits 0
+// for a table that exists and non-zero for one that does not, which is
+// exactly what the core reads, and it answers from the schema — so nothing
+// is scanned and, because its output carries no separator line, the filter
+// above emits nothing at all. A probe for a table's existence should not
+// put a row of restored production data on stdout, and this one does not.
+//
+// The rewrite is guarded by the whole statement rather than by position, so
+// a check of the operator's own can never be caught by it: what does not
+// match the core's generated probe end to end reaches cqlsh as written. The
+// identifier itself passes through untouched — CQL quotes identifiers the
+// same way the core does.
 const runnerScript = `set -o pipefail
-cqlsh --no-color -k "$1" -e "$2" | awk '/^-+[-+]*$/{d=1;next} d&&NF==0{exit} d{gsub(/^ +| +$/,""); gsub(/ *\| */,"\t"); print}'`
+probe='^SELECT count\(\*\) FROM "[A-Za-z_][A-Za-z0-9_]*"(\."[A-Za-z_][A-Za-z0-9_]*")? WHERE 1=0$'
+stmt=$2
+if printf '%s' "$stmt" | grep -Eq "$probe"; then
+  stmt=$(printf '%s' "$stmt" | sed -E 's/^SELECT count\(\*\) FROM (.*) WHERE 1=0$/DESCRIBE TABLE \1/')
+fi
+cqlsh --no-color -k "$1" -e "$stmt" | awk '/^-+[-+]*$/{d=1;next} d&&NF==0{exit} d{gsub(/^ +| +$/,""); gsub(/ *\| */,"\t"); print}'`
 
 // probePayload reports identity and capabilities (§6.1). Probe must not
 // touch the sandbox and needs no credentials.

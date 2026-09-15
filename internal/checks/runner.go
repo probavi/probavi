@@ -100,8 +100,18 @@ func mask(s, secret string) string {
 // timestampFormats covers the textual forms engines commonly print for
 // max(timestamp) through their CLI runners. Naive timestamps (no zone) are
 // interpreted as UTC — documented behavior for freshness checks.
+//
+// The offset appears in all three of its ISO 8601 spellings because engines
+// pick between them freely and Go's parser accepts only the one it is given
+// a layout for: extended (+00:00), hours-only (+00), and basic (+0000).
+// The basic form was missing, and cqlsh prints exactly that — so freshness
+// failed as "unparseable output" on every Cassandra drill, against a value
+// the runner had delivered correctly (issue #277). This list is where a
+// rendering of a timestamp belongs; an adapter rewriting its engine's
+// offset to suit the core would be the core's gap moved, not closed.
 var timestampFormats = []string{
 	"2006-01-02 15:04:05.999999999-07:00",
+	"2006-01-02 15:04:05.999999999-0700",
 	"2006-01-02 15:04:05.999999999-07",
 	"2006-01-02 15:04:05.999999999",
 	time.RFC3339Nano,

@@ -194,3 +194,74 @@ func TestImplicitMemberChoiceRefusesAnArtifactInFlight(t *testing.T) {
 		t.Error("the drill fell back to the older dump — that would prove a backup the record does not name")
 	}
 }
+
+// TestMissingRoleDiagnosticNamesTheKindThatCarriesTheRoles covers what a
+// drill tells an operator when the restored cluster is short a role the
+// backup names — the failure of issue #278, and the one class where the
+// artifact is intact and the remedy is a different source kind.
+//
+// Nothing asserted these messages before, which is how the custom-format
+// path came to have none: pg_restore's own line went into the record, and
+// an operator reading "role \"rig\" does not exist" had nothing to act on.
+func TestMissingRoleDiagnosticNamesTheKindThatCarriesTheRoles(t *testing.T) {
+	// The line pg_restore prints for the failure the issue reported: a
+	// TimescaleDB policy's owner is a regrole, written into the catalog
+	// COPY as the role's name, which --no-owner cannot touch.
+	const bgwJob = `pg_restore: error: COPY failed for table "bgw_job": ERROR:  role "rig" does not exist`
+	const inlineGrant = `psql:dump.sql:42: ERROR:  role "rig" does not exist`
+
+	tests := []struct {
+		name    string
+		perr    *protoError
+		wantAll []string
+	}{
+		{
+			"custom-format archive, no globals in the source",
+			mapRestoreFailure(1, []byte(bgwJob), dumpStorage{}, globalsKind(false, false)),
+			// The engine's line survives with its quotes turned to
+			// apostrophes, which is what firstLine does to everything
+			// bound for a protocol message and an evidence record.
+			[]string{"pgdump_with_globals", "regrole column is data", `role 'rig' does not exist`},
+		},
+		{
+			"custom-format archive from a framed kind",
+			mapRestoreFailure(1, []byte(bgwJob), dumpStorage{}, globalsKind(true, false)),
+			[]string{"timescaledb_dump_with_globals"},
+		},
+		{
+			// The globals ran and the role is still missing: the script is
+			// short, and telling the operator to use the kind they are
+			// already using would be advice to do what they did.
+			"the source already carried globals",
+			mapRestoreFailure(1, []byte(bgwJob), dumpStorage{}, globalsKind(true, true)),
+			[]string{"did not create it"},
+		},
+		{
+			"plain-SQL dump",
+			mapRestoreFailure(1, []byte(inlineGrant), dumpStorage{plain: true}, globalsKind(false, false)),
+			[]string{"pgdump_with_globals", "carries ownership and grants inline"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.perr == nil {
+				t.Fatal("a failed restore must produce an error")
+			}
+			if tt.perr.Code != "restore_failed" {
+				t.Errorf("code = %s, want restore_failed — the backup is intact", tt.perr.Code)
+			}
+			for _, want := range tt.wantAll {
+				if !strings.Contains(tt.perr.Message, want) {
+					t.Errorf("message = %q, want it to contain %q", tt.perr.Message, want)
+				}
+			}
+		})
+	}
+
+	t.Run("the source that already carried globals recommends nothing", func(t *testing.T) {
+		perr := mapRestoreFailure(1, []byte(bgwJob), dumpStorage{}, globalsKind(false, true))
+		if strings.Contains(perr.Message, "with_globals") {
+			t.Errorf("message = %q, want no kind recommended when the drill already uses one", perr.Message)
+		}
+	})
+}
