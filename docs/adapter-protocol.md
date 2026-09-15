@@ -325,7 +325,15 @@ Request payload:
   core sends it only to adapters whose `probe` declared `pitr: true` for the
   chosen source kind.
 - `sandbox.scratch_dir` is a writable directory inside the sandbox
-  guaranteed by the provider.
+  guaranteed by the provider. It is the **only** writable path an adapter
+  may rely on: every working path it needs — data directories, logs, staged
+  artifacts, sockets — is composed from it. A path the adapter roots at `/`
+  works under a provider whose commands run as root on a disposable
+  filesystem and fails under one that does not; the bare-host provider runs
+  every payload as the drill user in a workspace it owns
+  (`docs/sandbox-bare-host.md` §4 states the same rule from the other side).
+  Paths the *engine* owns — a package's configured data directory, a tool's
+  install path — are not this: they belong to the image, not to the adapter.
 
 The adapter then, via sandbox verbs: waits for engine readiness, transfers
 the source (`put_file`), restores, and verifies the engine still serves.

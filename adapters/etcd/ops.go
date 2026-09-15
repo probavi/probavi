@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "etcd"
-	adapterVersion = "0.3.0"
+	adapterVersion = "0.4.0"
 
 	// clientEndpoint is where the restored server serves inside the
 	// sandbox. No TLS and no auth: a Probavi sandbox is zero-ingress
@@ -21,18 +21,46 @@ const (
 	clientEndpoint = "http://127.0.0.1:2379"
 	defaultPort    = 2379
 
-	// dataDir is where the snapshot is restored. It is adapter-composed
-	// under the sandbox's own filesystem, never operator input, and it
-	// must not exist before `etcdutl snapshot restore` creates it.
-	dataDir = "/probavi-etcd/data"
-	// serverLog is where the backgrounded server writes; the readiness
-	// timeout path reads it so a start failure names the engine's own
-	// reason instead of "never became ready".
-	serverLog = "/probavi-etcd/etcd.log"
-
 	readinessBudget = 2 * time.Minute
 	readinessPoll   = 500 * time.Millisecond
 )
+
+// sandboxPaths is the adapter's own space inside the sandbox, composed
+// from sandbox.scratch_dir — the writable directory the provider
+// guarantees (§6.2) and the only one an adapter may rely on.
+//
+// The data directory and the log were absolute paths under / until issue
+// #287. The docker provider hid it: its commands run as root on a
+// disposable filesystem. The bare-host provider runs every payload as the
+// drill user in a workspace it owns, and `etcdutl snapshot restore
+// --data-dir /probavi-etcd/data` failed there while the snapshot itself —
+// which this adapter did compose from scratch_dir — arrived fine.
+type sandboxPaths struct {
+	// snapshot is where the artifact is staged.
+	snapshot string
+	// data is what `etcdutl snapshot restore` creates; it must not exist
+	// beforehand, which is why it is a subdirectory of the adapter's own.
+	data string
+	// log is where the backgrounded server writes; the readiness timeout
+	// path reads it so a start failure names the engine's own reason
+	// instead of "never became ready".
+	log string
+}
+
+// newSandboxPaths derives the set from the scratch directory the provision
+// request carried. An empty scratch_dir falls back to /tmp, which every
+// sandbox has and every user may write.
+func newSandboxPaths(scratch string) sandboxPaths {
+	if scratch == "" {
+		scratch = "/tmp"
+	}
+	dir := scratch + "/probavi-etcd"
+	return sandboxPaths{
+		snapshot: scratch + "/probavi-snapshot.db",
+		data:     dir + "/data",
+		log:      dir + "/etcd.log",
+	}
+}
 
 // probePayload reports identity and capabilities (§6.1). Probe must not
 // touch the sandbox and needs no credentials.
@@ -100,10 +128,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if perr := rejectBackupTimezone(req.Source.Params); perr != nil {
 		return nil, perr
 	}
-	scratch := req.Sandbox.ScratchDir
-	if scratch == "" {
-		scratch = "/tmp"
-	}
+	paths := newSandboxPaths(req.Sandbox.ScratchDir)
 
 	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path)
 	if perr != nil {
@@ -115,7 +140,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		return nil, perr
 	}
 
-	snapInSandbox := scratch + "/probavi-snapshot.db"
+	snapInSandbox := paths.snapshot
 	put, perr := c.putFile(ctx, putFileArgs{SourcePath: src.path, DestPath: snapInSandbox, Mode: "0600"})
 	if perr != nil {
 		return nil, perr
@@ -126,7 +151,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	}
 
 	restore, stderr, perr := execChecked(ctx, c,
-		"etcdutl", "snapshot", "restore", snapInSandbox, "--data-dir", dataDir)
+		"etcdutl", "snapshot", "restore", snapInSandbox, "--data-dir", paths.data)
 	if perr != nil {
 		return nil, perr
 	}
@@ -135,7 +160,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	}
 	logger.Info("snapshot restored", "seconds", restore.DurationSeconds)
 
-	readySeconds, perr := startEngine(ctx, c)
+	readySeconds, perr := startEngine(ctx, c, paths)
 	if perr != nil {
 		return nil, perr
 	}
@@ -172,7 +197,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 			"transfer_seconds":     put.DurationSeconds,
 			"restore_seconds":      restore.DurationSeconds,
 		},
-		"state": map[string]any{"data_dir": dataDir, "snapshot_path": snapInSandbox},
+		"state": map[string]any{"data_dir": paths.data, "snapshot_path": snapInSandbox},
 	}, nil
 }
 
@@ -268,10 +293,10 @@ func assertKeysServed(ctx context.Context, c *core) (float64, *protoError) {
 // wrapper-image requirement exists exactly for this line — and launch
 // failures surface as the readiness wait timing out, at which point the
 // server's own log is read before blaming the engine.
-func startEngine(ctx context.Context, c *core) (float64, *protoError) {
+func startEngine(ctx context.Context, c *core, paths sandboxPaths) (float64, *protoError) {
 	script := fmt.Sprintf(
 		`etcd --data-dir=%s --listen-client-urls=%s --advertise-client-urls=%s >%s 2>&1 </dev/null &`,
-		dataDir, clientEndpoint, clientEndpoint, serverLog)
+		paths.data, clientEndpoint, clientEndpoint, paths.log)
 	start, stderr, perr := execChecked(ctx, c, "sh", "-c", script)
 	if perr != nil {
 		return 0, perr
@@ -281,7 +306,7 @@ func startEngine(ctx context.Context, c *core) (float64, *protoError) {
 	}
 	readySeconds, perr := awaitEngine(ctx, c)
 	if perr != nil {
-		return 0, describeStartFailure(ctx, c, perr)
+		return 0, describeStartFailure(ctx, c, perr, paths.log)
 	}
 	return start.DurationSeconds + readySeconds, nil
 }
@@ -316,7 +341,7 @@ func awaitEngine(ctx context.Context, c *core) (float64, *protoError) {
 // describeStartFailure enriches a readiness timeout with the tail of the
 // server's log: a data directory from an incompatible version, for
 // instance, makes etcd exit immediately with a precise message.
-func describeStartFailure(ctx context.Context, c *core, perr *protoError) *protoError {
+func describeStartFailure(ctx context.Context, c *core, perr *protoError, serverLog string) *protoError {
 	if perr.Code != "engine_not_ready" {
 		return perr
 	}

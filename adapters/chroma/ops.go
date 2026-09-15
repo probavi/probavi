@@ -11,24 +11,7 @@ import (
 
 const (
 	adapterName    = "chroma"
-	adapterVersion = "0.1.0"
-
-	// dataDir is where the restored persistence directory lands. The
-	// engine is pointed at it and never at the staging copy, so a failed
-	// extraction cannot be served as a database.
-	dataDir = "/probavi-chroma/data"
-	// rootDir holds everything this adapter puts in the sandbox.
-	rootDir = "/probavi-chroma"
-	// stagingDir is where a transferred persistence directory lands. It is
-	// created by the transfer, never before it.
-	stagingDir = "/probavi-chroma/staging"
-	// archivePath is where a transferred archive lands.
-	archivePath = "/probavi-chroma/backup.tar"
-	// engineLog is where the detached server's own words go.
-	engineLog = "/tmp/probavi-chroma.log"
-	// unpackDir is where an archive is extracted before the persistence
-	// directory inside it is located.
-	unpackDir = "/probavi-chroma/unpack"
+	adapterVersion = "0.2.0"
 
 	// readinessBudget bounds waiting for the engine to answer. Chroma
 	// rebuilds any HNSW segment the write queue still covers at startup,
@@ -36,6 +19,52 @@ const (
 	readinessBudget = 4 * time.Minute
 	readinessPoll   = 500 * time.Millisecond
 )
+
+// sandboxPaths is everything this adapter puts inside the sandbox,
+// composed from sandbox.scratch_dir — the writable directory the provider
+// guarantees (§6.2) and the only one an adapter may rely on.
+//
+// These were absolute paths under / until issue #287, and the docker
+// provider hid it: its commands run as root on a disposable filesystem, so
+// a directory at the root costs nothing. On the bare-host provider every
+// payload runs as the drill user in a workspace it owns, and / is not
+// writable. The log moves with them for a second reason: /tmp is writable
+// there but shared, so two drills on one host wrote the same file.
+type sandboxPaths struct {
+	// root holds everything below, and is what the prepare step clears.
+	root string
+	// data is the restored persistence directory. The engine is pointed at
+	// it and never at the staging copy, so a failed extraction cannot be
+	// served as a database.
+	data string
+	// staging is where a transferred persistence directory lands. It is
+	// created by the transfer, never before it.
+	staging string
+	// archive is where a transferred archive lands, and unpack is where it
+	// is extracted before the persistence directory inside it is located.
+	archive string
+	unpack  string
+	// log is where the detached server's own words go.
+	log string
+}
+
+// newSandboxPaths derives the set from the scratch directory the provision
+// request carried. An empty scratch_dir falls back to /tmp, which every
+// sandbox has and every user may write.
+func newSandboxPaths(scratch string) sandboxPaths {
+	if scratch == "" {
+		scratch = "/tmp"
+	}
+	root := scratch + "/probavi-chroma"
+	return sandboxPaths{
+		root:    root,
+		data:    root + "/data",
+		staging: root + "/staging",
+		archive: root + "/backup.tar",
+		unpack:  root + "/unpack",
+		log:     root + "/chroma.log",
+	}
+}
 
 // probePayload reports identity and capabilities (§6.1).
 func probePayload() any {
@@ -107,25 +136,26 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	logger.Info("source resolved", "kind", src.kind, "path", src.path,
 		"size_bytes", src.sizeBytes, "gzip", src.gzip)
 
-	if perr := prepareSandbox(ctx, c); perr != nil {
+	paths := newSandboxPaths(req.Sandbox.ScratchDir)
+	if perr := prepareSandbox(ctx, c, paths); perr != nil {
 		return nil, perr
 	}
 
 	transferStart := time.Now()
 	if _, perr := c.putFile(ctx, putFileArgs{
-		SourcePath: src.path, DestPath: stagingPath(src), Mode: "0700",
+		SourcePath: src.path, DestPath: stagingPath(src, paths), Mode: "0700",
 	}); perr != nil {
 		return nil, perr
 	}
 	transferSeconds := time.Since(transferStart).Seconds()
 
 	restoreStart := time.Now()
-	if perr := placeData(ctx, c, src); perr != nil {
+	if perr := placeData(ctx, c, src, paths); perr != nil {
 		return nil, perr
 	}
 	restoreSeconds := time.Since(restoreStart).Seconds()
 
-	readySeconds, perr := startEngine(ctx, c)
+	readySeconds, perr := startEngine(ctx, c, paths)
 	if perr != nil {
 		return nil, perr
 	}
@@ -158,7 +188,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 			"transfer_seconds":     transferSeconds,
 			"restore_seconds":      restoreSeconds,
 		},
-		"state": map[string]any{"data_dir": dataDir, "collections": collections},
+		"state": map[string]any{"data_dir": paths.data, "collections": collections},
 	}, nil
 }
 
@@ -188,16 +218,17 @@ func opHealthcheck(ctx context.Context, c *core, payload json.RawMessage) (any, 
 
 // stagingPath is where put_file drops the artifact: the directory itself
 // for a persistence directory, a file for an archive.
-func stagingPath(src *source) string {
+func stagingPath(src *source, paths sandboxPaths) string {
 	if src.kind == kindDataTar {
-		return archivePath
+		return paths.archive
 	}
-	return stagingDir
+	return paths.staging
 }
 
 // prepareSandbox makes the directory the transfer copies into.
-func prepareSandbox(ctx context.Context, c *core) *protoError {
-	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", prepareScript}, TimeoutSeconds: 60})
+func prepareSandbox(ctx context.Context, c *core, paths sandboxPaths) *protoError {
+	val, _, stderr, perr := c.exec(ctx, execArgs{
+		Argv: []string{"bash", "-c", prepareScript, "bash", paths.root}, TimeoutSeconds: 60})
 	if perr != nil {
 		return perr
 	}
@@ -212,12 +243,13 @@ func prepareSandbox(ctx context.Context, c *core) *protoError {
 //
 // The engine is never pointed at the staging copy: an extraction that
 // failed half way would otherwise be served as a database.
-func placeData(ctx context.Context, c *core, src *source) *protoError {
-	script := placeDirScript
+func placeData(ctx context.Context, c *core, src *source, paths sandboxPaths) *protoError {
+	script, args := placeDirScript, []string{"bash", paths.data, paths.staging}
 	if src.kind == kindDataTar {
-		script = placeTarScript(src.gzip)
+		script, args = placeTarScript(src.gzip), []string{"bash", paths.data, paths.unpack, paths.archive}
 	}
-	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", script}, TimeoutSeconds: 900})
+	val, _, stderr, perr := c.exec(ctx, execArgs{
+		Argv: append([]string{"bash", "-c", script}, args...), TimeoutSeconds: 900})
 	if perr != nil {
 		return perr
 	}
@@ -252,9 +284,10 @@ func refuseUnknownParams(params map[string]string) *protoError {
 
 // startEngine starts the server on the restored directory and waits until
 // it answers, or says what the engine said while failing to.
-func startEngine(ctx context.Context, c *core) (float64, *protoError) {
+func startEngine(ctx context.Context, c *core, paths sandboxPaths) (float64, *protoError) {
 	start := time.Now()
-	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", startScript}})
+	val, _, stderr, perr := c.exec(ctx, execArgs{
+		Argv: []string{"bash", "-c", startScript, "bash", paths.data, paths.log}})
 	if perr != nil {
 		return 0, perr
 	}
@@ -272,7 +305,7 @@ func startEngine(ctx context.Context, c *core) (float64, *protoError) {
 		if time.Since(start) > readinessBudget {
 			return 0, protoErr("engine_not_ready", false,
 				"Chroma did not answer within %s of starting on the restored directory%s",
-				readinessBudget, startupDiagnosis(ctx, c))
+				readinessBudget, startupDiagnosis(ctx, c, paths.log))
 		}
 		select {
 		case <-ctx.Done():
@@ -330,9 +363,9 @@ func verifyRestore(ctx context.Context, c *core) (int, *protoError) {
 
 // startupDiagnosis returns what the engine said while failing to start, as
 // a parenthesised suffix, or nothing when it said nothing useful.
-func startupDiagnosis(ctx context.Context, c *core) string {
+func startupDiagnosis(ctx context.Context, c *core, engineLog string) string {
 	_, stdout, _, perr := c.exec(ctx, execArgs{
-		Argv: []string{"bash", "-c", startupErrorScript}, TimeoutSeconds: 15,
+		Argv: []string{"bash", "-c", startupErrorScript, "bash", engineLog}, TimeoutSeconds: 15,
 	})
 	if perr != nil {
 		return ""

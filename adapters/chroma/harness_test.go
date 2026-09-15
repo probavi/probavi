@@ -21,6 +21,10 @@ type verbCall struct {
 // driveOp runs one full operation through run() with an in-process core
 // simulator. handler returns the verb's value (or an error) for each
 // sandbox call.
+// testScratch is the scratch_dir the harness's provision payload carries.
+// Every path the adapter composes has to land under it.
+const testScratch = "/scratch"
+
 func driveOp(t *testing.T, op, payload string, handler func(call verbCall) (any, *protoError)) (finalLine []byte, calls []verbCall, exit int) {
 	t.Helper()
 	stdinR, stdinW := io.Pipe()
@@ -112,7 +116,7 @@ func provisionPayload(t *testing.T, kind, path string) string {
 	t.Helper()
 	req := map[string]any{
 		"source":  map[string]any{"kind": kind, "path": path},
-		"sandbox": map[string]any{"scratch_dir": "/scratch"},
+		"sandbox": map[string]any{"scratch_dir": testScratch},
 	}
 	b, err := json.Marshal(req)
 	if err != nil {

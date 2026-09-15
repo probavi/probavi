@@ -147,7 +147,7 @@ func provisionPayload(t *testing.T, kind, path string, params map[string]string)
 	t.Helper()
 	req := map[string]any{
 		"source":  map[string]any{"kind": kind, "path": path, "params": params},
-		"sandbox": map[string]any{"scratch_dir": "/scratch"},
+		"sandbox": map[string]any{"scratch_dir": testScratch},
 	}
 	b, err := json.Marshal(req)
 	if err != nil {
@@ -203,6 +203,10 @@ func provisionHandlerCensus(t *testing.T, sequence *[]string, census string) fun
 	}
 }
 
+// testScratch is the scratch_dir the harness's provision payload carries.
+// Every path the adapter composes has to land under it.
+const testScratch = "/scratch"
+
 // handlePut asserts the transfer destination — the RDB's fixed path, or
 // a member of the adapter's append-only directory — and answers it.
 func handlePut(t *testing.T, call verbCall) any {
@@ -211,8 +215,14 @@ func handlePut(t *testing.T, call verbCall) any {
 	if err := json.Unmarshal(call.Args, &args); err != nil {
 		t.Fatalf("put_file args: %v", err)
 	}
-	if args.DestPath != rdbInSandbox && !strings.HasPrefix(args.DestPath, aofDirInSandbox+"/") {
+	paths := newSandboxPaths(testScratch)
+	if args.DestPath != paths.rdb && !strings.HasPrefix(args.DestPath, paths.aofDir+"/") {
 		t.Errorf("put_file dest = %q", args.DestPath)
+	}
+	// Whatever the adapter composes, it composes it inside the directory
+	// the provider guaranteed: / is not writable on a bare host (#287).
+	if !strings.HasPrefix(args.DestPath, testScratch+"/") {
+		t.Errorf("put_file dest = %q, want it under the scratch directory %q", args.DestPath, testScratch)
 	}
 	return putFileValue{BytesCopied: 20, DurationSeconds: 0.4}
 }
@@ -441,7 +451,7 @@ func assertAOFProvisionPayload(t *testing.T, f finalResponse) {
 	if diff := got.Timings["transfer_seconds"] - 1.2; diff < -1e-9 || diff > 1e-9 {
 		t.Errorf("timings = %+v, want the three members' measured transfers summed", got.Timings)
 	}
-	if got.State["aof_dir"] != aofDirInSandbox {
+	if got.State["aof_dir"] != newSandboxPaths(testScratch).aofDir {
 		t.Errorf("state = %+v, want the staged append-only directory", got.State)
 	}
 }

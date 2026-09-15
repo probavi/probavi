@@ -13,6 +13,41 @@ always called out explicitly.
 
 ### Fixed
 
+- **Four adapters compose their working paths from `sandbox.scratch_dir`**
+  (`adapters/redis` 0.5.0, `adapters/valkey` 0.4.0, `adapters/etcd` 0.4.0,
+  `adapters/chroma` 0.2.0, issue #287). They rooted their data directories
+  and logs at `/` instead — `/probavi-redis/data`, `/probavi-etcd/data`. The
+  docker provider hid it completely: its commands run as root on a
+  disposable filesystem, so a directory at the root costs nothing. The
+  bare-host provider runs every payload as the drill user in a workspace it
+  owns, and the drills died before the restore — redis with `mkdir: cannot
+  create directory '/probavi-redis': Permission denied`, etcd with
+  `etcdutl snapshot restore --data-dir /probavi-etcd/data`.
+  `docs/sandbox-bare-host.md` §4 already stated the rule from the other
+  side, so these were outside the spec and the provider was what let it
+  pass. Chroma's engine log moves too, for a second reason: it sat in `/tmp`,
+  which a bare host does allow but shares, so two drills on one host wrote
+  the same file.
+- **A gate refuses an adapter that roots a path at `/`** (same change). The
+  rule is not a list: a `/probavi` literal is allowed only where it is
+  appended to something, because that something is the scratch directory the
+  provider named. A literal standing alone is a path the adapter chose for
+  itself. Engine-owned paths — a package's configured data directory, a
+  tool's install path — are untouched by it, having nothing to do with the
+  project's own namespace. Six adapters already composed correctly and the
+  gate passes them unchanged; the report that prompted this named ten, but
+  the grep behind that number matched the appended half of exactly those six.
+
+### Documentation
+
+- **`docs/adapter-protocol.md` §6.2 states what `scratch_dir` is for**: the
+  only writable path an adapter may rely on, and the one every working path
+  is composed from. The requirement is not new — the bare-host spec carried
+  it from the other side — but nothing said it where an adapter author
+  reads.
+
+### Fixed
+
 - **`AGENTS.md` names the linter version CI installs.** It said
   `golangci-lint run` and left the version to whatever the reader happened
   to have, while the merge gate installs a pinned one — so the local run and
