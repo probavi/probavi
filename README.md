@@ -301,6 +301,8 @@ The sandbox is where the restored copy of your production data briefly lives, so
 
   The pod mounts no service-account token, declares no ports, and the Job carries `activeDeadlineSeconds` + `ttlSecondsAfterFinished`, so the cluster kills and garbage-collects the sandbox even if the drill host dies and never comes back. One residual difference to understand: Kubernetes pods always join the cluster network — pod-level isolation equivalent to Docker's `--network none` can only come from your cluster's NetworkPolicy. Every sandbox pod carries the label `com.probavi.sandbox=1`; give it a deny-all ingress/egress policy.
 
+  The backup reaches the pod over `kubectl exec`, whose stream can be torn down at local EOF before the pod has drained what is still in flight — a copy that ends at a buffer boundary and still exits zero. So the pod counts what landed and Probavi compares it with the file it sent, retrying a short copy and then refusing the transfer as a sandbox error: a truncated artifact is never handed to an adapter to be judged as a corrupt backup. This needs `wc` in the sandbox image, alongside the `sh` and `chmod` the transfer already uses; an image that cannot answer with a count fails the drill rather than being taken on trust.
+
 ### Remote Docker over SSH
 
 The docker provider works unchanged against a daemon on another machine — point it there with the docker CLI's native SSH transport:

@@ -34,6 +34,46 @@ always called out explicitly.
   gains `keep(columns:["_value"])` and says why: a bare `count()` still
   carries `_start` and `_stop`, and `expect` is written for what the query
   actually returns.
+- **The pgbackrest kind honours `options.user` and `options.database`**
+  (`adapters/postgres` 0.14.0, issue #273). The README documented both
+  options without restricting them to the logical kinds, and the physical
+  path read neither: it connected as `postgres` to `postgres`, always. Two
+  consequences, both measured. A cluster bootstrapped with a different
+  `POSTGRES_USER` has no `postgres` role at all, so the restore succeeded,
+  recovery finished in under a second, and the drill then polled a role that
+  was never in the backup until the readiness budget expired — recording
+  `engine_not_ready`, "recovery did not finish within 2m0s", a message that
+  blamed recovery for a name the drill config had chosen. And because
+  PostgreSQL cannot query across databases, the checks could only ever read
+  the `postgres` database, whatever the config said — a physical restore
+  brings back every database, and a drill could validate none of the others.
+  Both options now apply to every kind, and the README says which role and
+  database a pgbackrest drill needs: ones the backup holds, since the
+  adapter creates neither.
+- **A refused connection ends the wait instead of timing out** (same
+  change). `pg_isready` answers 0 for a role that does not exist, so the
+  server looked ready and the refusal surfaced only in `psql`. The wait now
+  stops on psql's exit code 2 — the one signal here that carries no
+  language, the server's own text being translated by the restored
+  cluster's `lc_messages` — and reports `invalid_request` naming the role,
+  the database and the engine's own words, because no amount of waiting
+  creates a role the backup does not contain.
+- **The k8s provider no longer reports a truncated transfer as a success**
+  (issue #272). `put_file` streams the backup as the stdin of `kubectl
+  exec -i`, and that stream can be torn down when local stdin reaches EOF,
+  before the pod's `cat` has drained what is in flight: the copy ends at a
+  buffer boundary and still exits zero. `BytesCopied` was the host file's
+  own `stat`, so nothing noticed — the adapter then judged a truncated
+  artifact and the drill recorded `source_corrupt` against a backup that
+  was intact, with a verdict that changed from run to run. The pod now
+  counts what landed, the count is compared with what was sent, a short
+  copy is retried and then refused as a sandbox error, and `BytesCopied`
+  reports the verified number. The transfer needs `wc` in the sandbox image
+  alongside the `sh` and `chmod` it already used; an image that cannot
+  answer with a count fails loudly instead of being taken on trust. The
+  integration suite's fixture grew from 13 bytes — which fitted in a single
+  frame and could never have caught this — to 512 KiB transferred three
+  times, each verified by size and digest inside the pod.
 
 ## [0.29.0] - 2026-09-13
 
