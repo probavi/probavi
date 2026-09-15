@@ -37,6 +37,22 @@ always called out explicitly.
   cluster's `lc_messages` — and reports `invalid_request` naming the role,
   the database and the engine's own words, because no amount of waiting
   creates a role the backup does not contain.
+- **The k8s provider no longer reports a truncated transfer as a success**
+  (issue #272). `put_file` streams the backup as the stdin of `kubectl
+  exec -i`, and that stream can be torn down when local stdin reaches EOF,
+  before the pod's `cat` has drained what is in flight: the copy ends at a
+  buffer boundary and still exits zero. `BytesCopied` was the host file's
+  own `stat`, so nothing noticed — the adapter then judged a truncated
+  artifact and the drill recorded `source_corrupt` against a backup that
+  was intact, with a verdict that changed from run to run. The pod now
+  counts what landed, the count is compared with what was sent, a short
+  copy is retried and then refused as a sandbox error, and `BytesCopied`
+  reports the verified number. The transfer needs `wc` in the sandbox image
+  alongside the `sh` and `chmod` it already used; an image that cannot
+  answer with a count fails loudly instead of being taken on trust. The
+  integration suite's fixture grew from 13 bytes — which fitted in a single
+  frame and could never have caught this — to 512 KiB transferred three
+  times, each verified by size and digest inside the pod.
 
 ## [0.29.0] - 2026-09-13
 
