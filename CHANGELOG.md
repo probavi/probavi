@@ -11,6 +11,38 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **TDengine's `table_exists` and `row_count` work** (`adapters/tdengine`
+  0.2.0, issue #276). The core composes its generating built-ins with
+  SQL-standard quoted identifiers, and TDengine refuses them: `SELECT
+  count(*) FROM "rig"."events"` answers error 9728, `syntax error`. The
+  README claimed all three built-ins applied and the adapter did nothing to
+  make them, so every built-in check failed on every drill of this engine.
+  The runner now translates the core's generated statement into the engine's
+  backtick form — the dialect absorbed in the declaration, as protocol §6.1
+  intends, and as the mysql and mariadb adapters do with a session
+  `sql_mode` that TDengine has no equivalent of.
+  The translation is guarded by the whole statement rather than by position,
+  because TDengine also reads `"a"` as a string literal (measured): a check
+  the operator wrote could carry a double-quoted string that a positional
+  rewrite would turn into an identifier — a different query, answering a
+  different number, into a signed record. A statement that is not one of the
+  core's own reaches the engine byte for byte as written.
+- **`freshness` is documented as not applying to TDengine** (same change).
+  It reads `SELECT max(<column>) FROM <table>`, and the engine's `max()`
+  refuses a TIMESTAMP argument — error 10242, `Invalid parameter data type :
+  max` — with bare, quoted and backtick-quoted names alike, so no wording of
+  the built-in's query works. The README says so and shows the check to
+  write instead: `last()` does take a timestamp, and the comparison fits an
+  `expect`.
+- **The integration suite runs the built-ins** (same change). It exercised
+  none, which is why a claim that was false in every release went unnoticed.
+  The end-to-end drill now runs `table_exists` and two `row_count` checks
+  through `internal/checks` — one bound the data meets and one it does not,
+  so a refused statement cannot be mistaken for a comparison — and asserts
+  that a statement with a double-quoted string literal is not rewritten.
+
 ## [0.29.0] - 2026-09-13
 
 ### Added

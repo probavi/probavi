@@ -17,6 +17,8 @@ import (
 
 	"github.com/probavi/probavi/internal/adapter"
 	"github.com/probavi/probavi/internal/capabilities"
+	"github.com/probavi/probavi/internal/checks"
+	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/sandbox"
 	"github.com/probavi/probavi/internal/sandbox/docker"
 )
@@ -97,6 +99,54 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 			}
 		})
 	}
+
+	// The built-ins the README claims, run the way the core runs them —
+	// through internal/checks, which composes them with SQL-standard
+	// quoted identifiers. TDengine refuses those outright, so until issue
+	// #276 every one of them failed on every drill; the suite exercised no
+	// built-in at all, so nothing said so.
+	t.Run("the generating built-ins work", func(t *testing.T) {
+		probe, err := runner.Probe(ctx)
+		if err != nil {
+			t.Fatalf("probe: %v", err)
+		}
+		deps := checks.Deps{
+			Exec:   sbx,
+			Runner: checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
+			Target: checks.Target{User: res.Connection.User, Database: res.Connection.Database},
+		}
+		min1, tooMany := int64(1), int64(documents*2)
+		results, err := checks.Run(ctx, []config.Check{
+			{Builtin: config.CheckTableExists, Table: database + ".meters"},
+			{Builtin: config.CheckRowCount, Table: database + ".meters", Min: &min1},
+			{Builtin: config.CheckRowCount, Table: database + ".meters", Min: &tooMany},
+		}, deps)
+		if err != nil {
+			t.Fatalf("checks.Run: %v", err)
+		}
+		for i, want := range []bool{true, true, false} {
+			if results[i].OK != want {
+				t.Errorf("check %d (%s) = ok:%v detail:%q, want ok:%v",
+					i, results[i].Name, results[i].OK, results[i].Detail, want)
+			}
+		}
+		// The last one must fail on the bound, not on the dialect: a
+		// refused statement fails every check the same way, which is how
+		// this stayed unnoticed.
+		if !strings.Contains(results[2].Detail, "rows") {
+			t.Errorf("row_count detail = %q, want the count read and compared against the bound", results[2].Detail)
+		}
+	})
+
+	// A statement the operator wrote reaches the engine as written. The
+	// translation above is guarded by the whole statement precisely so it
+	// cannot reach into one of these: TDengine reads "a" as a string
+	// literal, and rewriting that would be a different query.
+	t.Run("a check of the operator's own is not rewritten", func(t *testing.T) {
+		if got := runCheck(t, ctx, sbx, `SELECT count(*) FROM drill.meters WHERE location = "lab"`); got != strconv.Itoa(documents) {
+			t.Errorf("double-quoted string literal = %q, want %d — the runner must not have touched it", got, documents)
+		}
+	})
 
 	t.Run("healthcheck agrees", func(t *testing.T) {
 		health, err := runner.Healthcheck(ctx, &res.Connection, res.State, sbx)
