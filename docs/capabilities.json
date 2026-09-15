@@ -998,7 +998,7 @@
       "name": "QuestDB",
       "status": "experimental",
       "since": "0.27.0",
-      "adapter_version": "0.1.0",
+      "adapter_version": "0.1.1",
       "engine": {
         "id": "questdb",
         "name": "QuestDB"

@@ -17,6 +17,8 @@ import (
 
 	"github.com/probavi/probavi/internal/adapter"
 	"github.com/probavi/probavi/internal/capabilities"
+	"github.com/probavi/probavi/internal/checks"
+	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/sandbox"
 	"github.com/probavi/probavi/internal/sandbox/docker"
 )
@@ -76,6 +78,10 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve adapter: %v", err)
 	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
 	sbx := freshSandbox(t, ctx, provider, restoreParams(t))
 	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
 		Source:  adapter.ProvisionSource{Kind: "questdb_checkpoint", Path: backup},
@@ -105,6 +111,48 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 			}
 		})
 	}
+
+	// The built-ins the README claims, run the way the core runs them —
+	// through internal/checks, against the probe-declared runner. Until
+	// issue #275 the runner left QuestDB's carriage return on every quoted
+	// value, so freshness failed with "timestamp column returned
+	// unparseable output" on every drill while row_count passed, numbers
+	// being unquoted. The suite exercised no freshness check, so nothing
+	// said so.
+	t.Run("the generating built-ins work", func(t *testing.T) {
+		newest, err := time.Parse(time.RFC3339Nano, runCheck(t, ctx, sbx, `SELECT max(ts) FROM orders`))
+		if err != nil {
+			t.Fatalf("fixture timestamp: %v", err)
+		}
+		// Bounds drawn around the fixture's own newest row, so this test
+		// does not expire: one budget the data is inside, one it is not.
+		age := time.Since(newest)
+		deps := checks.Deps{
+			Exec:   sbx,
+			Runner: checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
+			Target: checks.Target{User: res.Connection.User, Database: res.Connection.Database},
+		}
+		results, err := checks.Run(ctx, []config.Check{
+			{Builtin: config.CheckTableExists, Table: "orders"},
+			{Builtin: config.CheckRowCount, Table: "orders", Min: &[]int64{int64(documents)}[0]},
+			{Builtin: config.CheckFreshness, Table: "orders", Column: "ts", MaxAge: config.Duration(age + time.Hour)},
+			{Builtin: config.CheckFreshness, Table: "orders", Column: "ts", MaxAge: config.Duration(age / 2)},
+		}, deps)
+		if err != nil {
+			t.Fatalf("checks.Run: %v", err)
+		}
+		for i, want := range []bool{true, true, true, false} {
+			if results[i].OK != want {
+				t.Errorf("check %d (%s) = ok:%v detail:%q, want ok:%v",
+					i, results[i].Name, results[i].OK, results[i].Detail, want)
+			}
+		}
+		// The last one must fail on the comparison, not on the value: a
+		// runner that hands the core markup fails both the same way.
+		if strings.Contains(results[3].Detail, "unparseable") {
+			t.Errorf("freshness detail = %q, want the instant read and compared", results[3].Detail)
+		}
+	})
 
 	t.Run("healthcheck agrees", func(t *testing.T) {
 		health, err := runner.Healthcheck(ctx, &res.Connection, res.State, sbx)

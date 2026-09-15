@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "questdb"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.1.1"
 	// defaultPort is where QuestDB serves HTTP inside the sandbox. Nothing
 	// is published: checks run in-sandbox through the runner below.
 	defaultPort = 9000

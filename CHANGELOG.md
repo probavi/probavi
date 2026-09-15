@@ -13,6 +13,28 @@ always called out explicitly.
 
 ### Fixed
 
+- **QuestDB freshness checks — and any check expecting text — can pass**
+  (`adapters/questdb` 0.1.1, issue #275). The engine's CSV endpoint answers
+  RFC 4180: CRLF line endings, a value quoted when it contains a comma or a
+  quote, and a quote inside a value doubled. The runner trimmed that as
+  text, and each part of the markup reached a check as if it were data.
+  `sed 's/"$//'` never matched, because the line ends in the carriage
+  return rather than the quote, so a timestamp arrived as
+  `2026-09-14T18:21:08.718148Z"` and every `freshness` check failed as
+  "timestamp column returned unparseable output" — while `row_count` passed,
+  numbers being unquoted, which is why the gap looked like nothing. Two more
+  the same trim caused, both measured on the baseline image and neither
+  reported: a value containing a quote arrived with the doubling intact,
+  which is a different value; and a second column arrived separated by a
+  comma, which a value containing a comma is indistinguishable from and
+  which §6.1 asks to be a tab. The runner now reads the answer as CSV.
+- **The integration suite runs the built-ins it documents** (same change).
+  It exercised no `freshness` check, so the README's claim that all three
+  generating built-ins work was never tested. The end-to-end drill now runs
+  `table_exists`, `row_count` and two `freshness` checks through
+  `internal/checks` — bounds drawn around the fixture's own newest row, one
+  the data is inside and one it is not, so the test proves the instant is
+  read *and* compared, and does not expire.
 - **InfluxDB custom checks can pass** (`adapters/influxdb` 0.4.0, issue
   #274). The README documented `expect: "500"` against a Flux query, and no
   check written that way could ever match: the declared runner was `influx
