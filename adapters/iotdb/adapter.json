@@ -3,7 +3,7 @@
   "id": "iotdb",
   "name": "Apache IoTDB",
   "status": "experimental",
-  "since": null,
+  "since": "0.30.0",
   "engine_name": "Apache IoTDB",
   "conformance_verified": true,
   "docs": "adapters/iotdb/README.md",

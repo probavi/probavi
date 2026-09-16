@@ -11,6 +11,8 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-09-16
+
 ### Added
 
 - **Apache IoTDB** (`adapters/iotdb` 0.1.0), restoring the offline copy of a
@@ -53,6 +55,51 @@ always called out explicitly.
   prints NULL and `null` alike. A 2.0 copy never serves under 1.3 and is
   refused before the engine starts; a 1.3 copy restores identical under
   2.0. Conformance 15/15. Verified against 2.0.11 and 1.3.7.
+
+- **`timescaledb_dump_with_globals`** (`adapters/postgres` 0.15.0, issue
+  #278): the cluster globals loaded first, then the framed TimescaleDB
+  restore — `pgdump_with_globals` for a hypertable database. It is the two
+  behaviours composed and nothing more, which is what made the case for it:
+  every TimescaleDB policy is a row whose `owner` column is a `regrole`,
+  written out as the role's name inside a catalog COPY, so a dump from a
+  database owned by an application role could not be drilled without giving
+  the sandbox that role — and never at all when the jobs were owned by
+  several. With the globals in the source, a stock `timescale/timescaledb`
+  image restores a cluster whose every policy belongs to a role that image
+  never had, and the jobs come back owned by exactly the roles the backup
+  gave them.
+
+### Changed
+
+- **The timescaledb kinds say that every job's owner role must exist in the
+  sandbox** (issue #278). A policy is a row in the restored catalog whose
+  `owner` column is a `regrole`, written out as the role's name — data, not
+  an `ALTER … OWNER TO` statement, so `pg_restore --no-owner` cannot reach
+  it. A dump from a database owned by an application role, which is the
+  ordinary shape, stopped at `COPY failed for table "bgw_job": ERROR: role
+  "app" does not exist` and recorded `restore_failed`: a drill blaming a
+  backup that restores perfectly once the role is there. Nothing said so.
+  The README now names the dependency, shows the sandbox configuration that
+  satisfies it, and states the case it does not cover — jobs owned by
+  several roles, and points at `timescaledb_dump_with_globals` as the way to
+  bring them with the backup. The suite's fixture was seeded by `postgres`, a role every
+  image has, which is why it never met this; a second fixture is owned by an
+  application role, and the drill asserts both that the plain configuration
+  fails naming the role and that the documented one restores the same dump.
+
+- **`docs/adapter-protocol.md` §6.2 states what `scratch_dir` is for**: the
+  only writable path an adapter may rely on, and the one every working path
+  is composed from. The requirement is not new — the bare-host spec carried
+  it from the other side — but nothing said it where an adapter author
+  reads.
+
+- **The bare-host provider's requirements include an adapter that starts its
+  own engine** (issue #285). `docs/sandbox-bare-host.md` §2 said the adapter
+  starts and owns the engine as a description of the provider; it is a
+  requirement on the adapter, and an adapter written against a sandbox whose
+  image boots the engine has nothing to wait for there. Both the spec and
+  the README's remotehost requirements now say so, and say to prove one
+  drill per adapter against a target before scheduling it.
 
 ### Fixed
 
@@ -102,23 +149,6 @@ always called out explicitly.
   and etcd drills that ended in `engine_not_ready` pass, and nothing of
   theirs is left on the target afterwards.
 
-### Added
-
-- **`timescaledb_dump_with_globals`** (`adapters/postgres` 0.15.0, issue
-  #278): the cluster globals loaded first, then the framed TimescaleDB
-  restore — `pgdump_with_globals` for a hypertable database. It is the two
-  behaviours composed and nothing more, which is what made the case for it:
-  every TimescaleDB policy is a row whose `owner` column is a `regrole`,
-  written out as the role's name inside a catalog COPY, so a dump from a
-  database owned by an application role could not be drilled without giving
-  the sandbox that role — and never at all when the jobs were owned by
-  several. With the globals in the source, a stock `timescale/timescaledb`
-  image restores a cluster whose every policy belongs to a role that image
-  never had, and the jobs come back owned by exactly the roles the backup
-  gave them.
-
-### Fixed
-
 - **A restore that dies on a missing role says which source kind carries
   the roles** (same change). The advice existed only on the plain-SQL path;
   a custom-format archive — which is what `pg_dump -Fc` writes, and what the
@@ -129,26 +159,6 @@ always called out explicitly.
   still missing after a globals script ran is a gap in that script, and
   recommending the kind already in use would be advice to do what was done.
   Nothing asserted these messages before, which is how the gap opened.
-
-### Documentation
-
-- **The timescaledb kinds say that every job's owner role must exist in the
-  sandbox** (issue #278). A policy is a row in the restored catalog whose
-  `owner` column is a `regrole`, written out as the role's name — data, not
-  an `ALTER … OWNER TO` statement, so `pg_restore --no-owner` cannot reach
-  it. A dump from a database owned by an application role, which is the
-  ordinary shape, stopped at `COPY failed for table "bgw_job": ERROR: role
-  "app" does not exist` and recorded `restore_failed`: a drill blaming a
-  backup that restores perfectly once the role is there. Nothing said so.
-  The README now names the dependency, shows the sandbox configuration that
-  satisfies it, and states the case it does not cover — jobs owned by
-  several roles, and points at `timescaledb_dump_with_globals` as the way to
-  bring them with the backup. The suite's fixture was seeded by `postgres`, a role every
-  image has, which is why it never met this; a second fixture is owned by an
-  application role, and the drill asserts both that the plain configuration
-  fails naming the role and that the documented one restores the same dump.
-
-### Fixed
 
 - **Cassandra's `table_exists` works** (`adapters/cassandra` 0.4.0, issue
   #277). The core probes existence with `SELECT count(*) FROM <table> WHERE
@@ -181,8 +191,6 @@ always called out explicitly.
   `internal/checks`, and the fixture gains the timestamp column that makes
   the last of those possible.
 
-### Fixed
-
 - **Four adapters compose their working paths from `sandbox.scratch_dir`**
   (`adapters/redis` 0.5.0, `adapters/valkey` 0.4.0, `adapters/etcd` 0.4.0,
   `adapters/chroma` 0.2.0, issue #287). They rooted their data directories
@@ -208,16 +216,6 @@ always called out explicitly.
   gate passes them unchanged; the report that prompted this named ten, but
   the grep behind that number matched the appended half of exactly those six.
 
-### Documentation
-
-- **`docs/adapter-protocol.md` §6.2 states what `scratch_dir` is for**: the
-  only writable path an adapter may rely on, and the one every working path
-  is composed from. The requirement is not new — the bare-host spec carried
-  it from the other side — but nothing said it where an adapter author
-  reads.
-
-### Fixed
-
 - **A readiness timeout says whether there was an engine to wait for**
   (`adapters/postgres` 0.15.1, issue #285). The logical source kinds restore
   into a running engine and start none — under docker the image's entrypoint
@@ -230,18 +228,6 @@ always called out explicitly.
   "nothing answered", 1 is a server answering that it is still starting — and
   the message names which happened, and what a sandbox for these kinds has
   to provide.
-
-### Documentation
-
-- **The bare-host provider's requirements include an adapter that starts its
-  own engine** (issue #285). `docs/sandbox-bare-host.md` §2 said the adapter
-  starts and owns the engine as a description of the provider; it is a
-  requirement on the adapter, and an adapter written against a sandbox whose
-  image boots the engine has nothing to wait for there. Both the spec and
-  the README's remotehost requirements now say so, and say to prove one
-  drill per adapter against a target before scheduling it.
-
-### Fixed
 
 - **`AGENTS.md` names the linter version CI installs.** It said
   `golangci-lint run` and left the version to whatever the reader happened
@@ -4806,7 +4792,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.29.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.30.0...HEAD
+[0.30.0]: https://github.com/probavi/probavi/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/probavi/probavi/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/probavi/probavi/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/probavi/probavi/compare/v0.26.0...v0.27.0
