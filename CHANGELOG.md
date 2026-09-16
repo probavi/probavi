@@ -11,6 +11,49 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **Apache IoTDB** (`adapters/iotdb` 0.1.0), restoring the offline copy of a
+  standalone node — its data directory copied with the node stopped, or the
+  target of the vendor's `tools/ops/backup.sh` — or a tar archive of one.
+  The kinds were chosen by a measurement day run before the adapter was
+  written: of IoTDB's five backup forms only this one and the tree
+  dialect's TsFile export restored identical, and only this one carries
+  TTLs, table attributes and schema settings. The SQL and CSV exports lose
+  data with exit code 0.
+
+  **A count proves nothing on this engine.** `count(*)` and `sum` are
+  answered from chunk statistics: twelve single-byte changes to a TsFile
+  all loaded as success with both identical to the source, while reading
+  every row refused eight of them and returned other values for four. So
+  the verdict is a full read — `count(cast(… as TEXT))` of every tree
+  database and every table column, which the engine can only answer by
+  decoding every value, compared with the statistics — and a change that
+  still decodes is stated in the README as the residual no engine read can
+  see. Six changes to a data file inside an offline copy, and a truncated
+  one, all failed that read.
+
+  Four measured traps shape the rest. **Credentials:** a copy keeps the
+  node's users and passwords, so `root`/`root` is refused by a copy whose
+  password was changed; the drill names the password with
+  `options.password_env`, and it reaches curl on standard input, never an
+  argument list. **TTL** travels in the copy and hides rows when a query
+  runs, with no switch that suspends it, so a drill is refused where a TTL
+  hides every row of a scope. **Node addresses** are recorded in the copy:
+  a node named by host starts once the name maps to loopback, and one on a
+  routable IP address cannot start and is refused by name. **Memory** is
+  set by the region count — each data region reserves a WAL buffer, which
+  the sandbox's configuration pins to 4 MiB — and 1.3 sizes its heaps from
+  the host, so the adapter writes the size from the sandbox's limit.
+
+  Checks run over the engine's REST service in either dialect:
+  `options.database` selects the table dialect, where the generating
+  built-ins apply as the core composes them. The CLI's bordered output was
+  measured and not used — it splits a value holding `|`, trims spaces, and
+  prints NULL and `null` alike. A 2.0 copy never serves under 1.3 and is
+  refused before the engine starts; a 1.3 copy restores identical under
+  2.0. Conformance 15/15. Verified against 2.0.11 and 1.3.7.
+
 ### Fixed
 
 - **`freshness` works on TDengine** (`adapters/tdengine` 0.3.0, issue #293).

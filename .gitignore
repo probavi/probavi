@@ -46,6 +46,7 @@
 /prometheus
 /cassandra
 /chroma
+/iotdb
 /opensearch
 /influxdb
 /victoriametrics
@@ -66,6 +67,7 @@
 /adapters/*/prometheus
 /adapters/*/cassandra
 /adapters/*/chroma
+/adapters/*/iotdb
 /adapters/*/opensearch
 /adapters/*/influxdb
 /adapters/*/victoriametrics

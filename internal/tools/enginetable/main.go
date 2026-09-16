@@ -259,6 +259,7 @@ var engineBadgeStyles = map[string]badgeStyle{
 	"firebird":        {},
 	"h2":              {logo: "h2database", colour: "09476B"},
 	"influxdb":        {logo: "influxdb", colour: "22ADF6"},
+	"iotdb":           {},
 	"mariadb":         {logo: "mariadb", colour: "003545"},
 	"mongodb":         {logo: "mongodb", colour: "47A248"},
 	"mssql":           {},

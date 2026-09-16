@@ -17,6 +17,7 @@
 <!-- capabilities:engine-badges:start -->
 [![Aerospike](https://img.shields.io/badge/Aerospike-4B5563)](adapters/aerospike/README.md)
 [![Apache Cassandra](https://img.shields.io/badge/Apache%20Cassandra-1287B1?logo=apachecassandra&logoColor=white)](adapters/cassandra/README.md)
+[![Apache IoTDB](https://img.shields.io/badge/Apache%20IoTDB-4B5563)](adapters/iotdb/README.md)
 [![Apache Solr](https://img.shields.io/badge/Apache%20Solr-D9411E?logo=apachesolr&logoColor=white)](adapters/solr/README.md)
 [![Chroma](https://img.shields.io/badge/Chroma-4B5563)](adapters/chroma/README.md)
 [![ClickHouse](https://img.shields.io/badge/ClickHouse-FFCC01?logo=clickhouse&logoColor=333333)](adapters/clickhouse/README.md)
@@ -90,6 +91,7 @@ the exact instant proven.
 | [Firebird](adapters/firebird/README.md) | 5.0.4, 4.0.7 | 0.21.0 | `firebird_gbak`, `firebird_gbak_dir` |
 | [H2](adapters/h2/README.md) | 2.4.240, 2.3.232 | 0.22.0 | `h2_backup`, `h2_backup_dir`, `h2_db`, `h2_db_dir` |
 | [InfluxDB](adapters/influxdb/README.md) | 2.7, 2.8, 2.9 | 0.15.0 | `influx_backup`, `influx_backup_dir`, `influx_backup_tar` |
+| [Apache IoTDB](adapters/iotdb/README.md) | 2.0.11, 1.3.7 | unreleased | `iotdb_data`, `iotdb_data_tar` |
 | [MariaDB](adapters/mariadb/README.md) | 10.11, 11.4, 11.8, 12.3 | 0.7.0 | `mariadb_backup`, `mariadb_dump`, `mariadb_dump_dir` |
 | [MongoDB](adapters/mongodb/README.md) | 7.0, 8.0 | 0.2.0 | `mongodump`, `mongodump_dir`, `mongodump_with_oplog`, `mongodump_with_users` |
 | [SQL Server](adapters/mssql/README.md) | 2019, 2022, 2025 | 0.2.0 | `bak`, `bak_chain`, `bak_dir`, `bak_with_logins` |
@@ -188,7 +190,7 @@ $ tar -xzf "probavi-adapter-postgres_${tag#v}_${os}_${arch}.tar.gz" ./probavi-ad
 $ sudo install -m0755 probavi probavi-adapter-postgres /usr/local/bin/
 ```
 
-Adapters ship for `postgres`, `mysql`, `mariadb`, `mongodb`, `mssql`, `clickhouse`, `etcd`, `redis`, `valkey`, `sqlite`, `duckdb`, `prometheus`, `cassandra`, `opensearch`, `influxdb`, `victoriametrics`, `elasticsearch`, `oracle`, `neo4j`, `solr`, `firebird`, `h2`, `couchdb`, `qdrant`, `weaviate`, `aerospike`, `questdb`, `tdengine`, and `chroma`. Both binaries must sit on the same `PATH`: the core launches the adapter as a child process and finds it by name. Each adapter carries its own version — the one it reports through the protocol and that every evidence record stores as `adapter.version` — which moves independently of the release tag; the compatibility contract between core and adapter is the adapter protocol version, negotiated at handshake. The release notes list both.
+Adapters ship for `postgres`, `mysql`, `mariadb`, `mongodb`, `mssql`, `clickhouse`, `etcd`, `redis`, `valkey`, `sqlite`, `duckdb`, `prometheus`, `cassandra`, `opensearch`, `influxdb`, `victoriametrics`, `elasticsearch`, `oracle`, `neo4j`, `solr`, `firebird`, `h2`, `couchdb`, `qdrant`, `weaviate`, `aerospike`, `questdb`, `tdengine`, `chroma`, and `iotdb`. Both binaries must sit on the same `PATH`: the core launches the adapter as a child process and finds it by name. Each adapter carries its own version — the one it reports through the protocol and that every evidence record stores as `adapter.version` — which moves independently of the release tag; the compatibility contract between core and adapter is the adapter protocol version, negotiated at handshake. The release notes list both.
 
 Verifying an evidence log needs nothing else: `probavi evidence verify` reads a log and a public key, so an auditor installs the core alone.
 
