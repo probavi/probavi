@@ -53,8 +53,23 @@ disabled by the provider).
   **idle pattern** the physical-restore flow already uses: `Create` only
   establishes slice + workspace; the adapter starts and owns the engine
   through `exec` verbs. Because those verbs run inside the slice, the
-  engine cannot escape the sandbox's lifetime: stopping the slice kills
-  the whole process tree, however it was started.
+  engine cannot escape the sandbox's lifetime: killing the slice ends the
+  whole process tree, however it was started.
+- An engine started by one `exec` outlives that `exec`, as it does in a
+  container. Each `exec` is a unit that ends with its command, and a
+  unit's default is to kill everything left in its cgroup when it ends —
+  the server the command just daemonized included — so the unit is
+  started with `KillMode=process`: only the command itself is ended, and
+  what it started stays in the ended unit's cgroup, inside the slice and
+  under its caps, until `Destroy`. Before this, an engine lived exactly as
+  long as the call that started it, and every adapter that starts a server
+  met a readiness timeout on this provider (issue #292). The cost is on
+  `Destroy`: stopping a slice stops the units in it that are still
+  running and does not reach processes an ended unit left behind, so the
+  slice is killed first and stopped second. A process left running keeps
+  the stdio it inherited, and with it the ssh channel the `exec` answers
+  on; an adapter detaches what it starts from stdio, as `docker exec`
+  already requires.
 - That is a requirement on the adapter, not only a description of the
   provider. An adapter written against a sandbox whose image boots the
   engine has nothing to wait for here — the PostgreSQL adapter's logical
@@ -69,9 +84,9 @@ Lifecycle mapping (command shapes, subject to implementation detail):
 | Contract call | On the target (via ssh) |
 |---|---|
 | `Create` | `mkdir -p` workspace + `scratch/`, write `owner` marker; verify `systemd-run` works; arm the deadline backstop (§5). |
-| `Exec` | `systemd-run --slice=<slice> --wait --pipe --collect --same-dir=<workspace> env K=V… -- argv…` — stdin/stdout/stderr stream over the ssh connection; the §4.1 capture caps apply on the drill host as everywhere else. The `--` is mandatory, not cosmetic (§6). |
+| `Exec` | `systemd-run --slice=<slice> --wait --pipe --collect -p User=<drill user> -p WorkingDirectory=<workspace> -p KillMode=process -- argv…` — stdin/stdout/stderr stream over the ssh connection (per-exec environment arrives on stdin, never on the command line); the §4.1 capture caps apply on the drill host as everywhere else. The `--` is mandatory, not cosmetic (§6). |
 | `PutFile` | `ssh <target> sh -c 'cat > "$1" && chmod "$2" "$1"' sh <dest> <mode>` with the local file on stdin — the k8s provider's positional trick; bytes cross only the ssh connection. |
-| `Destroy` | `systemctl stop <slice>` (kills every descendant), then `rm -rf` workspace. Idempotent: a missing slice or workspace is success. |
+| `Destroy` | `systemctl kill --signal=SIGKILL <slice>` (every descendant, including what ended units left behind), `systemctl stop <slice>`, then `rm -rf` workspace. Idempotent: a missing slice or workspace is success. |
 | `SweepOrphans` | List `probavi-sbx-*` slices and workspaces; read `owner` markers; remove those owned by this drill host whose pid is dead. Other hosts' sandboxes are never touched (same host-scoping as docker/k8s). |
 
 ## 3. Target host requirements
@@ -98,23 +113,24 @@ Lifecycle mapping (command shapes, subject to implementation detail):
 | Network isolation | `--network none` / NetworkPolicy | **Unix-socket-first** (decided): engines are restored listening on unix sockets in the workspace; loopback TCP with a per-drill port is the fallback only where an engine's tooling cannot work socket-only. Nothing binds beyond loopback by design; host-level firewalling stays the operator's job. |
 | Ephemeral storage | volumes die with the container | Workspace `rm -rf` on destroy. Bytes are deleted, not shredded: restored production data touches the target's persistent disks. Mitigations the docs will recommend: workspace on tmpfs, or full-disk encryption on the target. |
 | Resource caps | cgroup per container | cgroup per slice — equivalent. |
-| Forced destruction | `rm -f` / Job deadline | Slice stop kills the tree; deadline backstop in §5. |
+| Forced destruction | `rm -f` / Job deadline | Slice kill ends the tree; deadline backstop in §5. |
 | Clean slate between drills | new container | new workspace + empty slice; anything an adapter wrote outside the workspace is NOT reset — adapters already must not do that (protocol §6.4), and the dedicated-host premise bounds the blast radius. |
 
 ## 5. Cleanup guarantees
 
 Three independent layers, mirroring the k8s provider's philosophy:
 
-1. **Normal path:** `Destroy` stops the slice and removes the workspace;
+1. **Normal path:** `Destroy` kills and stops the slice and removes the workspace;
    the core calls it on every drill outcome.
 2. **Crashed drill host:** the next drill (from the same host) sweeps:
-   `owner` marker names a dead pid → slice stopped, workspace removed.
+   `owner` marker names a dead pid → slice killed and stopped, workspace removed.
    Host-scoped exactly like docker/k8s — several drill hosts may share
    one target.
 3. **Drill host never comes back:** the target-side backstop, armed at
    `Create`: a transient timer (`systemd-run --on-active=<deadline>
-   --timer-property=AccuracySec=1m systemctl stop <slice> …`) stops the
-   slice and removes the workspace after the drill's hard deadline — the
+   --timer-property=AccuracySec=1m sh -c 'systemctl kill … <slice>;
+   systemctl stop <slice>; rm -rf …'`) kills and stops the slice and
+   removes the workspace after the drill's hard deadline — the
    bare-host analog of the k8s `activeDeadlineSeconds`. Production data
    does not outlive a vanished drill host.
 

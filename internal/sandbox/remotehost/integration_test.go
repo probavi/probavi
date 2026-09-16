@@ -123,6 +123,11 @@ func TestRemoteHostLifecycle(t *testing.T) {
 		t.Errorf("exit code = %d, want 7 (non-zero exits are results, not errors)", res.ExitCode)
 	}
 
+	// An engine started by one exec is still there for the next (issue
+	// #292). The next exec asking is the adapter's view — a readiness poll —
+	// and the cgroup is the sandbox's: the survivor must be inside the slice.
+	leftover := startLeftover(t, ctx, sbx)
+
 	// PutFile: bytes land under scratch with the default 0600 mode.
 	hostFile := filepath.Join(t.TempDir(), "backup.dump")
 	if err := os.WriteFile(hostFile, []byte("0123456789"), 0o600); err != nil {
@@ -177,9 +182,40 @@ func TestRemoteHostLifecycle(t *testing.T) {
 	if err := exec.Command("systemctl", "is-active", "--quiet", sbx.ID()+"-reaper.timer").Run(); err == nil {
 		t.Error("deadline backstop timer is still armed after destroy")
 	}
+	// Stopping the slice alone leaves such a process running; Destroy
+	// must not.
+	if _, err := os.Stat("/proc/" + leftover); !os.IsNotExist(err) {
+		t.Errorf("process %s an exec left running survived destroy: %v", leftover, err)
+	}
 	if err := sbx.Destroy(ctx); err != nil {
 		t.Errorf("second Destroy must succeed (idempotent), got: %v", err)
 	}
+}
+
+// startLeftover runs an exec that leaves a process behind, the way an
+// adapter starts its engine, and returns that process's pid once a second
+// exec has found it alive inside the sandbox's slice.
+func startLeftover(t *testing.T, ctx context.Context, sbx *Sandbox) string {
+	t.Helper()
+	res, err := sbx.Exec(ctx, sandbox.ExecRequest{
+		Argv: []string{"sh", "-c", `sleep 600 </dev/null >/dev/null 2>&1 & echo $!`},
+	})
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("Exec starting a background process: %+v, %v", res, err)
+	}
+	pid := strings.TrimSpace(string(res.Stdout))
+	res, err = sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"kill", "-0", pid}})
+	if err != nil {
+		t.Fatalf("Exec kill -0: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Errorf("process %s ended with the exec that started it — an engine could not outlive its start", pid)
+	}
+	cgroup, err := os.ReadFile("/proc/" + pid + "/cgroup")
+	if err == nil && !strings.Contains(string(cgroup), "/"+sbx.ID()+".slice/") {
+		t.Errorf("process %s runs in %q — want it inside %s.slice, under the sandbox's caps", pid, cgroup, sbx.ID())
+	}
+	return pid
 }
 
 func currentUser(t *testing.T) string {
