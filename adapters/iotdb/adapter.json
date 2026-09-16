@@ -1,0 +1,28 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The images listed under verified are the official standalone ones, the baseline on every run and the rest in the scheduled version matrix and before a release tag. The sandbox starts idle (command: sleep infinity replaces the image's `entrypoint.sh all`) and the adapter starts both nodes itself, on a copy of the image's configuration under the scratch directory: the REST service turned on, the WAL buffer at 4 MiB, the data directories pointed at the restored copy by absolute path, and the node addresses and ports the copy records. Measured 2026-09-16, before a line of the adapter was written: a 1.3.7 copy restores identical under 2.0.11 and a 2.0.11 copy never serves under 1.3.7, so the verified pair is also the upgrade path. IoTDB publishes no end-of-life dates, so supported_until is null and versions_checked records the reading. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "iotdb",
+  "name": "Apache IoTDB",
+  "status": "experimental",
+  "since": null,
+  "engine_name": "Apache IoTDB",
+  "conformance_verified": true,
+  "docs": "adapters/iotdb/README.md",
+  "versions_checked": "2026-09-16",
+  "verified": [
+    {
+      "engine_version": "2.0.11",
+      "image": "apache/iotdb:2.0.11-standalone",
+      "supported_until": null,
+      "baseline": true
+    },
+    {
+      "engine_version": "1.3.7",
+      "image": "apache/iotdb:1.3.7-standalone",
+      "supported_until": null
+    }
+  ],
+  "sources": {
+    "iotdb_data_tar": "A tar archive of one, plain or gzip — the compression read from the bytes, never the name",
+    "iotdb_data": "The data directory of a stopped standalone node, or the target of tools/ops/backup.sh"
+  }
+}

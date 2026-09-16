@@ -1,0 +1,110 @@
+package main
+
+import (
+	"context"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+// settle.go refuses a backup a copy job is still writing.
+//
+// An IoTDB offline copy is a tree of data files, WAL segments and consensus
+// logs, copied file by file. A drill that starts while the copy is still
+// running reads a data directory whose newest files are short or missing,
+// which the engine answers with a startup failure or a read error — a red
+// drill against a backup that is about to be perfectly healthy.
+//
+// The check is deliberately not a filter: the drill fails with a message
+// that says what to do, rather than restoring something other than what
+// was named. A copy job that writes to a temporary name and renames on
+// completion never trips it at all, and the adapter README recommends that.
+
+// settleWindow is how long an artifact must have been still before a drill
+// will restore it. It is a guard against catching a writer mid-file, not a
+// guarantee: a writer stalled longer than this (slow network storage) can
+// still look finished, which is why the rename pattern is what actually
+// removes the race.
+const settleWindow = 750 * time.Millisecond
+
+// fileState is one observation of an artifact.
+type fileState struct {
+	size  int64
+	mtime time.Time
+}
+
+// settled reports whether two observations of the same artifact describe a
+// file nothing is writing to.
+func settled(before, after fileState) bool {
+	return before.size == after.size && before.mtime.Equal(after.mtime)
+}
+
+// observe measures an artifact the way this engine ships it.
+//
+// An IoTDB backup is a data directory, and a directory's own size and mtime say
+// nothing about a file growing inside it — an in-flight backup would look
+// perfectly still. So a directory is measured as its tree: every regular
+// file's size summed, and the newest mtime anywhere under it.
+func observe(path string) (fileState, *protoError) {
+	info, err := os.Stat(path)
+	switch {
+	case os.IsNotExist(err):
+		return fileState{}, protoErr("source_not_found", false, "backup source does not exist: %s", path)
+	case err != nil:
+		return fileState{}, protoErr("source_unreadable", false, "stat backup source: %v", err)
+	case !info.IsDir():
+		return fileState{size: info.Size(), mtime: info.ModTime()}, nil
+	}
+	state := fileState{mtime: info.ModTime()}
+	err = filepath.WalkDir(path, func(_ string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		fi, ierr := d.Info()
+		if ierr != nil {
+			return ierr
+		}
+		if d.Type().IsRegular() {
+			state.size += fi.Size()
+		}
+		if fi.ModTime().After(state.mtime) {
+			state.mtime = fi.ModTime()
+		}
+		return nil
+	})
+	if err != nil {
+		return fileState{}, protoErr("source_unreadable", false, "read backup source: %v", err)
+	}
+	return state, nil
+}
+
+// assertSettled refuses an artifact that changed while being looked at.
+// An artifact untouched for longer than the window is taken as finished
+// without waiting, so an ordinary drill against last night's backup pays
+// nothing for this check.
+func assertSettled(ctx context.Context, path string, window time.Duration) *protoError {
+	before, perr := observe(path)
+	if perr != nil {
+		return perr
+	}
+	if time.Since(before.mtime) >= window {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return protoErr("cancelled", true, "cancelled while checking whether the backup is complete")
+	case <-time.After(window):
+	}
+	after, perr := observe(path)
+	if perr != nil {
+		return perr
+	}
+	if settled(before, after) {
+		return nil
+	}
+	return protoErr("source_unreadable", false,
+		"backup %s is still being written: run the drill after the backup job finishes, or have the job "+
+			"write to a temporary name and rename it on completion, so a drill never sees a partial file",
+		filepath.Base(path))
+}
