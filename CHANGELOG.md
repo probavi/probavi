@@ -13,6 +13,21 @@ always called out explicitly.
 
 ### Fixed
 
+- **`freshness` works on TDengine** (`adapters/tdengine` 0.3.0, issue #293).
+  The built-in reads `max(<column>)`, and TDengine's `max()` refuses a
+  TIMESTAMP argument, so the check failed on every drill however the names
+  were quoted; the README said so and offered a hand-written check instead.
+  The runner now asks the engine's catalogue what the column is and, for a
+  TIMESTAMP column, takes the maximum of its integer form and casts it back
+  — exact to the digit in databases of every precision, measured on both
+  verified versions. Not `last()`, which the obvious translation reaches
+  for: it reads the column in the newest row, and for any TIMESTAMP column
+  other than the primary one that is a different instant, which a signed
+  record would then call the newest. A column of any other type is left
+  alone, so an integer is still reported as unreadable rather than turned
+  into a time. The suite now proves all three generating built-ins, with a
+  second timestamp column that runs backwards so a `last()` translation
+  would fail it.
 - **Three adapters now prove the built-in claim their READMEs make**
   (firebird, duckdb, sqlite). Each said the core's generating built-ins
   apply, and no test ran one: the suites asserted hand-written SQL beside a
