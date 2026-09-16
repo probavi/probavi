@@ -12,9 +12,10 @@
 // Every command a sandbox ever runs — provider verbs and the
 // adapter-started engine alike — executes as a transient unit inside the
 // sandbox's slice (systemd-run --slice), so resource caps bound the sum of
-// everything in the sandbox and stopping the slice kills the whole process
+// everything in the sandbox, and a process an exec leaves running stays in
+// the slice until the sandbox goes: killing the slice ends the whole process
 // tree, however it was started. Cleanup is layered like the k8s provider:
-// Destroy stops the slice and removes the workspace; SweepOrphans reaps
+// Destroy kills and stops the slice and removes the workspace; SweepOrphans reaps
 // workspaces whose creating process on THIS drill host is gone
 // (host-scoped through the owner marker, so several drill hosts may share
 // one target — connecting as the same remote user, since markers live in
@@ -88,12 +89,21 @@ const (
 	// orphan.
 	setupScript = `mkdir -p "$1/scratch" && chmod 700 "$1" && printf '%s\n' "$2" > "$1/owner"`
 
-	// destroyScript is the single idempotent teardown: stop the slice
-	// (kills every descendant), disarm the deadline timer, remove the
+	// destroyScript is the single idempotent teardown: kill everything in
+	// the slice and stop it, disarm the deadline timer, remove the
 	// workspace. The is-active guards make a missing slice or timer
 	// success, locale-independently; rm -rf of a missing workspace already
 	// is.
-	destroyScript = `set -e; if systemctl --quiet is-active -- "$1"; then systemctl stop -- "$1"; fi; if systemctl --quiet is-active -- "$2"; then systemctl stop -- "$2"; fi; rm -rf -- "$3"`
+	//
+	// The kill comes first because stopping alone does not reach an
+	// engine. An exec's unit has ended by the time the drill is over, and
+	// what it started lives on in that ended unit's cgroup (execPrefix);
+	// stopping the slice stops the units in it that are still running and
+	// leaves those processes alone — measured, a process left that way was
+	// still running after the stop returned, and `systemctl kill` on the
+	// slice ended it. Kill before stop, not after: a stopped slice is
+	// unloaded, and killing an unloaded unit is an error.
+	destroyScript = `set -e; if systemctl --quiet is-active -- "$1"; then systemctl kill --signal=SIGKILL -- "$1"; systemctl stop -- "$1"; fi; if systemctl --quiet is-active -- "$2"; then systemctl stop -- "$2"; fi; rm -rf -- "$3"`
 
 	// listScript lists workspace names for the sweep; a missing root means
 	// nothing to sweep, not an error.
@@ -352,7 +362,9 @@ func (p *Provider) setup(ctx context.Context, sbx *Sandbox, set *settings) error
 	}
 	// The deadline backstop runs without User=: our own fixed command, and
 	// root survives any permission oddity a half-dead drill leaves behind.
-	reaper := "systemctl stop " + shQuote(sbx.slice()) + "; rm -rf " + shQuote(sbx.workspace)
+	// It kills before it stops for the reason destroyScript gives.
+	reaper := "systemctl kill --signal=SIGKILL " + shQuote(sbx.slice()) +
+		"; systemctl stop " + shQuote(sbx.slice()) + "; rm -rf " + shQuote(sbx.workspace)
 	if _, stderr, _, exit, err := p.ssh(ctx, nil,
 		"systemd-run", "--quiet", "--collect", "--unit="+sbx.reaperUnit(),
 		"--on-active="+strconv.Itoa(hardDeadlineSeconds), "--timer-property=AccuracySec=1m",
@@ -454,12 +466,32 @@ func (s *Sandbox) reaperUnit() string { return s.name + "-reaper" }
 // (the later property wins), and "--slice=" would move the payload out of
 // the slice Destroy stops. The k8s provider terminates for the same
 // reason; the docker CLI refuses such argv on its own.
+//
+// KillMode=process is what lets an adapter start an engine at all. The
+// unit ends when the command does — that is what --wait waits for — and a
+// service's default KillMode then kills everything else in its cgroup: the
+// server the command just daemonized included. So on this provider an
+// engine lived exactly as long as the exec that started it, and every
+// adapter that brings up a server met a readiness timeout against nothing
+// (issue #292; measured on systemd 257 with redis-server --daemonize yes,
+// and on 261: the child is gone when the call returns). Under docker and
+// Kubernetes such a process simply survives until the sandbox is
+// destroyed, which is the lifetime docs/sandbox-bare-host.md §2 promises
+// here too. With only the main process killed, what it leaves behind stays
+// in the ended unit's cgroup — inside the slice, so the slice's caps still
+// bound it — until Destroy kills the slice.
+//
+// A process left running keeps whatever stdio it inherited, and --pipe
+// hands it the ssh channel: the call then returns only when that process
+// exits. Adapters already detach their engines from stdio, because docker
+// exec waits the same way.
 func (s *Sandbox) execPrefix() []string {
 	return []string{
 		"systemd-run", "--quiet", "--collect", "--wait", "--pipe",
 		"--slice=" + s.slice(),
 		"-p", "User=" + s.user,
 		"-p", "WorkingDirectory=" + s.workspace,
+		"-p", "KillMode=process",
 		"--",
 	}
 }
@@ -537,7 +569,7 @@ func (s *Sandbox) PutFile(ctx context.Context, hostPath, destPath, mode string) 
 	return &sandbox.PutFileResult{BytesCopied: info.Size(), Duration: time.Since(start)}, nil
 }
 
-// Destroy stops the slice (kills every descendant, however it was
+// Destroy kills and stops the slice (every descendant, however it was
 // started), disarms the deadline timer, and removes the workspace. It is
 // idempotent: destroying an already-removed sandbox succeeds.
 func (s *Sandbox) Destroy(ctx context.Context) error {

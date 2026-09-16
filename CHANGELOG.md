@@ -30,6 +30,19 @@ always called out explicitly.
   this", could send an operator to `builtin: row_count`, which composes SQL
   this runner would post as a URL path. It now says plainly that the
   built-ins do not apply, the way the mongodb, redis and etcd adapters do.
+- **An engine an adapter starts on a bare host outlives the `exec` that
+  started it** (`remotehost`, issue #292). Each `exec` is a transient unit
+  that ends with its command, and a unit's default on ending is to kill
+  everything left in its cgroup — so a server daemonized by one `exec` was
+  gone before the next asked whether it was ready, and every adapter that
+  starts an engine met a readiness timeout on this provider. The unit now
+  kills only its own command; what the command started stays in the slice,
+  under the slice's caps, until the sandbox is destroyed, as it does in a
+  container. Stopping a slice does not reach those processes, so `Destroy`,
+  the orphan sweep and the deadline backstop now kill the slice before
+  stopping it. Measured on a Debian 13 target with systemd 257: the redis
+  and etcd drills that ended in `engine_not_ready` pass, and nothing of
+  theirs is left on the target afterwards.
 
 ### Added
 

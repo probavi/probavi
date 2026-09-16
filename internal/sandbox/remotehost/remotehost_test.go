@@ -233,11 +233,13 @@ func TestCreateFullSequence(t *testing.T) {
 		quoteJoin("id", "-un"),
 		quoteJoin("sh", "-c", setupScript, "sh", ws, testHostID+" "+sandbox.OwnerID(os.Getpid())),
 		quoteJoin("systemd-run", "--quiet", "--collect", "--wait", "--pipe",
-			"--slice="+name+".slice", "-p", "User=drill", "-p", "WorkingDirectory="+ws, "--", "true"),
+			"--slice="+name+".slice", "-p", "User=drill", "-p", "WorkingDirectory="+ws,
+			"-p", "KillMode=process", "--", "true"),
 		quoteJoin("systemctl", "set-property", "--runtime", name+".slice", "CPUQuota=200%", "MemoryMax=2G"),
 		quoteJoin("systemd-run", "--quiet", "--collect", "--unit="+name+"-reaper",
 			"--on-active=7200", "--timer-property=AccuracySec=1m",
-			"sh", "-c", "systemctl stop "+shQuote(name+".slice")+"; rm -rf "+shQuote(ws)),
+			"sh", "-c", "systemctl kill --signal=SIGKILL "+shQuote(name+".slice")+
+				"; systemctl stop "+shQuote(name+".slice")+"; rm -rf "+shQuote(ws)),
 	}
 	if len(fake.calls) != len(want) {
 		t.Fatalf("calls = %d, want %d", len(fake.calls), len(want))
@@ -381,7 +383,7 @@ func TestExec(t *testing.T) {
 		}
 		want := quoteJoin("systemd-run", "--quiet", "--collect", "--wait", "--pipe",
 			"--slice="+sbx.name+".slice", "-p", "User=drill", "-p", "WorkingDirectory="+sbx.workspace,
-			"--", "sh", "-c", sandbox.EnvPreludeScript(2), "sh", "psql", "-c", "SELECT 'x'")
+			"-p", "KillMode=process", "--", "sh", "-c", sandbox.EnvPreludeScript(2), "sh", "psql", "-c", "SELECT 'x'")
 		if got := remoteCmd(t, fake, 0); got != want {
 			t.Errorf("call = %s\nwant   %s (env via stdin, everything quoted)", got, want)
 		}
@@ -737,12 +739,33 @@ func TestExecTerminatesSystemdOptions(t *testing.T) {
 			want := quoteJoin(append([]string{
 				"systemd-run", "--quiet", "--collect", "--wait", "--pipe",
 				"--slice=" + sbx.name + ".slice", "-p", "User=drill",
-				"-p", "WorkingDirectory=" + sbx.workspace, "--",
+				"-p", "WorkingDirectory=" + sbx.workspace, "-p", "KillMode=process", "--",
 			}, tt.tail...)...)
 			if got := remoteCmd(t, fake, 0); got != want {
 				t.Errorf("call = %s\nwant   %s (every argv element after the terminator)", got, want)
 			}
 		})
+	}
+}
+
+// TestEnginesLiveUntilDestroy pins the two halves of an engine's lifetime
+// on this provider (issue #292). Every exec's unit kills only its own
+// command, so a server the command started is still there for the next
+// exec; and because stopping a slice does not reach what an ended unit left
+// behind, teardown kills the slice before it stops it — after the stop the
+// slice is unloaded, and the kill would be an error. The deadline backstop
+// makes the same promise, pinned command for command in
+// TestCreateFullSequence.
+func TestEnginesLiveUntilDestroy(t *testing.T) {
+	prefix := testSandbox(&Provider{}).execPrefix()
+	terminator := slices.Index(prefix, "--")
+	if i := slices.Index(prefix, "KillMode=process"); i < 1 || i > terminator || prefix[i-1] != "-p" {
+		t.Errorf("exec prefix = %q, want -p KillMode=process among systemd-run's own options", prefix)
+	}
+	kill := strings.Index(destroyScript, `systemctl kill --signal=SIGKILL -- "$1"`)
+	stop := strings.Index(destroyScript, `systemctl stop -- "$1"`)
+	if kill < 0 || stop < 0 || kill > stop {
+		t.Errorf("destroyScript = %q, want the slice killed before it is stopped", destroyScript)
 	}
 }
 
