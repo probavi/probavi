@@ -221,12 +221,33 @@ const backtick = "`"
 // exact; when it does not, the statement reaches the engine byte for byte
 // as it was written.
 //
-// freshness is not rescued by this and cannot be: TDengine's max() refuses
-// a TIMESTAMP argument — error 10242, `Invalid parameter data type : max` —
-// with backticks exactly as with quotes. The generated statement is
-// translated all the same, so what comes back is the engine explaining
-// that, rather than a complaint about quoting. The README names the
-// limitation and the check to write instead.
+// freshness needs more than the quotes. TDengine's max() refuses a
+// TIMESTAMP argument — error 10242, `Invalid parameter data type : max` —
+// with backticks exactly as with quotes, so the built-in failed on every
+// drill after #276 as it had before (issue #293). The engine's own newest-
+// value function is not the answer: last() reads the column in the row with
+// the newest primary timestamp, which for any other TIMESTAMP column is not
+// its maximum — measured, a second column holding 2026-09-16 12:00 and
+// 2026-09-15 00:00 answered max 12:00 and last 00:00, and a freshness check
+// reading the second would sign a different age than the one it names.
+// max() over the column's integer form does keep the meaning, and casting
+// the answer back gives the engine's own timestamp rendering, which the
+// core parses: measured exact to the digit in databases of all three
+// precisions (ms, us, ns).
+//
+// That cast is only right for a TIMESTAMP column, so the runner asks the
+// engine what the column is before using it. Cast unconditionally, a
+// freshness check over an integer column would turn its number into an
+// instant and could pass, where every other engine reports output the core
+// cannot read as a time. The lookup needs the database the table lives in,
+// which only a qualified name carries; an unqualified one is refused by the
+// endpoint anyway (error 9750, `Database not specified`). Anything the
+// lookup does not confirm — a tag rather than a column, a name the catalogue
+// stores differently, a lookup that fails — leaves the statement as the
+// quote translation made it, and the engine's refusal stands. The three
+// names are written into the lookup's string literals only because the
+// pattern that captured them admits letters, digits and underscores and
+// nothing else.
 //
 // $1 is the statement. The endpoint answers JSON: a scalar query comes back
 // as data:[[value]], and a refusal as a non-zero code with the engine's own
@@ -237,9 +258,20 @@ const runnerScript = `set -u
 ident='"[A-Za-z_][A-Za-z0-9_]*"'
 table="$ident(\.$ident)?"
 generated="^SELECT count\(\*\) FROM $table( WHERE 1=0)?$|^SELECT max\($ident\) FROM $table$"
+name='[A-Za-z_][A-Za-z0-9_]*'
+newest="^SELECT max\(\"($name)\"\) FROM \"($name)\"\.\"($name)\"$"
+bt='` + backtick + `'
 stmt=$1
 if printf '%s' "$stmt" | grep -Eq "$generated"; then
-  stmt=$(printf '%s' "$stmt" | tr '"' '` + backtick + `')
+  stmt=$(printf '%s' "$stmt" | tr '"' "$bt")
+fi
+if [[ $1 =~ $newest ]]; then
+  col=${BASH_REMATCH[1]} db=${BASH_REMATCH[2]} tbl=${BASH_REMATCH[3]}
+  type=$(curl -sf -u ` + credentials + ` --data-binary "SELECT col_type FROM information_schema.ins_columns WHERE db_name = '$db' AND table_name = '$tbl' AND col_name = '$col'" "` +
+	serverURL + `/rest/sql" | sed -n 's/.*"data":\[\["\([A-Z]*\)"\]\].*/\1/p')
+  if [ "$type" = TIMESTAMP ]; then
+    stmt="SELECT CAST(max(CAST($bt$col$bt AS BIGINT)) AS TIMESTAMP) FROM $bt$db$bt.$bt$tbl$bt"
+  fi
 fi
 out=$(curl -s -w '\n%{http_code}' -u ` + credentials + ` --data-binary "$stmt" "` + serverURL + `/rest/sql") || {
   echo "the engine could not be reached" >&2; exit 1; }

@@ -50,7 +50,12 @@ func sandboxParams(t *testing.T) map[string]string {
 const (
 	documents = 250
 	database  = "drill"
+	// seedLayout is how the seed writes its instants.
+	seedLayout = "2006-01-02 15:04:05.000"
 )
+
+// seedBase is the first row's ts, and the newest value of its seen column.
+var seedBase = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 
 // TestEndToEndRestoreDrill proves the engine through the adapter the core
 // actually runs: a backup taken from one server is restored into a
@@ -104,7 +109,10 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 	// through internal/checks, which composes them with SQL-standard
 	// quoted identifiers. TDengine refuses those outright, so until issue
 	// #276 every one of them failed on every drill; the suite exercised no
-	// built-in at all, so nothing said so.
+	// built-in at all, so nothing said so. freshness was left out when that
+	// was fixed, and stayed broken for a second reason (issue #293); the
+	// integer column pins that the translation does not turn a number into
+	// an instant.
 	t.Run("the generating built-ins work", func(t *testing.T) {
 		probe, err := runner.Probe(ctx)
 		if err != nil {
@@ -116,25 +124,37 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 			Target: checks.Target{User: res.Connection.User, Database: res.Connection.Database},
 		}
 		min1, tooMany := int64(1), int64(documents*2)
+		// The newest seen is seedBase and the newest ts is a little over two
+		// hours later, so an hour past seedBase's age admits both maxima —
+		// and not last(seen), which is two hours older than seedBase.
+		recent := config.Duration(time.Since(seedBase) + time.Hour)
+		instant := config.Duration(time.Millisecond)
 		results, err := checks.Run(ctx, []config.Check{
 			{Builtin: config.CheckTableExists, Table: database + ".meters"},
 			{Builtin: config.CheckRowCount, Table: database + ".meters", Min: &min1},
 			{Builtin: config.CheckRowCount, Table: database + ".meters", Min: &tooMany},
+			{Builtin: config.CheckFreshness, Table: database + ".meters", Column: "ts", MaxAge: recent},
+			{Builtin: config.CheckFreshness, Table: database + ".meters", Column: "seen", MaxAge: recent},
+			{Builtin: config.CheckFreshness, Table: database + ".meters", Column: "ts", MaxAge: instant},
+			{Builtin: config.CheckFreshness, Table: database + ".meters", Column: "voltage", MaxAge: recent},
 		}, deps)
 		if err != nil {
 			t.Fatalf("checks.Run: %v", err)
 		}
-		for i, want := range []bool{true, true, false} {
+		for i, want := range []bool{true, true, false, true, true, false, false} {
 			if results[i].OK != want {
 				t.Errorf("check %d (%s) = ok:%v detail:%q, want ok:%v",
 					i, results[i].Name, results[i].OK, results[i].Detail, want)
 			}
 		}
-		// The last one must fail on the bound, not on the dialect: a
-		// refused statement fails every check the same way, which is how
-		// this stayed unnoticed.
-		if !strings.Contains(results[2].Detail, "rows") {
-			t.Errorf("row_count detail = %q, want the count read and compared against the bound", results[2].Detail)
+		// The failures must be the bound's, not the dialect's: a refused
+		// statement fails every check the same way, which is how this
+		// stayed unnoticed.
+		for i, want := range map[int]string{2: "rows", 5: "old", 6: "unparseable"} {
+			if !strings.Contains(results[i].Detail, want) {
+				t.Errorf("check %d (%s) detail = %q, want it to mention %q",
+					i, results[i].Name, results[i].Detail, want)
+			}
 		}
 	})
 
@@ -267,15 +287,19 @@ func makeDump(t *testing.T, ctx context.Context, provider *docker.Provider) stri
 	seed := freshSandbox(t, ctx, provider)
 	awaitServing(t, ctx, seed)
 
+	// seen runs backwards against ts, so its maximum is in the oldest row
+	// and last(seen) — the newest row's value — is a different instant. A
+	// freshness translation that reached for last() would read the wrong
+	// one, and the built-ins below would say so.
 	var values strings.Builder
-	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	for i := range documents / 2 {
-		fmt.Fprintf(&values, " ('%s', %d.5, %d)",
-			base.Add(time.Duration(i)*time.Minute).Format("2006-01-02 15:04:05.000"), i, 200+i)
+		fmt.Fprintf(&values, " ('%s', %d.5, %d, '%s')",
+			seedBase.Add(time.Duration(i)*time.Minute).Format(seedLayout), i, 200+i,
+			seedBase.Add(-time.Duration(i)*time.Minute).Format(seedLayout))
 	}
 	seedSQL := []string{
 		"CREATE DATABASE IF NOT EXISTS " + database,
-		"CREATE STABLE " + database + ".meters (ts TIMESTAMP, current FLOAT, voltage INT) TAGS (location BINARY(32), groupid INT)",
+		"CREATE STABLE " + database + ".meters (ts TIMESTAMP, current FLOAT, voltage INT, seen TIMESTAMP) TAGS (location BINARY(32), groupid INT)",
 		"CREATE TABLE " + database + ".d1 USING " + database + ".meters TAGS ('lab', 1)",
 		"CREATE TABLE " + database + ".d2 USING " + database + ".meters TAGS ('lab', 2)",
 		"INSERT INTO " + database + ".d1 VALUES" + values.String(),
