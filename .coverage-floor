@@ -12,6 +12,6 @@
 #
 # Each floor sits just under what the area measures today: the ratchet starts
 # where the code is, and only ever moves up.
-adapters 86.9
+adapters 87.1
 cmd      87.0
 internal 96.0
