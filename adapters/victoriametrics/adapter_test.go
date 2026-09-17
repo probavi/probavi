@@ -8,10 +8,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite golden files")
@@ -164,27 +167,28 @@ type simulated struct {
 	engine   any // the wrapper-image probe
 	restore  any // vmrestore
 	ready    any // the health poll
-	census   any // the status/tsdb read
+	census   any // the label-names read
 	recover  any // the metadata recovery for opaque archives
 	fatalLog any // the grep for the server's own fatal line
 }
 
-// statusBody is the answer /api/v1/status/tsdb gives for a restored
-// server holding series (measured shape).
-func statusBody(series int) string {
-	return fmt.Sprintf(`{"status":"success","data":{"totalSeries":%d,"totalLabelValuePairs":9}}`, series)
+// labelsBody is the answer /api/v1/labels gives, in the measured shape:
+// a restored server holding series names at least one label, and an
+// empty one answers an empty list rather than an error.
+func labelsBody(names ...string) string {
+	quoted := make([]string, 0, len(names))
+	for _, n := range names {
+		quoted = append(quoted, fmt.Sprintf("%q", n))
+	}
+	return `{"status":"success","data":[` + strings.Join(quoted, ",") + `]}`
 }
-
-// fixtureSeries is what a healthy restore reports through the status
-// endpoint; the verdict tests override the answer directly.
-const fixtureSeries = 3
 
 func defaultSimulated() simulated {
 	return simulated{
 		engine:   okExec(),
 		restore:  execValue{ExitCode: 0, DurationSeconds: 1.5},
 		ready:    okExec(),
-		census:   timedOut(statusBody(fixtureSeries)),
+		census:   timedOut(labelsBody("job")),
 		recover:  outExec(`{"created_at":"2026-08-18T18:23:25Z"}`),
 		fatalLog: errExec(""),
 	}
@@ -417,13 +421,15 @@ func TestSeriesVerdict(t *testing.T) {
 		wantOK   bool
 		wantCode string
 	}{
-		{"a server holding the backup's series", timedOut(statusBody(3)), true, ""},
-		{"a server that is up and holds nothing", timedOut(statusBody(0)),
+		{"a server holding the backup's series", timedOut(labelsBody("job")), true, ""},
+		{"a server that is up and holds nothing", timedOut(labelsBody()),
 			false, "source_corrupt"},
 		// Positive evidence only: an answer the adapter cannot read is
 		// not evidence of an empty restore.
 		{"an answer that does not parse", timedOut("<html>nope</html>"), true, ""},
 		{"a read that fails outright", errExec("connection refused"), true, ""},
+		{"an answer that reports no success", timedOut(`{"status":"error","data":[]}`), true, ""},
+		{"an answer that carries no list", timedOut(`{"status":"success"}`), true, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -441,6 +447,57 @@ func TestSeriesVerdict(t *testing.T) {
 				t.Errorf("code = %s, want %s", f.Error.Code, tc.wantCode)
 			}
 		})
+	}
+}
+
+// TestCensusSpansEveryInstantASampleCanCarry pins the window of the read
+// that refuses an empty restore (issue #299). Each bound is one the engine
+// otherwise fills in from the drill's own clock, and each of those
+// defaults refuses a healthy backup, measured: no start answers for the
+// current day only, and no end stops at now, before the samples of a
+// source whose clock ran ahead.
+func TestCensusSpansEveryInstantASampleCanCarry(t *testing.T) {
+	dir := writeBackup(t, filepath.Join(t.TempDir(), "backup"), "2026-08-18T18:23:25Z", onePartition())
+	var sequence []string
+	_, calls, exit := driveOp(t, "provision",
+		provisionPayload(t, "victoriametrics_backup", dir, nil),
+		provisionHandler(t, &sequence, defaultSimulated()))
+	if exit != 0 {
+		t.Fatalf("provision exit = %d", exit)
+	}
+	var census *url.URL
+	for _, call := range calls {
+		if call.Verb != "exec" {
+			continue
+		}
+		if argv := argvOf(t, call); argv[0] == "wget" && !strings.HasSuffix(argv[len(argv)-1], "/health") {
+			u, err := url.Parse(argv[len(argv)-1])
+			if err != nil {
+				t.Fatalf("census url %q: %v", argv[len(argv)-1], err)
+			}
+			census = u
+		}
+	}
+	if census == nil {
+		t.Fatal("no census read among the exec calls")
+	}
+	if census.Path != "/api/v1/labels" {
+		t.Errorf("census reads %s, want the label names, which no day scopes", census.Path)
+	}
+	query := census.Query()
+	if query.Has("date") {
+		t.Errorf("census names a day: %s", census)
+	}
+	// 0 reads as an absent start, which is the current day again.
+	if start := query.Get("start"); start != "1" {
+		t.Errorf("start = %q, want 1 — the earliest instant that is not read as unset", start)
+	}
+	end, err := strconv.ParseInt(query.Get("end"), 10, 64)
+	if err != nil {
+		t.Fatalf("end = %q, want an explicit instant: the default is now", query.Get("end"))
+	}
+	if limit := time.Now().AddDate(100, 0, 0); time.Unix(end, 0).Before(limit) {
+		t.Errorf("end = %s, want no nearer than a century ahead", time.Unix(end, 0).UTC())
 	}
 }
 
