@@ -235,3 +235,107 @@ func TestResolveSourceRefusals(t *testing.T) {
 		})
 	}
 }
+
+// closedTo makes a path unreadable for the rest of the test. Root reads a
+// mode-000 path regardless, so the test is skipped there rather than
+// asserting something the filesystem is not doing.
+func closedTo(t *testing.T, path string, restore os.FileMode) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 path")
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(path, restore); err != nil {
+			t.Errorf("restore the mode: %v", err)
+		}
+	})
+}
+
+// wantUnreadable fails the test unless the refusal is the host saying it
+// could not read something.
+func wantUnreadable(t *testing.T, perr *protoError, message string) {
+	t.Helper()
+	if perr == nil || perr.Code != "source_unreadable" || !strings.Contains(perr.Message, message) {
+		t.Errorf("got %+v, want source_unreadable mentioning %q", perr, message)
+	}
+}
+
+// TestWhatTheHostCannotReadIsUnreadable: the host reads the artifact to
+// hash it and to compare it against its own sidecar. A read that fails is
+// the host's failure, never a verdict about the snapshot.
+func TestWhatTheHostCannotReadIsUnreadable(t *testing.T) {
+	t.Run("a path beneath a file", func(t *testing.T) {
+		snap := snapshotFile(t, t.TempDir(), "drill.snapshot")
+		// The single-file kinds stat the path; the directory kinds list it.
+		// Both fail on a path beneath a file, and each says which read it
+		// was.
+		for kind, message := range map[string]string{
+			"qdrant_snapshot":          "stat backup source",
+			"qdrant_full_snapshot":     "stat backup source",
+			"qdrant_snapshot_dir":      "read backup directory",
+			"qdrant_full_snapshot_dir": "read backup directory",
+		} {
+			_, perr := resolveSource(context.Background(), kind, filepath.Join(snap, "drill.snapshot"))
+			wantUnreadable(t, perr, message)
+		}
+	})
+	t.Run("a snapshot the host may not open", func(t *testing.T) {
+		snap := snapshotFile(t, t.TempDir(), "drill.snapshot")
+		closedTo(t, snap, 0o600)
+		_, perr := resolveSource(context.Background(), "qdrant_snapshot", snap)
+		wantUnreadable(t, perr, "open backup source")
+	})
+	t.Run("bytes that will not stream", func(t *testing.T) {
+		_, perr := fileChecksum(t.TempDir())
+		wantUnreadable(t, perr, "read backup source")
+	})
+	t.Run("a directory of snapshots the host may not list", func(t *testing.T) {
+		dir := t.TempDir()
+		snapshotFile(t, dir, "drill.snapshot")
+		closedTo(t, dir, 0o755)
+		_, perr := resolveSource(context.Background(), "qdrant_snapshot_dir", dir)
+		wantUnreadable(t, perr, "read backup directory")
+	})
+}
+
+// TestTheDirectoryKindChoosesTheNewestSnapshotOnly: only a .snapshot file
+// is a candidate — a checksum sidecar or a log beside it is not — and two
+// of one age break toward the later name, so a drill restores the same
+// artifact every run.
+func TestTheDirectoryKindChoosesTheNewestSnapshotOnly(t *testing.T) {
+	dir := t.TempDir()
+	older := snapshotFile(t, dir, "a-monday.snapshot")
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(older, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("not a snapshot\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "archive"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := snapshotFile(t, dir, "b-tuesday.snapshot")
+	aged := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(want, aged, aged); err != nil {
+		t.Fatal(err)
+	}
+	src, perr := resolveSource(context.Background(), "qdrant_snapshot_dir", dir)
+	if perr != nil {
+		t.Fatalf("resolve: %+v", perr)
+	}
+	if src.path != want {
+		t.Errorf("chose %s, want the newest snapshot %s", src.path, want)
+	}
+
+	tie := snapshotFile(t, dir, "c-wednesday.snapshot")
+	if err := os.Chtimes(tie, aged, aged); err != nil {
+		t.Fatal(err)
+	}
+	if src, perr = resolveSource(context.Background(), "qdrant_snapshot_dir", dir); perr != nil || src.path != tie {
+		t.Errorf("chose %+v (%+v), want the later name %s of two snapshots of one age", src, perr, tie)
+	}
+}
