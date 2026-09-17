@@ -139,6 +139,10 @@ The engine records it, so the adapter reports it: `startTime` from
 `backup.created_at`. Nothing is invented from a directory's mtime — that
 would date a copy.
 
+Several backups can share one location, and the drill names no backup id,
+so the engine restores the latest one it holds. The adapter reads the
+same one: the highest `N`, compared as a number rather than as a name.
+
 Because the engine's own timestamp is already absolute,
 `source.params.backup_timezone` has nothing to correct and is refused
 rather than silently ignored.

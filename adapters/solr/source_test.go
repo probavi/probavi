@@ -78,6 +78,21 @@ func TestTheStartTimeIsTheArtifactsOrNothing(t *testing.T) {
 			properties: map[string]string{"backup_1.properties": "startTime=2026-09-01T06\\:00\\:00Z\n"},
 			want:       "2026-09-01T06:00:00Z",
 		},
+		// The id is a number, not a name: past the ninth backup in one
+		// location a name comparison reads backup_9 as the latest, and the
+		// record would date the drill from a backup the engine did not
+		// restore.
+		"an id past the ninth": {
+			properties: map[string]string{
+				"backup_9.properties":  "startTime=2026-09-09T09\\:00\\:00Z\n",
+				"backup_10.properties": "startTime=2026-09-10T10\\:00\\:00Z\n",
+			},
+			want: "2026-09-10T10:00:00Z",
+		},
+		"a name the engine did not write": {
+			properties: map[string]string{"backup_latest.properties": "startTime=2026-09-11T11\\:00\\:00Z\n"},
+			want:       "2026-08-27T18:34:34.622561925Z",
+		},
 		"no properties file at all": {remove: "backup_0.properties"},
 		"properties that record no start": {
 			properties: map[string]string{"backup_0.properties": "backupName=nightly\ncollection=orders\n"},
@@ -330,4 +345,28 @@ func TestTheHashPassSaysWhatItCouldNotRead(t *testing.T) {
 			t.Errorf("got %+v, want source_unreadable", perr)
 		}
 	})
+}
+
+// TestTheBackupIdIsReadAsANumber covers the naming rule directly: only
+// what the engine writes is a backup's record, and the id inside it is a
+// number however many digits it has.
+func TestTheBackupIdIsReadAsANumber(t *testing.T) {
+	for name, want := range map[string]int{
+		"backup_0.properties":   0,
+		"backup_7.properties":   7,
+		"backup_10.properties":  10,
+		"backup_128.properties": 128,
+	} {
+		if id, ok := backupID(name); !ok || id != want {
+			t.Errorf("backupID(%q) = %d, %v, want %d", name, id, ok, want)
+		}
+	}
+	for _, name := range []string{
+		"backup_.properties", "backup_latest.properties", "backup_-1.properties",
+		"backup_0.properties.bak", "zk_backup_0", "shard_backup_metadata", "backup_1e3.properties",
+	} {
+		if id, ok := backupID(name); ok {
+			t.Errorf("backupID(%q) = %d, true, want it refused as a name the engine did not write", name, id)
+		}
+	}
 }

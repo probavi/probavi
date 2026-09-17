@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -143,18 +144,11 @@ func backupStartTime(collectionDir string) *string {
 	if err != nil {
 		return nil
 	}
-	var names []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasPrefix(e.Name(), "backup_") && strings.HasSuffix(e.Name(), ".properties") {
-			names = append(names, e.Name())
-		}
-	}
-	if len(names) == 0 {
+	name := newestProperties(entries)
+	if name == "" {
 		return nil
 	}
-	// Several backups can share a location; the highest id is this one.
-	sort.Strings(names)
-	raw, err := os.ReadFile(filepath.Join(collectionDir, names[len(names)-1])) //#nosec G304 -- inside the named artifact.
+	raw, err := os.ReadFile(filepath.Join(collectionDir, name)) //#nosec G304 -- inside the named artifact.
 	if err != nil {
 		return nil
 	}
@@ -167,6 +161,47 @@ func backupStartTime(collectionDir string) *string {
 		return nil
 	}
 	return &value
+}
+
+// newestProperties names the properties file of the highest backup id in
+// a location, and "" where the location holds none.
+//
+// The id is read as a number. Several backups can share a location, and
+// compared as names backup_9 comes after backup_10 — so from the tenth
+// backup on, a location's record would date the drill from a backup the
+// restore did not use: this adapter names no backupId, and the engine
+// then restores the latest one it holds.
+func newestProperties(entries []os.DirEntry) string {
+	newest, newestID := "", -1
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		id, ok := backupID(e.Name())
+		if !ok || id <= newestID {
+			continue
+		}
+		newest, newestID = e.Name(), id
+	}
+	return newest
+}
+
+// backupID reads N out of backup_N.properties, and reports whether the
+// name is one the engine wrote.
+func backupID(name string) (int, bool) {
+	rest, ok := strings.CutPrefix(name, "backup_")
+	if !ok {
+		return 0, false
+	}
+	digits, ok := strings.CutSuffix(rest, ".properties")
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.Atoi(digits)
+	if err != nil || id < 0 {
+		return 0, false
+	}
+	return id, true
 }
 
 // soleCollection reads the collection name out of the artifact's own
