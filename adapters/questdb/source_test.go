@@ -159,3 +159,123 @@ func TestTreeChecksumFollowsTheBytes(t *testing.T) {
 		t.Error("a changed column file left the checksum alone")
 	}
 }
+
+// TestDirectoryKindRefusalsNameWhatWasWrong covers what the kind that
+// chooses for the operator will not take.
+func TestDirectoryKindRefusalsNameWhatWasWrong(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "nightly.tar")
+	if err := os.WriteFile(file, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	notRoots := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(notRoots, "logs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for name, tc := range map[string]struct {
+		ctx                 context.Context
+		path, code, message string
+	}{
+		"a directory that does not exist": {
+			context.Background(), filepath.Join(t.TempDir(), "gone"), "source_not_found", "does not exist",
+		},
+		"a file": {context.Background(), file, "source_unreadable", "read backup directory"},
+		"a directory holding no data root": {
+			context.Background(), notRoots, "source_not_found", "holds no QuestDB data root",
+		},
+		"a drill cancelled while choosing": {cancelled, notRoots, "cancelled", "choosing a backup"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, perr := resolveSource(tc.ctx, "questdb_checkpoint_dir", tc.path)
+			if perr == nil || perr.Code != tc.code || !strings.Contains(perr.Message, tc.message) {
+				t.Errorf("got %+v, want %s mentioning %q", perr, tc.code, tc.message)
+			}
+		})
+	}
+}
+
+// wantUnreadable fails the test unless the refusal is the host saying it
+// could not read something, in the words that name what.
+func wantUnreadable(t *testing.T, perr *protoError, message string) {
+	t.Helper()
+	if perr == nil || perr.Code != "source_unreadable" || !strings.Contains(perr.Message, message) {
+		t.Errorf("got %+v, want source_unreadable mentioning %q", perr, message)
+	}
+}
+
+// closedTo makes a path unreadable for the rest of the test. Root reads a
+// mode-000 path regardless, so the test is skipped there rather than
+// asserting something the filesystem is not doing.
+func closedTo(t *testing.T, path string, restore os.FileMode) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 path")
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(path, restore); err != nil {
+			t.Errorf("restore the mode: %v", err)
+		}
+	})
+}
+
+// TestAnArtifactShapeTheHostCannotReadIsRefusedAsSuch: a stat or a listing
+// that fails is neither a missing artifact nor a wrong one, and a drill
+// must not record it as something about the backup.
+func TestAnArtifactShapeTheHostCannotReadIsRefusedAsSuch(t *testing.T) {
+	root := writeDataRoot(t, dataRootOptions{checkpointed: true})
+	flat := filepath.Join(t.TempDir(), "flat")
+	if err := os.MkdirAll(flat, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(flat, "db"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bare := filepath.Join(t.TempDir(), "bare")
+	if err := os.MkdirAll(filepath.Join(bare, "db"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		path, code, message string
+	}{
+		"a path beneath a file": {
+			filepath.Join(root, "conf", "server.conf", "db"), "source_unreadable", "stat backup source",
+		},
+		"a db path that is not a directory":  {flat, "source_unreadable", "read db directory"},
+		"a data root holding no file at all": {bare, "source_not_found", "contains no files"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, perr := resolveSource(context.Background(), "questdb_data", tc.path)
+			if perr == nil || perr.Code != tc.code || !strings.Contains(perr.Message, tc.message) {
+				t.Errorf("got %+v, want %s mentioning %q", perr, tc.code, tc.message)
+			}
+		})
+	}
+}
+
+// TestBytesTheHostCannotReadAreUnreadable covers every read the adapter
+// does on the drill host: the checkpoint marker it lists, the column files
+// it hashes, the tree it walks.
+func TestBytesTheHostCannotReadAreUnreadable(t *testing.T) {
+	t.Run("a checkpoint marker the host may not read", func(t *testing.T) {
+		root := writeDataRoot(t, dataRootOptions{checkpointed: true})
+		closedTo(t, filepath.Join(root, ".checkpoint", "db"), 0o755)
+		_, perr := resolveSource(context.Background(), "questdb_checkpoint", root)
+		wantUnreadable(t, perr, "read checkpoint marker")
+	})
+	t.Run("a column file the host may not open", func(t *testing.T) {
+		root := writeDataRoot(t, dataRootOptions{checkpointed: true})
+		closedTo(t, filepath.Join(root, "db", "orders~9", "2026-09-01", "id.d"), 0o600)
+		_, perr := resolveSource(context.Background(), "questdb_checkpoint", root)
+		wantUnreadable(t, perr, "open id.d")
+	})
+	t.Run("a directory the host may not walk", func(t *testing.T) {
+		root := writeDataRoot(t, dataRootOptions{checkpointed: true})
+		closedTo(t, filepath.Join(root, "public"), 0o755)
+		_, _, perr := treeChecksum(root)
+		wantUnreadable(t, perr, "walk backup directory")
+	})
+}
