@@ -11,7 +11,7 @@ import (
 
 const (
 	adapterName    = "tdengine"
-	adapterVersion = "0.3.0"
+	adapterVersion = "0.4.0"
 	// defaultPort is where taosAdapter serves HTTP inside the sandbox.
 	// Nothing is published: checks run in-sandbox through the runner.
 	defaultPort = 6041
@@ -263,13 +263,9 @@ func runRestore(ctx context.Context, c *core, dumpDir string, src *resolvedSourc
 // serving none of the backup's tables has restored nothing, and reporting
 // that green is the failure this project exists to prevent.
 func assertRestored(ctx context.Context, c *core, src *resolvedSource) (string, *protoError) {
+	// Every kind reads the name host-side, from the dump's own CREATE
+	// DATABASE line, and refuses an artifact without one (source.go).
 	database := src.database
-	if database == "" {
-		// The archive kinds learn the name only inside the sandbox; the
-		// restore recreated whatever the dump held, and the checks need a
-		// name to talk to.
-		return "", protoErr("source_corrupt", false, "the backup does not name the database it holds")
-	}
 	val, stdout, stderr, perr := c.exec(ctx, execArgs{
 		Argv: []string{"bash", "-c", databaseScript, "bash", database},
 	})

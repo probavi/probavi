@@ -2,6 +2,8 @@ package main
 
 import (
 	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -177,7 +179,11 @@ func inspectDumpTar(path string) (schema, result []byte, perr *protoError) {
 		return nil, nil, protoErr("source_unreadable", false, "open archive: %v", err)
 	}
 	defer f.Close() //nolint:errcheck // read-only descriptor
-	tr := tar.NewReader(f)
+	stream, perr := tarStream(f, filepath.Base(path))
+	if perr != nil {
+		return nil, nil, perr
+	}
+	tr := tar.NewReader(stream)
 	for range maxTarEntries {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -197,6 +203,53 @@ func inspectDumpTar(path string) (schema, result []byte, perr *protoError) {
 		}
 	}
 	return schema, result, nil
+}
+
+var (
+	// gzipMagic opens every gzip stream.
+	gzipMagic = []byte{0x1f, 0x8b}
+	// unreadCompressions are the other compressions an archive commonly
+	// arrives in, by the bytes each opens with. Without these the tar
+	// reader meets compressed bytes where a header belongs, and an intact
+	// backup would be recorded as a corrupt one.
+	unreadCompressions = []struct {
+		name  string
+		magic []byte
+	}{
+		{"bzip2", []byte("BZh")},
+		{"xz", []byte{0xfd, '7', 'z', 'X', 'Z', 0x00}},
+		{"zstd", []byte{0x28, 0xb5, 0x2f, 0xfd}},
+	}
+)
+
+// tarStream returns the tar stream an archive holds, judged by the bytes
+// it opens with and never by its name. A gzip archive is read through
+// gzip: the sandbox's GNU tar unpacks one without being told, under the
+// fixed name the archive is staged as (measured on both verified
+// images). A plain archive is read from the file itself, so the walk
+// seeks past the data it has no use for rather than reading it.
+func tarStream(f *os.File, name string) (io.Reader, *protoError) {
+	var head [6]byte
+	n, err := f.ReadAt(head[:], 0)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, protoErr("source_unreadable", false, "read archive: %v", err)
+	}
+	opening := head[:n]
+	if bytes.HasPrefix(opening, gzipMagic) {
+		zr, err := gzip.NewReader(f)
+		if err != nil {
+			return nil, protoErr("source_corrupt", false, "read archive: %v", err)
+		}
+		return zr, nil
+	}
+	for _, c := range unreadCompressions {
+		if bytes.HasPrefix(opening, c.magic) {
+			return nil, protoErr("unsupported_source", false,
+				"%s is a %s-compressed archive: this adapter reads a tar archive plain or gzip-compressed",
+				name, c.name)
+		}
+	}
+	return f, nil
 }
 
 // takeMeta reads one archive entry when it is one of the two files this

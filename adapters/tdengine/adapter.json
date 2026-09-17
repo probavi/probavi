@@ -25,6 +25,6 @@
   "sources": {
     "taosdump": "One `taosdump` output directory, named at either level",
     "taosdump_dir": "A directory of them; the newest by the dumps' own recorded instant is restored",
-    "taosdump_tar": "One tar archive of a taosdump output directory"
+    "taosdump_tar": "One tar archive of a taosdump output directory, plain or gzip — the compression read from the bytes, never the name"
   }
 }

@@ -241,33 +241,37 @@ func TestDamagedDumpIsRefused(t *testing.T) {
 }
 
 // TestArchiveRestores covers the kind an operator reaches for when a dump
-// travels as one file.
+// travels as one file, plain and gzip-compressed. Both archives are named
+// dump.tar: the bytes decide, on the host and in the sandbox alike.
 func TestArchiveRestores(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
 	buildAdapterOnPath(t, ctx)
 	provider := docker.New(nil)
 	dump := makeDump(t, ctx, provider)
-	archive := filepath.Join(t.TempDir(), "dump.tar")
-	if out, err := exec.CommandContext(ctx, "tar", "-cf", archive,
-		"-C", filepath.Dir(dump), filepath.Base(dump)).CombinedOutput(); err != nil {
-		t.Fatalf("tar the dump: %v: %s", err, out)
-	}
-
 	runner, err := adapter.New("tdengine", nil, nil)
 	if err != nil {
 		t.Fatalf("resolve adapter: %v", err)
 	}
-	sbx := freshSandbox(t, ctx, provider)
-	if _, err := runner.Provision(ctx, &adapter.ProvisionRequest{
-		Source:  adapter.ProvisionSource{Kind: "taosdump_tar", Path: archive},
-		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
-	}, sbx); err != nil {
-		t.Fatalf("provision from an archive: %v", err)
-	}
-	if got := runCheck(t, ctx, sbx, "SELECT count(*) FROM drill.meters"); got != strconv.Itoa(documents) {
-		t.Errorf("rows = %q, want %d", got, documents)
+	for name, flag := range map[string]string{"plain": "-cf", "gzip": "-czf"} {
+		t.Run(name, func(t *testing.T) {
+			archive := filepath.Join(t.TempDir(), "dump.tar")
+			if out, err := exec.CommandContext(ctx, "tar", flag, archive,
+				"-C", filepath.Dir(dump), filepath.Base(dump)).CombinedOutput(); err != nil {
+				t.Fatalf("tar the dump: %v: %s", err, out)
+			}
+			sbx := freshSandbox(t, ctx, provider)
+			if _, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+				Source:  adapter.ProvisionSource{Kind: "taosdump_tar", Path: archive},
+				Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+			}, sbx); err != nil {
+				t.Fatalf("provision from the archive: %v", err)
+			}
+			if got := runCheck(t, ctx, sbx, "SELECT count(*) FROM drill.meters"); got != strconv.Itoa(documents) {
+				t.Errorf("rows = %q, want %d", got, documents)
+			}
+		})
 	}
 }
 

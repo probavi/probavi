@@ -30,6 +30,18 @@ always called out explicitly.
   integration suite now drills a backup whose newest sample predates the
   run's day and one whose samples all lie ahead of its clock; both failed
   before this change, and a backup of an empty server is still refused.
+- **A gzip-compressed TDengine archive is restored, not recorded as
+  corrupt** (`adapters/tdengine` 0.4.0). The `taosdump_tar` kind reads its
+  archive on the host before the drill starts, and that reader took
+  gzip bytes for a damaged tar header: a `tar -czf` of an intact dump
+  failed as `source_corrupt`, a verdict about the backup. The compression
+  is now read from the archive's first bytes, never its name, and a gzip
+  archive is read through gzip; the sandbox's own `tar` already unpacks
+  one under the name the archive is staged as (measured on 3.3.6.13 and
+  3.3.5.8). A bzip2, xz or zstd archive is refused as
+  `unsupported_source`, naming the compression, rather than as a corrupt
+  one. The integration suite restores the same dump from a plain and a
+  gzip archive, both named `dump.tar`.
 
 ## [0.30.0] - 2026-09-16
 
