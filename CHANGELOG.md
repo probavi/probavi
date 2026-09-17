@@ -11,6 +11,26 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A VictoriaMetrics backup is no longer refused for being older than
+  today** (`adapters/victoriametrics` 0.2.2, issue #299). The census that
+  refuses an empty restore read `/api/v1/status/tsdb`, which counts only
+  the series seen on the current UTC day. Every backup passed on the day
+  it was taken and failed from the next midnight on, as `source_corrupt` —
+  a verdict about the backup, on bytes that restore whole. All three
+  source kinds shared it. The census now asks the restored index for any
+  label at all, over a window stated at both ends: without a `start` the
+  endpoint answers for the last day again, and without an `end` it stops
+  at now, which refuses a backup of a source whose clock ran ahead. The
+  issue's suggestion of the backup's own day refuses an instance that
+  last wrote the day before its snapshot, and the other candidates each
+  fail on 1.150: the series listing past 30000 series, the series count on
+  a server emptied by `delete_series`, which it still counts. The
+  integration suite now drills a backup whose newest sample predates the
+  run's day and one whose samples all lie ahead of its clock; both failed
+  before this change, and a backup of an empty server is still refused.
+
 ## [0.30.0] - 2026-09-16
 
 ### Added

@@ -272,8 +272,8 @@ func parseBackupMetadata(raw []byte) (int64, bool) {
 // plausibleEpochMs bounds what the artifact is allowed to say about
 // itself. This adapter acts on created_at three times — it ranks the
 // candidates in a backup directory, it becomes the record's
-// backup.created_at, and it is the instant the series census evaluates
-// at (ops.go) — so a value read out of a damaged marker would pick the
+// backup.created_at, and it is the instant every check evaluates at
+// (ops.go) — so a value read out of a damaged marker would pick the
 // backup, date it, and choose the moment the checks ask about. Zero is
 // outside the window on purpose: every caller reads a zero as "this
 // artifact does not date itself", and 1970-01-01T00:00:00Z parses to

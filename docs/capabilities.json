@@ -1339,7 +1339,7 @@
       "name": "VictoriaMetrics",
       "status": "experimental",
       "since": "0.16.0",
-      "adapter_version": "0.2.1",
+      "adapter_version": "0.2.2",
       "engine": {
         "id": "victoriametrics",
         "name": "VictoriaMetrics"

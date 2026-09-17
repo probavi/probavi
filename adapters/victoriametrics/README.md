@@ -112,14 +112,31 @@ Measured behaviours this adapter refuses to paper over:
 4. **A restore that produced no data is refused.** `vmrestore` restores a
    truncated backup *silently* — exit 0, fewer files, not a word
    (measured) — so the tool's verdict is never the drill's. After the
-   server is up, the drill reads the series count from the server's own
-   `/api/v1/status/tsdb` and refuses a well-formed zero: a server that is
+   server is up, the drill asks the server's own index whether any series
+   at all is left in it — `/api/v1/labels` from the first second of the
+   epoch to the year 2200 — and refuses an empty answer: a server that is
    up but holds none of the promised data is exactly the false green a
    metrics backup invites.
 
-The count comes from the status endpoint rather than from a query
-deliberately: no lookback window then stands between the artifact and the
-verdict, so a backup of an idle instance is still a backup.
+The census reads the index rather than running a query deliberately: no
+lookback window then stands between the artifact and the verdict, so a
+backup of an idle instance is still a backup. Its window is explicit at
+both ends for the same reason, because every default the engine offers is
+anchored to the drill's own clock, and a backup's age or its source's clock
+must never change a verdict about its content. All measured on 1.150:
+
+- `/api/v1/status/tsdb`, which this adapter read up to 0.2.1, counts only
+  the series seen on one UTC day — the current one, unless asked. Every
+  backup passed on the day it was taken and was refused as `source_corrupt`
+  from the next midnight on (issue #299). Asking for the backup's own day
+  instead refuses an instance that last wrote the day before its snapshot.
+- Without a `start`, the labels endpoint answers for the last day too; and
+  without an `end` it stops at now, so a backup of a server whose clock ran
+  ahead would be refused until the drill's clock caught up.
+- `/api/v1/series` refuses past 30000 matching series, and
+  `/api/v1/series/count` still counts series deleted before the snapshot,
+  so a backup of a server emptied with `delete_series` would pass it. The
+  labels endpoint answers such a backup with nothing, and is refused.
 
 ## Checks: the MetricsQL dialect, evaluated at the backup's own instant
 

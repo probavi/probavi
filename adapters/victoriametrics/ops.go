@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "victoriametrics"
-	adapterVersion = "0.2.1"
+	adapterVersion = "0.2.2"
 
 	// workDirName is created under the provider's scratch directory — the
 	// one directory the provider guarantees writable.
@@ -498,34 +498,58 @@ func describeStartFailure(ctx context.Context, c *core, logPath string, perr *pr
 	return protoErr("restore_failed", false, "restored server failed to start: %s", line)
 }
 
-// tsdbStatus is the shape /api/v1/status/tsdb answers with.
-type tsdbStatus struct {
-	Data struct {
-		TotalSeries int64 `json:"totalSeries"`
-	} `json:"data"`
+// censusURL asks the restored server whether any series at all carries a
+// label, over a window no backup falls outside of. Every narrower window
+// is one a healthy backup can miss, and the verdict it misses by is
+// source_corrupt — a statement about the backup. All measured on 1.150:
+//
+//   - /api/v1/status/tsdb counts the series seen on one UTC day, today
+//     unless asked, so the census it used to be passed a backup the day
+//     it was taken and refused the same bytes from the next midnight on
+//     (issue #299). Asking for the backup's own day refuses an instance
+//     that last wrote the day before its snapshot, and 1970-01-01 answers
+//     zero rather than a total.
+//   - start=1, because 0 and an absent start both read as "not set", and
+//     the endpoint then answers for the last day only.
+//   - end in the year 2200, because the default end is now: a server
+//     whose clock ran ahead holds samples after it, and its backup would
+//     be refused until the drill's clock caught up.
+//   - Label names rather than the values of __name__, which a series
+//     written without a metric name does not appear in. /api/v1/series
+//     refuses past 30000 matching series (-search.maxUniqueTimeseries),
+//     and /api/v1/series/count still counts the series deleted before the
+//     snapshot, so a backup of a server emptied by delete_series would
+//     pass it. This endpoint answers neither way wrong.
+//
+// limit=1, because one name is already the whole answer.
+const censusURL = serverURL + "/api/v1/labels?start=1&end=7258118400&limit=1"
+
+// labelsAnswer is the shape /api/v1/labels answers with.
+type labelsAnswer struct {
+	Status string    `json:"status"`
+	Data   *[]string `json:"data"`
 }
 
 // checkSeries refuses a well-formed zero: a server that is up but holds
 // none of the promised data is exactly the false green a metrics backup
-// invites. The count comes from the server's own status endpoint rather
-// than a query, so no lookback window stands between the artifact and
-// the verdict — a backup of an idle instance is still a backup. The
-// refusal fires on positive evidence only: an answer that does not parse
-// is skipped rather than treated as zero.
+// invites. The read goes to the server's index rather than a query, so no
+// lookback window stands between the artifact and the verdict, and its
+// window spans every instant a sample can carry (see censusURL) — a
+// backup of an idle instance is still a backup, and so is last week's.
+// The refusal fires on positive evidence only: an answer that does not
+// parse, or does not report success with a list, is skipped rather than
+// treated as empty.
 func checkSeries(ctx context.Context, c *core, createdAtMs int64) (float64, *protoError) {
-	val, stdout, _, perr := c.exec(ctx, execArgs{
-		Argv: []string{"wget", "-q", "-O-", serverURL + "/api/v1/status/tsdb"}})
+	val, stdout, _, perr := c.exec(ctx, execArgs{Argv: []string{"wget", "-q", "-O-", censusURL}})
 	if perr != nil {
 		return 0, perr
 	}
-	if val.ExitCode != 0 {
+	answer := labelsAnswer{}
+	if val.ExitCode != 0 || json.Unmarshal(stdout, &answer) != nil ||
+		answer.Status != "success" || answer.Data == nil {
 		return val.DurationSeconds, nil
 	}
-	status := tsdbStatus{}
-	if err := json.Unmarshal(stdout, &status); err != nil {
-		return val.DurationSeconds, nil
-	}
-	if status.Data.TotalSeries == 0 {
+	if len(*answer.Data) == 0 {
 		return 0, protoErr("source_corrupt", false,
 			"the restored server holds no series at all, though the backup claims to have been "+
 				"taken at %s — the data the backup promises is not there",

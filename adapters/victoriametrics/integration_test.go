@@ -101,11 +101,19 @@ func sandboxParams(image string) map[string]string {
 // (measured), and no drill may report the difference as success.
 const fixtureDays = 90
 
+// history is what a fixture's source server holds when it is backed up:
+// one sample a day for days days, the newest of them newestDaysAgo days
+// before the moment of seeding — negative when the source's clock ran
+// ahead of the drill's.
+type history struct {
+	days, newestDaysAgo int
+}
+
 // makeBackupFixture seeds a real server, freezes it with the snapshot API
 // and backs it up with vmbackup — the artifact an operator's own runbook
 // produces — then extracts it to the host.
 func makeBackupFixture(t *testing.T, ctx context.Context, provider *docker.Provider,
-	image, dest string) int {
+	image, dest string, held history) int {
 	t.Helper()
 	seed, err := provider.Create(ctx, sandboxParams(image))
 	if err != nil {
@@ -113,6 +121,25 @@ func makeBackupFixture(t *testing.T, ctx context.Context, provider *docker.Provi
 	}
 	defer destroy(t, seed)
 
+	// The count is evaluated at the moment of seeding, the way a drill
+	// evaluates its checks at the backup's own instant. The server moves
+	// an instant within 30s of its own clock 30s back (-search.latencyOffset,
+	// measured), and both land inside that band, so both miss the newest
+	// sample alike; counted any later, the fixture would report one sample
+	// more than the drill can see. A history with nothing at or before the
+	// moment of seeding has no count to report.
+	count := ""
+	if held.days > 0 && held.newestDaysAgo >= 0 {
+		count = fmt.Sprintf(
+			`promtool query instant http://127.0.0.1:8428 'sum(count_over_time(probavi_history[%dd]))'`,
+			held.days+10)
+	}
+
+	// vmbackup of an empty snapshot finishes before its own metrics server
+	// has started, then panics stopping it — `BUG: there is no server at
+	// ":8420"`, exit 2 — after logging the backup complete and writing its
+	// completion marker (measured on 1.150, every time). That one panic is
+	// let through; the marker is what the fixture relies on either way.
 	script := fmt.Sprintf(`set -e
 victoria-metrics -storageDataPath=/tmp/data -retentionPeriod=100y \
   -httpListenAddr=127.0.0.1:8428 >/tmp/vm.log 2>&1 &
@@ -121,19 +148,23 @@ until wget -q -O- http://127.0.0.1:8428/health 2>/dev/null | grep -qi ok; do
   i=$((i+1)); [ "$i" -gt 60 ] && { tail -n 5 /tmp/vm.log >&2; exit 1; }
   sleep 1
 done
-now=$(date +%%s)
+newest=$(( $(date +%%s) - %d * 86400 ))
 { i=0; while [ $i -lt %d ]; do
-    echo "probavi_history{job=\"history\"} $i $(( (now - i * 86400) * 1000 ))"
+    echo "probavi_history{job=\"history\"} $i $(( (newest - i * 86400) * 1000 ))"
     i=$((i + 1))
   done; } > /tmp/samples.txt
-wget -q -O- --post-file=/tmp/samples.txt http://127.0.0.1:8428/api/v1/import/prometheus
+if [ -s /tmp/samples.txt ]; then
+  wget -q -O- --post-file=/tmp/samples.txt http://127.0.0.1:8428/api/v1/import/prometheus
+fi
 wget -q -O- http://127.0.0.1:8428/internal/force_flush >/dev/null
 sleep 2
 snap=$(wget -q -O- http://127.0.0.1:8428/snapshot/create | sed 's/.*snapshot":"//;s/"}//')
 [ -n "$snap" ] || { echo "no snapshot name" >&2; exit 1; }
-vmbackup -storageDataPath=/tmp/data -snapshotName="$snap" -dst=fs:///tmp/backup >/dev/null 2>&1
+if ! vmbackup -storageDataPath=/tmp/data -snapshotName="$snap" -dst=fs:///tmp/backup >/tmp/vmbackup.log 2>&1; then
+  grep -q 'there is no server at' /tmp/vmbackup.log || { tail -n 5 /tmp/vmbackup.log >&2; exit 1; }
+fi
 test -f /tmp/backup/backup_complete.ignore
-promtool query instant http://127.0.0.1:8428   'sum(count_over_time(probavi_history[%dd]))'`, fixtureDays, fixtureDays+10)
+%s`, held.newestDaysAgo, held.days, count)
 	res, err := seed.Exec(ctx, sandbox.ExecRequest{Argv: []string{"sh", "-c", script}})
 	if err != nil {
 		t.Fatalf("seed exec: %v", err)
@@ -142,6 +173,9 @@ promtool query instant http://127.0.0.1:8428   'sum(count_over_time(probavi_hist
 		t.Fatalf("seed fixture: exit %d: %s", res.ExitCode, res.Stderr)
 	}
 	copyOut(t, ctx, seed, "/tmp/backup", dest)
+	if count == "" {
+		return 0
+	}
 	return sampleCount(t, string(res.Stdout))
 }
 
@@ -195,8 +229,14 @@ func newRig(t *testing.T, ctx context.Context) *drillRig {
 // samples the source server held when the snapshot froze it.
 func (r *drillRig) fixture(t *testing.T, ctx context.Context) (string, int) {
 	t.Helper()
+	return r.fixtureHolding(t, ctx, history{days: fixtureDays})
+}
+
+// fixtureHolding is fixture with a history of the test's choosing.
+func (r *drillRig) fixtureHolding(t *testing.T, ctx context.Context, held history) (string, int) {
+	t.Helper()
 	dest := filepath.Join(t.TempDir(), "backup")
-	return dest, makeBackupFixture(t, ctx, r.provider, r.seed, dest)
+	return dest, makeBackupFixture(t, ctx, r.provider, r.seed, dest, held)
 }
 
 // provision runs a drill against one artifact and returns what it
@@ -305,6 +345,55 @@ func TestRetentionDoesNotTrimTheArtifact(t *testing.T) {
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database,
 		fmt.Sprintf("count(min_over_time(probavi_history[%dd]) offset 40d)", fixtureDays+10),
 		"1")
+}
+
+// TestSeriesCensusIgnoresTheDrillsClock is issue #299. The read that
+// refuses an empty restore asked /api/v1/status/tsdb, which counts the
+// series seen on the current UTC day only: a backup passed the day it was
+// taken and was refused as source_corrupt from the next midnight on, the
+// same bytes. This suite never saw it, because every fixture held a
+// sample from the moment it was seeded.
+//
+// A source whose clock ran ahead is the same defect from the other side:
+// a census whose window ends at the drill's now refuses its backup until
+// the drill's clock catches up. And the last case keeps a census that
+// simply stopped refusing from passing this test.
+func TestSeriesCensusIgnoresTheDrillsClock(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	rig := newRig(t, ctx)
+
+	t.Run("a backup whose newest sample predates the drill's day is served", func(t *testing.T) {
+		fixture, samples := rig.fixtureHolding(t, ctx, history{days: fixtureDays, newestDaysAgo: 1})
+		sbx, _, probe, res, err := rig.provision(t, ctx, "victoriametrics_backup", fixture)
+		if err != nil {
+			t.Fatalf("provision: %v — a backup's age is not evidence about its content", err)
+		}
+		assertCheck(t, ctx, sbx, probe, res.Connection.Database,
+			fmt.Sprintf("sum(count_over_time(probavi_history[%dd]))", fixtureDays+10),
+			strconv.Itoa(samples))
+	})
+
+	t.Run("a backup of a source whose clock ran ahead is served", func(t *testing.T) {
+		fixture, _ := rig.fixtureHolding(t, ctx, history{days: 1, newestDaysAgo: -1})
+		if _, _, _, _, err := rig.provision(t, ctx, "victoriametrics_backup", fixture); err != nil {
+			t.Fatalf("provision: %v — a sample after the drill's now is still in the backup", err)
+		}
+	})
+
+	t.Run("a backup of a server holding nothing is still refused", func(t *testing.T) {
+		fixture, _ := rig.fixtureHolding(t, ctx, history{})
+		_, _, _, _, err := rig.provision(t, ctx, "victoriametrics_backup", fixture)
+		if err == nil {
+			t.Fatal("provision succeeded on a backup of a server that held no series")
+		}
+		var aerr *adapter.Error
+		if !errors.As(err, &aerr) || aerr.Code != "source_corrupt" ||
+			!strings.Contains(aerr.Message, "no series") {
+			t.Errorf("error = %v, want source_corrupt saying the restore holds no series", err)
+		}
+	})
 }
 
 // TestArchiveDrillUnpacksAndServes proves the tar kind end to end,
