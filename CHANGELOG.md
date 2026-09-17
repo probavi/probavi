@@ -42,6 +42,16 @@ always called out explicitly.
   `unsupported_source`, naming the compression, rather than as a corrupt
   one. The integration suite restores the same dump from a plain and a
   gzip archive, both named `dump.tar`.
+- **A Solr backup location holding ten or more backups is dated by the
+  one that is restored** (`adapters/solr` 0.6.0). The adapter reads
+  `startTime` from the highest `backup_N.properties` in the location, and
+  compared the ids as names: past the ninth backup, `backup_9` sorted
+  after `backup_10`. The drill names no backup id, so the engine restores
+  the latest backup the location holds — and the evidence record would
+  have carried an older backup's `backup.created_at` beside a restore of
+  the newest. The id is now read as a number, and a file name the engine
+  did not write is not read as a backup's record at all. Found while
+  covering source resolution in tests.
 
 ## [0.30.0] - 2026-09-16
 
