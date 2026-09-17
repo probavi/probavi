@@ -284,3 +284,76 @@ func TestUnreadableBytesAreReportedAsUnreadable(t *testing.T) {
 		wantUnreadable(t, kindData, dir)
 	})
 }
+
+// wantCode fails the test unless the refusal carries the code and the
+// words that say which read or which shape was wrong.
+func wantCode(t *testing.T, perr *protoError, code, message string) {
+	t.Helper()
+	if perr == nil || perr.Code != code || !strings.Contains(perr.Message, message) {
+		t.Errorf("got %+v, want %s mentioning %q", perr, code, message)
+	}
+}
+
+// TestWhatTheHostCannotReadIsUnreadable: the host stats and hashes the
+// artifact before anything moves. A read that fails is the host's failure,
+// and a metadata database that is not a regular file is the artifact's —
+// each says which.
+func TestWhatTheHostCannotReadIsUnreadable(t *testing.T) {
+	t.Run("a path beneath a file", func(t *testing.T) {
+		dir := writeDir(t, nil)
+		beneath := filepath.Join(dir, sqliteFile, "chroma.sqlite3")
+		for _, kind := range []string{kindData, kindDataTar} {
+			_, perr := inspect(kind, beneath)
+			wantCode(t, perr, "source_unreadable", "stat backup source")
+		}
+	})
+	t.Run("a metadata database that is a directory", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, sqliteFile), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_, perr := inspect(kindData, dir)
+		wantCode(t, perr, "source_corrupt", "not a regular file")
+	})
+	t.Run("a segment file the host may not open", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root reads a mode-000 file")
+		}
+		dir := writeDir(t, map[string][]byte{
+			filepath.Join(segmentDirName, "data_level0.bin"): []byte("index bytes"),
+		})
+		denyRead(t, filepath.Join(dir, segmentDirName, "data_level0.bin"))
+		_, perr := inspect(kindData, dir)
+		wantCode(t, perr, "source_unreadable", "")
+	})
+	t.Run("an archive the host may not open", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root reads a mode-000 file")
+		}
+		archive := filepath.Join(t.TempDir(), "chroma.tar")
+		if err := os.WriteFile(archive, []byte("tar bytes"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		denyRead(t, archive)
+		_, perr := inspect(kindDataTar, archive)
+		wantCode(t, perr, "source_unreadable", "")
+	})
+}
+
+// TestASegmentIdIsReadCharacterByCharacter: the name is a diagnostic only,
+// so it is recognised exactly rather than approximately — every hyphen in
+// its place and every other character a hex digit.
+func TestASegmentIdIsReadCharacterByCharacter(t *testing.T) {
+	for name, want := range map[string]bool{
+		segmentDirName:                         true,
+		"E41808A1-AF22-40BC-9EBD-31FC8E917B52": true,
+		"e41808a1_af22-40bc-9ebd-31fc8e917b52": false,
+		"e41808a1-af22-40bc-9ebd-31fc8e917b5g": false,
+		"e41808a1-af22-40bc-9ebd-31fc8e917b5":  false,
+		"hnsw":                                 false,
+	} {
+		if got := looksLikeSegmentDir(name); got != want {
+			t.Errorf("looksLikeSegmentDir(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
