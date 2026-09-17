@@ -257,3 +257,101 @@ func TestRejectBackupTimezone(t *testing.T) {
 		t.Fatalf("perr = %+v, want invalid_request", perr)
 	}
 }
+
+// closedTo makes a path unreadable for the rest of the test. Root reads a
+// mode-000 path regardless, so the test is skipped there rather than
+// asserting something the filesystem is not doing.
+func closedTo(t *testing.T, path string, restore os.FileMode) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 path")
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(path, restore); err != nil {
+			t.Errorf("restore the mode: %v", err)
+		}
+	})
+}
+
+// wantUnreadable fails the test unless the refusal is the host saying it
+// could not read something.
+func wantUnreadable(t *testing.T, perr *protoError, message string) {
+	t.Helper()
+	if perr == nil || perr.Code != "source_unreadable" || !strings.Contains(perr.Message, message) {
+		t.Errorf("got %+v, want source_unreadable mentioning %q", perr, message)
+	}
+}
+
+// TestWhatTheHostCannotReadIsUnreadable covers the reads this adapter
+// does on the drill host. None of them is a statement about the backup,
+// and each is refused as the host's own failure.
+func TestWhatTheHostCannotReadIsUnreadable(t *testing.T) {
+	t.Run("a path beneath a file", func(t *testing.T) {
+		file := filepath.Join(t.TempDir(), "snap.tar")
+		if err := os.WriteFile(file, []byte("tar bytes"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, kind := range []string{"prometheus_snapshot_tar", "prometheus_snapshot", "prometheus_snapshot_dir"} {
+			_, perr := resolveSource(kind, filepath.Join(file, "snap"))
+			if perr == nil || perr.Code != "source_unreadable" {
+				t.Errorf("%s: got %+v, want source_unreadable", kind, perr)
+			}
+		}
+	})
+	t.Run("an archive the host may not open", func(t *testing.T) {
+		path := buildTar(t, filepath.Join(t.TempDir(), "snap.tar"), false,
+			snapshotTarEntries("snapname", maxAug2026-60000, maxAug2026))
+		closedTo(t, path, 0o600)
+		_, perr := resolveSource("prometheus_snapshot_tar", path)
+		wantUnreadable(t, perr, "")
+	})
+	t.Run("a block file the host may not open", func(t *testing.T) {
+		dir := writeSnapshot(t, filepath.Join(t.TempDir(), "snap"), maxAug2026)
+		closedTo(t, filepath.Join(dir, "01BLOCK"+strings.Repeat("0", 19), "chunks", "000001"), 0o600)
+		_, perr := resolveSource("prometheus_snapshot", dir)
+		wantUnreadable(t, perr, "read backup directory")
+	})
+	t.Run("a snapshot directory holding no file", func(t *testing.T) {
+		empty := filepath.Join(t.TempDir(), "snap")
+		if err := os.MkdirAll(empty, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_, _, perr := dirChecksum(empty)
+		if perr == nil || perr.Code != "source_not_found" || !strings.Contains(perr.Message, "contains no files") {
+			t.Errorf("got %+v, want source_not_found", perr)
+		}
+	})
+	t.Run("an artifact that is not there to hash", func(t *testing.T) {
+		_, perr := fileChecksum(filepath.Join(t.TempDir(), "gone.tar"))
+		wantUnreadable(t, perr, "read backup source")
+	})
+}
+
+// TestTheTreeChecksumSeesALinkAsItself: a snapshot is a tree of hard
+// facts, and a symlink in it is one of them — its target is hashed as the
+// link's own content, so a link repointed at other bytes changes the
+// artifact's identity.
+func TestTheTreeChecksumSeesALinkAsItself(t *testing.T) {
+	dir := writeSnapshot(t, filepath.Join(t.TempDir(), "snap"), maxAug2026)
+	link := filepath.Join(dir, "latest")
+	if err := os.Symlink("01BLOCK"+strings.Repeat("0", 19), link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	before, _, perr := dirChecksum(dir)
+	if perr != nil {
+		t.Fatalf("dirChecksum: %+v", perr)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("somewhere-else", link); err != nil {
+		t.Fatal(err)
+	}
+	after, _, perr := dirChecksum(dir)
+	if perr != nil || after == before {
+		t.Errorf("checksum %s unchanged after the link moved (%+v)", after, perr)
+	}
+}

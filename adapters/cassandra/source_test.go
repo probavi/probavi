@@ -240,3 +240,101 @@ func TestRejectBackupTimezone(t *testing.T) {
 		t.Fatalf("perr = %+v, want invalid_request", perr)
 	}
 }
+
+// closedTo makes a path unreadable for the rest of the test. Root reads a
+// mode-000 path regardless, so the test is skipped there rather than
+// asserting something the filesystem is not doing.
+func closedTo(t *testing.T, path string, restore os.FileMode) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 path")
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(path, restore); err != nil {
+			t.Errorf("restore the mode: %v", err)
+		}
+	})
+}
+
+// wantUnreadable fails the test unless the refusal is the host saying it
+// could not read something.
+func wantUnreadable(t *testing.T, perr *protoError, message string) {
+	t.Helper()
+	if perr == nil || perr.Code != "source_unreadable" || !strings.Contains(perr.Message, message) {
+		t.Errorf("got %+v, want source_unreadable mentioning %q", perr, message)
+	}
+}
+
+// TestWhatTheHostCannotReadIsUnreadable covers the reads this adapter
+// does on the drill host before anything moves. None of them says
+// anything about the backup, and each is refused as the host's own
+// failure rather than as a damaged artifact.
+func TestWhatTheHostCannotReadIsUnreadable(t *testing.T) {
+	t.Run("a path beneath a file", func(t *testing.T) {
+		file := filepath.Join(t.TempDir(), "snapshot.tar")
+		if err := os.WriteFile(file, []byte("tar bytes"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, kind := range []string{"cassandra_snapshot_tar", "cassandra_snapshot", "cassandra_snapshot_dir"} {
+			_, perr := resolveSource(kind, filepath.Join(file, "snapshot"))
+			if perr == nil || perr.Code != "source_unreadable" {
+				t.Errorf("%s: got %+v, want source_unreadable", kind, perr)
+			}
+		}
+	})
+	t.Run("an archive the host may not open", func(t *testing.T) {
+		tree := writeTree(t, filepath.Join(t.TempDir(), "snap"), "shop.orders")
+		archive := treeToTar(t, tree, filepath.Join(t.TempDir(), "snapshot.tar"), "", false)
+		closedTo(t, archive, 0o600)
+		_, perr := resolveSource("cassandra_snapshot_tar", archive)
+		wantUnreadable(t, perr, "")
+	})
+	t.Run("an sstable the host may not open", func(t *testing.T) {
+		tree := writeTree(t, filepath.Join(t.TempDir(), "snap"), "shop.orders")
+		closedTo(t, filepath.Join(tree, "shop", "orders", "nb-1-big-Data.db"), 0o600)
+		_, perr := resolveSource("cassandra_snapshot", tree)
+		wantUnreadable(t, perr, "")
+	})
+	t.Run("a snapshot directory holding no file", func(t *testing.T) {
+		empty := filepath.Join(t.TempDir(), "snap")
+		if err := os.MkdirAll(empty, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_, _, perr := dirChecksum(empty)
+		if perr == nil || perr.Code != "source_not_found" || !strings.Contains(perr.Message, "contains no files") {
+			t.Errorf("got %+v, want source_not_found", perr)
+		}
+	})
+	t.Run("an artifact that is not there to hash", func(t *testing.T) {
+		_, perr := fileChecksum(filepath.Join(t.TempDir(), "gone.tar"))
+		wantUnreadable(t, perr, "")
+	})
+}
+
+// TestTheTreeChecksumSeesALinkAsItself: a link inside a snapshot is part
+// of the artifact's identity, so repointing it changes the checksum the
+// evidence record carries.
+func TestTheTreeChecksumSeesALinkAsItself(t *testing.T) {
+	tree := writeTree(t, filepath.Join(t.TempDir(), "snap"), "shop.orders")
+	link := filepath.Join(tree, "shop", "latest")
+	if err := os.Symlink("orders", link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	before, _, perr := dirChecksum(tree)
+	if perr != nil {
+		t.Fatalf("dirChecksum: %+v", perr)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("somewhere-else", link); err != nil {
+		t.Fatal(err)
+	}
+	after, _, perr := dirChecksum(tree)
+	if perr != nil || after == before {
+		t.Errorf("checksum %s unchanged after the link moved (%+v)", after, perr)
+	}
+}
