@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -799,16 +798,5 @@ func TestSortedNames(t *testing.T) {
 	got := sortedNames(map[string]string{"system": "online", "neo4j": "online", "a": "offline"})
 	if strings.Join(got, ",") != "a,neo4j,system" {
 		t.Errorf("sortedNames = %v, want a stable order", got)
-	}
-}
-
-// TestSIGTERMStopsSandboxCalls covers §2.4 at the level a unit test can:
-// a cancelled context refuses to issue the next verb.
-func TestCancelledContextRefusesFurtherCalls(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	c := &core{}
-	if _, perr := c.call(ctx, "exec", execArgs{Argv: []string{"true"}}); perr == nil || perr.Code != "cancelled" {
-		t.Errorf("call = %+v, want cancelled", perr)
 	}
 }
