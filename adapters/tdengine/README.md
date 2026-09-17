@@ -29,7 +29,7 @@ used below, so a dump written without it simply says less about itself.
 | --- | --- |
 | `taosdump` | One `taosdump` output directory, named at either level |
 | `taosdump_dir` | A directory of them; the newest by the dumps' own recorded instant |
-| `taosdump_tar` | One tar archive of such a directory |
+| `taosdump_tar` | One tar archive of such a directory, plain or gzip |
 
 "Either level" is not a convenience. **`taosdump -i` pointed at the
 directory `-o` was given exits 0 and creates nothing at all** (measured),
@@ -42,6 +42,13 @@ which one the drill meant.
 An archive is read host-side in one streaming pass, so it says the same
 things about itself a directory does: the database it holds, the retention
 it declares, when it was taken, how many rows it claims.
+
+The compression is read from the archive's first bytes, never from its
+name. A gzip archive is decompressed for that pass, and the sandbox's own
+`tar` unpacks it without being told (measured on both verified images). A
+bzip2, xz or zstd archive is refused as an unsupported source rather than
+read as a damaged tar: an intact backup in a format the adapter does not
+read is not a corrupt one.
 
 ## The exit code is not the verdict
 

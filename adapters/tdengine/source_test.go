@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -168,6 +169,56 @@ func TestAnArchiveSaysWhatTheDirectoryItHoldsSays(t *testing.T) {
 	}
 }
 
+// gzipBytes compresses content the way `tar -czf` does.
+func gzipBytes(t *testing.T, content []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestTheBytesDecideWhetherAnArchiveIsCompressed pins the reading of a
+// gzip archive: it claims what the same archive uncompressed claims, is
+// identified by the bytes the drill named, and neither name misleads the
+// host — a gzip archive called dump.tar is read through gzip, and a plain
+// one called dump.tar.gz is not.
+func TestTheBytesDecideWhetherAnArchiveIsCompressed(t *testing.T) {
+	plain := archiveDump(t, writeDump(t, dumpOptions{database: "plant", nested: true, keepDays: 30, startedAgo: time.Hour}), "")
+	raw, err := os.ReadFile(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	misnamed := filepath.Join(t.TempDir(), "dump.tar.gz")
+	compressed := filepath.Join(t.TempDir(), "dump.tar")
+	for path, content := range map[string][]byte{misnamed: raw, compressed: gzipBytes(t, raw)} {
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, perr := resolveSource(context.Background(), "taosdump_tar", plain)
+	if perr != nil {
+		t.Fatalf("the plain archive: %+v", perr)
+	}
+	for _, archive := range []string{misnamed, compressed} {
+		src, perr := resolveSource(context.Background(), "taosdump_tar", archive)
+		if perr != nil {
+			t.Fatalf("%s: %+v", archive, perr)
+		}
+		if got := claims(src); got != claims(want) {
+			t.Errorf("%s claims %s\n  the plain archive claims %s", archive, got, claims(want))
+		}
+		if sum, size := fileSum(t, archive); src.checksum != sum || src.sizeBytes != size {
+			t.Errorf("%s identity = %s / %d, want its bytes on disk %s / %d", archive, src.checksum, src.sizeBytes, sum, size)
+		}
+	}
+}
+
 // TestTheFirstOfEachFileInAnArchiveIsTheOneRead pins takeMeta's rule: the
 // first schema that creates a database and the first result file win, and
 // only regular members are read at all — so a nested archive cannot talk
@@ -230,6 +281,7 @@ func TestAnArchiveIsRefusedForWhatItIsNot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	gzipped := gzipBytes(t, bytes.Repeat(raw, 8))
 	write := func(name string, content []byte) string {
 		path := filepath.Join(t.TempDir(), name)
 		if err := os.WriteFile(path, content, 0o600); err != nil {
@@ -263,6 +315,23 @@ func TestAnArchiveIsRefusedForWhatItIsNot(t *testing.T) {
 		},
 		"an archive of the directory beside a dump": {
 			archiveDump(t, writeDump(t, dumpOptions{noSchema: true}), ""), "source_corrupt", "holds no taosdump backup",
+		},
+		"gzip bytes that do not decompress": {
+			write("dump.tar", append([]byte{0x1f, 0x8b}, bytes.Repeat([]byte("x"), 64)...)), "source_corrupt", "read archive: gzip",
+		},
+		"a gzip archive cut off": {
+			write("dump.tar", gzipped[:len(gzipped)/2]), "source_corrupt", "unexpected EOF",
+		},
+		// An intact backup in a compression this adapter does not read is
+		// not a damaged one, and the code says whose problem it is.
+		"a bzip2 archive": {
+			write("dump.tar", []byte("BZh91AY&SY")), "unsupported_source", "bzip2-compressed",
+		},
+		"an xz archive": {
+			write("dump.tar", []byte{0xfd, '7', 'z', 'X', 'Z', 0x00, 0x00, 0x04}), "unsupported_source", "xz-compressed",
+		},
+		"a zstd archive": {
+			write("dump.tar", []byte{0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x58}), "unsupported_source", "zstd-compressed",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

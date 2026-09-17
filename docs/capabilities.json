@@ -1239,7 +1239,7 @@
       "name": "TDengine",
       "status": "experimental",
       "since": "0.28.0",
-      "adapter_version": "0.3.0",
+      "adapter_version": "0.4.0",
       "engine": {
         "id": "tdengine",
         "name": "TDengine"
@@ -1270,7 +1270,7 @@
         },
         {
           "id": "taosdump_tar",
-          "name": "One tar archive of a taosdump output directory",
+          "name": "One tar archive of a taosdump output directory, plain or gzip — the compression read from the bytes, never the name",
           "pitr": false
         }
       ],
