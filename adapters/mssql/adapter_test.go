@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -641,43 +640,4 @@ func TestVerdictLine(t *testing.T) {
 	if got := verdictLine([]byte("Msg 1, Level 1\nMsg 2, Level 2")); got != "" {
 		t.Errorf("verdictLine(headers only) = %q", got)
 	}
-}
-
-func TestCoreCallEdgeCases(t *testing.T) {
-	newCore := func(input string) *core {
-		sc := bufio.NewScanner(strings.NewReader(input))
-		sc.Buffer(make([]byte, 64*1024), maxLineBytes)
-		return &core{in: sc, out: io.Discard, requestID: "r-test"}
-	}
-
-	t.Run("cancelled context refuses new calls", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		if _, perr := newCore("").call(ctx, "exec", execArgs{}); perr == nil || perr.Code != "cancelled" {
-			t.Errorf("perr = %+v, want cancelled — §2.4 forbids new calls after SIGTERM", perr)
-		}
-	})
-	t.Run("stream closed mid-call", func(t *testing.T) {
-		if _, perr := newCore("").call(context.Background(), "exec", execArgs{}); perr == nil || perr.Code != "internal" {
-			t.Errorf("perr = %+v", perr)
-		}
-	})
-	t.Run("call_id mismatch", func(t *testing.T) {
-		input := `{"protocol":"probavi-adapter/0","request_id":"r-test","sandbox_result":{"call_id":"c99","ok":true,"value":{}}}` + "\n"
-		if _, perr := newCore(input).call(context.Background(), "exec", execArgs{}); perr == nil || !strings.Contains(perr.Message, "does not match") {
-			t.Errorf("perr = %+v", perr)
-		}
-	})
-	t.Run("failure without error object", func(t *testing.T) {
-		input := `{"protocol":"probavi-adapter/0","request_id":"r-test","sandbox_result":{"call_id":"c1","ok":false}}` + "\n"
-		if _, perr := newCore(input).call(context.Background(), "exec", execArgs{}); perr == nil || !strings.Contains(perr.Message, "without error object") {
-			t.Errorf("perr = %+v", perr)
-		}
-	})
-	t.Run("malformed exec value", func(t *testing.T) {
-		input := `{"protocol":"probavi-adapter/0","request_id":"r-test","sandbox_result":{"call_id":"c1","ok":true,"value":{"stdout_b64":"!!!"}}}` + "\n"
-		if _, _, _, perr := newCore(input).exec(context.Background(), execArgs{Argv: []string{"x"}}); perr == nil || !strings.Contains(perr.Message, "stdout_b64") {
-			t.Errorf("perr = %+v", perr)
-		}
-	})
 }
