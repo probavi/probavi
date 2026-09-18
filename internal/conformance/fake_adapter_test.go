@@ -94,6 +94,14 @@ func (f *fakeAdapter) probe() int {
 	if f.mode == "bare-message" {
 		f.write(map[string]any{"protocol": protocolVersion, "request_id": f.rid})
 	}
+	if f.mode == "probe-payload-not-object" {
+		// §6.1 says the payload is an object; this one is a string, and
+		// the suite has to say so rather than fail decoding it.
+		f.write(map[string]any{
+			"protocol": protocolVersion, "request_id": f.rid, "ok": true, "payload": "not an object",
+		})
+		return 0
+	}
 	code := f.finalOK(f.probePayload())
 	if f.mode == "double-final" {
 		f.finalOK(map[string]any{"name": "fake-again"})
@@ -179,6 +187,29 @@ func (f *fakeAdapter) provision(payload json.RawMessage) int {
 		// error result, not a crash; this fake shrugs and proceeds.
 		f.call("teleport", map[string]any{})
 	}
+	if f.mode == "put-file-provision" {
+		// The other half of §4: the simulated sandbox has to answer a
+		// put_file as readily as an exec.
+		f.call("put_file", map[string]any{
+			"source_path": req.Source.Path, "dest_path": "/tmp/probavi-fake", "mode": "0600",
+		})
+	}
+	if f.mode == "die-after-first-call" {
+		// Issues a call and leaves without reading its answer: the harness
+		// meets a dead adapter mid-answer, which is a verdict about the
+		// adapter rather than a failure of the suite. Stdin is closed
+		// first, so the harness's answer always meets a closed pipe
+		// rather than racing the exit.
+		if err := os.Stdin.Close(); err != nil {
+			return 1
+		}
+		f.write(map[string]any{
+			"protocol": protocolVersion, "request_id": f.rid,
+			"sandbox_call": map[string]any{"call_id": "c9", "verb": "exec",
+				"args": map[string]any{"argv": []string{"true"}}},
+		})
+		return 0
+	}
 	if f.mode != "no-calls-provision" {
 		f.call("exec", map[string]any{"argv": []string{"fake_restore"}}) // restore
 	}
@@ -186,6 +217,12 @@ func (f *fakeAdapter) provision(payload json.RawMessage) int {
 		return f.finalError(f.cancelCode(), nil)
 	}
 
+	if f.mode == "provision-payload-not-object" {
+		f.write(map[string]any{
+			"protocol": protocolVersion, "request_id": f.rid, "ok": true, "payload": "not an object",
+		})
+		return 0
+	}
 	return f.finalOK(f.provisionResponse(raw))
 }
 

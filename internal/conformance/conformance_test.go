@@ -132,6 +132,11 @@ func TestViolationsAreDetected(t *testing.T) {
 		{"ignore-sigterm", "sigterm.cancels", "after SIGTERM", Options{}},
 		{"sigterm-wrong-code", "sigterm.cancels", "want cancelled", Options{}},
 		{"hang-on-sigterm", "sigterm.cancels", "grace", Options{Grace: 700 * time.Millisecond}},
+		// §6.1 and §6.2 both say "object": a payload that decodes into
+		// something else is named as such rather than met with a decoder
+		// error nobody can act on.
+		{"probe-payload-not-object", "probe.shape", "not a §6.1 object", Options{}},
+		{"provision-payload-not-object", "provision.happy_path", "not a §6.2 object", Options{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.mode, func(t *testing.T) {
@@ -366,5 +371,58 @@ func TestClosedPipe(t *testing.T) {
 				t.Errorf("closedPipe(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestPutFileIsAnsweredLikeAnExec: §4 defines two verbs, and the
+// simulated sandbox of §10 answers both — an adapter that moves its
+// artifact with put_file must be able to pass the suite.
+func TestPutFileIsAnsweredLikeAnExec(t *testing.T) {
+	report := runSuite(t, "put-file-provision", Options{})
+	if c := check(t, report, "provision.happy_path"); !c.OK {
+		t.Errorf("provision.happy_path = %+v, want a pass: a put_file must be answered", c)
+	}
+	if report.Failed != 0 {
+		t.Errorf("report = %d failed, want none: %+v", report.Failed, report.Checks)
+	}
+}
+
+// TestAnAdapterThatDiesMidAnswerIsAVerdict: the suite writes a sandbox
+// result to an adapter that has already gone. That is the adapter's
+// behaviour to report — it exited without a final response (§2.3) — and
+// never a failure of the harness itself.
+func TestAnAdapterThatDiesMidAnswerIsAVerdict(t *testing.T) {
+	report := runSuite(t, "die-after-first-call", Options{})
+	c := check(t, report, "provision.happy_path")
+	if c.OK {
+		t.Errorf("provision.happy_path = %+v, want a failure for an adapter that left mid-operation", c)
+	}
+	if framing := check(t, report, "framing.discipline"); !framing.OK {
+		t.Errorf("framing.discipline = %+v, want no framing violation: the adapter framed what it sent", framing)
+	}
+}
+
+// TestTheOperatorsOwnArtifactIsUsedWhenNamed: Options.SourcePath is what a
+// drill would restore, so the suite provisions from it rather than from a
+// temporary file of random bytes — and creates nothing of its own.
+func TestTheOperatorsOwnArtifactIsUsedWhenNamed(t *testing.T) {
+	dir := t.TempDir()
+	artifact := filepath.Join(dir, "fake.dump")
+	if err := os.WriteFile(artifact, []byte("the operator's own backup\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report := runSuite(t, "conformant", Options{SourcePath: artifact})
+	if report.Failed != 0 {
+		t.Fatalf("report = %d failed: %+v", report.Failed, report.Checks)
+	}
+	if _, err := os.Stat(artifact); err != nil {
+		t.Errorf("the named artifact is the operator's: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("directory holds %d entries, want only the artifact itself", len(entries))
 	}
 }
