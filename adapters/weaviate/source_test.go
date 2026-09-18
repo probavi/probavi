@@ -488,3 +488,186 @@ func TestOneLineKeepsMessagesEvidenceSafe(t *testing.T) {
 		t.Errorf("oneLine = %q, want %q", got, want)
 	}
 }
+
+// closedTo makes a path unreadable for the rest of the test. Root reads a
+// mode-000 path regardless, so the test is skipped there rather than
+// asserting something the filesystem is not doing.
+func closedTo(t *testing.T, path string, restore os.FileMode) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 path")
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(path, restore); err != nil {
+			t.Errorf("restore the mode: %v", err)
+		}
+	})
+}
+
+// wantRefused fails the test unless the refusal carries the code and the
+// words that name what went wrong.
+func wantRefused(t *testing.T, perr *protoError, code, message string) {
+	t.Helper()
+	if perr == nil || perr.Code != code || !strings.Contains(perr.Message, message) {
+		t.Errorf("got %+v, want %s mentioning %q", perr, code, message)
+	}
+}
+
+// TestTheArchiveKindRefusesTheShapesAnOperatorGetsWrong: the archive is
+// judged by the sandbox's tar and then by the engine, so the host only
+// refuses what it can see without reading content — and an empty file is
+// a failed backup job rather than an archive.
+func TestTheArchiveKindRefusesTheShapesAnOperatorGetsWrong(t *testing.T) {
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "empty.tar")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backup := writeBackupFixture(t, t.TempDir(), "nightly", backupSpec{})
+	for name, tc := range map[string]struct {
+		path, code, message string
+	}{
+		"a path that does not exist": {
+			filepath.Join(dir, "gone.tar"), "source_not_found", "does not exist",
+		},
+		"a directory":    {backup, "invalid_request", "use kind weaviate_backup"},
+		"an empty file":  {empty, "source_corrupt", "is empty"},
+		"beneath a file": {filepath.Join(empty, "nightly.tar"), "source_unreadable", "stat backup source"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, perr := resolveSource("weaviate_backup_tar", tc.path)
+			wantRefused(t, perr, tc.code, tc.message)
+		})
+	}
+}
+
+// TestWhatTheHostCannotReadIsUnreadable: the host hashes the artifact and
+// reads the backup's own metadata before anything moves. A read that
+// fails is the host's failure, never a verdict about the backup.
+func TestWhatTheHostCannotReadIsUnreadable(t *testing.T) {
+	t.Run("an archive the host may not open", func(t *testing.T) {
+		archive := tarOf(t, writeBackupFixture(t, t.TempDir(), "nightly", backupSpec{}))
+		closedTo(t, archive, 0o600)
+		_, perr := resolveSource("weaviate_backup_tar", archive)
+		wantRefused(t, perr, "source_unreadable", "read backup source")
+	})
+	t.Run("a chunk the host may not open", func(t *testing.T) {
+		backup := writeBackupFixture(t, t.TempDir(), "nightly", backupSpec{})
+		closedTo(t, filepath.Join(backup, metaFileName), 0o600)
+		_, perr := resolveSource("weaviate_backup", backup)
+		wantRefused(t, perr, "source_unreadable", "read "+metaFileName)
+	})
+	t.Run("a directory of backups the host may not list", func(t *testing.T) {
+		parent := t.TempDir()
+		writeBackupFixture(t, parent, "nightly", backupSpec{})
+		closedTo(t, parent, 0o755)
+		_, perr := resolveSource("weaviate_backup_dir", parent)
+		wantRefused(t, perr, "source_unreadable", "")
+	})
+	t.Run("bytes that will not stream", func(t *testing.T) {
+		_, perr := fileChecksum(t.TempDir())
+		wantRefused(t, perr, "source_unreadable", "read backup source")
+	})
+}
+
+// TestADirectoryOfBackupsSaysWhyItHasNoWinner: "nothing found" is never
+// the whole story — an attempt that is still running, a directory holding
+// entries that are not backups, and an empty directory each read
+// differently to an operator.
+func TestADirectoryOfBackupsSaysWhyItHasNoWinner(t *testing.T) {
+	t.Run("a directory with nothing in it", func(t *testing.T) {
+		_, perr := resolveSource("weaviate_backup_dir", t.TempDir())
+		wantRefused(t, perr, "source_not_found", "contains no files")
+	})
+	t.Run("a directory holding no backup", func(t *testing.T) {
+		parent := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(parent, "logs"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(parent, "notes.txt"), []byte("not a backup\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, perr := resolveSource("weaviate_backup_dir", parent)
+		wantRefused(t, perr, "source_not_found", "were passed over")
+	})
+}
+
+// TestAnUnparseableInstantNeverWins: a backup ranks by the instant it
+// states about itself, and one that states something unreadable ranks as
+// the zero instant rather than as now.
+func TestAnUnparseableInstantNeverWins(t *testing.T) {
+	if got := parseInstant("the third of September"); !got.IsZero() {
+		t.Errorf("parseInstant = %v, want the zero instant", got)
+	}
+	if got := parseInstant(fixtureCompletedAt); got.IsZero() {
+		t.Errorf("parseInstant(%q) = zero, want the instant it states", fixtureCompletedAt)
+	}
+}
+
+// TestAStatusTheBackupDidNotStateIsSaidAsSuch: a refusal quoting an empty
+// status would read as a bug in the adapter rather than as a backup that
+// never said.
+func TestAStatusTheBackupDidNotStateIsSaidAsSuch(t *testing.T) {
+	if got := orUnstated("  "); got != "(unstated)" {
+		t.Errorf("orUnstated = %q, want (unstated)", got)
+	}
+	if got := orUnstated("TRANSFERRING"); got != "TRANSFERRING" {
+		t.Errorf("orUnstated = %q, want the status the backup states", got)
+	}
+}
+
+// TestTheTreeChecksumMeasuresEveryPartOfTheArtifact: the hash reaches the
+// evidence record as the backup's identity, so it covers the chunks
+// themselves, it sees a link as its own target, and a chunk the host
+// cannot read stops it rather than quietly hashing less.
+func TestTheTreeChecksumMeasuresEveryPartOfTheArtifact(t *testing.T) {
+	spec := backupSpec{}.withDefaults("nightly")
+	chunk := filepath.Join("nightly", spec.node, spec.classes[0], "chunk-1")
+
+	t.Run("a changed chunk changes the identity", func(t *testing.T) {
+		parent := t.TempDir()
+		backup := writeBackupFixture(t, parent, "nightly", backupSpec{})
+		before, _, perr := dirChecksum(backup)
+		if perr != nil {
+			t.Fatalf("dirChecksum: %+v", perr)
+		}
+		if err := os.WriteFile(filepath.Join(parent, chunk), []byte("other chunk bytes"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		after, _, perr := dirChecksum(backup)
+		if perr != nil || after == before {
+			t.Errorf("checksum %s unchanged after a chunk changed (%+v)", after, perr)
+		}
+	})
+	t.Run("a link is hashed as the link it is", func(t *testing.T) {
+		backup := writeBackupFixture(t, t.TempDir(), "nightly", backupSpec{})
+		link := filepath.Join(backup, "latest")
+		if err := os.Symlink(spec.node, link); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		before, _, perr := dirChecksum(backup)
+		if perr != nil {
+			t.Fatalf("dirChecksum: %+v", perr)
+		}
+		if err := os.Remove(link); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("somewhere-else", link); err != nil {
+			t.Fatal(err)
+		}
+		after, _, perr := dirChecksum(backup)
+		if perr != nil || after == before {
+			t.Errorf("checksum %s unchanged after the link moved (%+v)", after, perr)
+		}
+	})
+	t.Run("a chunk the host may not open", func(t *testing.T) {
+		parent := t.TempDir()
+		backup := writeBackupFixture(t, parent, "nightly", backupSpec{})
+		closedTo(t, filepath.Join(parent, chunk), 0o600)
+		_, _, perr := dirChecksum(backup)
+		wantRefused(t, perr, "source_unreadable", "")
+	})
+}
