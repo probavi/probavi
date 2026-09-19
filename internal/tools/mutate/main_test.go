@@ -1,6 +1,7 @@
 package main
 
 import (
+	"go/parser"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -520,5 +521,110 @@ func TestRunMutantRefusesAFileOutsideTheRoot(t *testing.T) {
 	_, err = runMutant(root, dir, "./...", edit{file: outside, old: "<", new: "<="}, time.Second)
 	if err == nil || !strings.Contains(err.Error(), "outside the package directory") {
 		t.Errorf("runMutant = %v, want a refusal naming the containment", err)
+	}
+}
+
+// TestTheZeroBesideARefusalIsLeftAlone: Go returns a zero with an error
+// because it must, and every caller reads the error instead. Mutating
+// that zero produces a survivor nobody can act on, so it is not produced
+// at all — while a zero that is an answer stays mutable.
+func TestTheZeroBesideARefusalIsLeftAlone(t *testing.T) {
+	const src = `package p
+
+import (
+	"errors"
+	"fmt"
+)
+
+func built() (int, error) {
+	return 0, fmt.Errorf("no")
+}
+
+func sentinel() (int, error) {
+	return 0, errors.New("no")
+}
+
+func named() (int, error) {
+	malformed := fmt.Errorf("no")
+	if true {
+		return 0, malformed
+	}
+	return 0, nil
+}
+
+func passedOn() (int, error) {
+	v, err := built()
+	if err != nil {
+		return 0, err
+	}
+	return v, nil
+}
+
+func reported() (int, bool) {
+	return 0, false
+}
+
+func counted() (int, error) {
+	// A one beside a refusal still means something, and so does a zero
+	// returned with no refusal at all.
+	if false {
+		return 1, errors.New("no")
+	}
+	return 0, nil
+}
+`
+	edits, err := collect("sample.go", []byte(src))
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	zeros := 0
+	ones := 0
+	for _, e := range edits {
+		switch e.old {
+		case "0":
+			zeros++
+		case "1":
+			ones++
+		}
+	}
+	// The zeros left mutable are the two returned beside a nil error, in
+	// named() and counted(); every other zero accompanies a refusal.
+	if zeros != 2 {
+		t.Errorf("collect kept %d zeros, want the two that are answers: %v", zeros, edits)
+	}
+	if ones != 1 {
+		t.Errorf("collect kept %d ones, want the one beside a refusal: %v", ones, edits)
+	}
+}
+
+// TestARefusalIsRecognisedByShapeNotByLuck pins the rule itself, because
+// it decides what never reaches a survivor list.
+func TestARefusalIsRecognisedByShapeNotByLuck(t *testing.T) {
+	for name, tc := range map[string]struct {
+		expr string
+		want bool
+	}{
+		"fmt.Errorf":        {`fmt.Errorf("x")`, true},
+		"errors.New":        {`errors.New("x")`, true},
+		"errors.Join":       {`errors.Join(a, b)`, true},
+		"err":               {`err`, true},
+		"a suffixed error":  {`werr`, true},
+		"an exported error": {`readErr`, true},
+		"false":             {`false`, true},
+		"true":              {`true`, false},
+		"nil":               {`nil`, false},
+		"a plain value":     {`count`, false},
+		"another call":      {`compute()`, false},
+		"a package call":    {`json.Marshal(v)`, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			expr, err := parser.ParseExpr(tc.expr)
+			if err != nil {
+				t.Fatalf("parse %q: %v", tc.expr, err)
+			}
+			if got := isRefusal(expr, map[string]bool{}); got != tc.want {
+				t.Errorf("isRefusal(%s) = %v, want %v", tc.expr, got, tc.want)
+			}
+		})
 	}
 }
