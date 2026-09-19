@@ -20,4 +20,4 @@ internal 96.2
 # are failures an earlier layer catches first — an unreadable file is
 # refused as uncommitted work before the read of it is reached. It
 # carries its own measured floor rather than dragging the area's.
-internal/tools/mutate 90.5
+internal/tools/mutate 91.0

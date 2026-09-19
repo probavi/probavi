@@ -5,9 +5,11 @@
 # negation dropped, a 0 turned into a 1 — that the package's own tests
 # did not notice. Each survivor is either a missing assertion or a change
 # with no observable effect, and the ceiling exists because the second
-# kind cannot be driven to zero: a value returned on an error path the
-# caller ignores, a comparison the enclosing condition already settled, a
-# guard the next line repeats.
+# kind cannot be driven to zero: an error check that only decides whether
+# a debug line is logged, a comparison the enclosing condition already
+# settled, a guard the next line repeats. The commonest shape of all —
+# the zero Go returns beside an error — is not mutated at all, so it never
+# reaches this ceiling.
 #
 # Lowering a ceiling in a pull request that asserts more is welcome.
 # Raising one is a decision to argue for in the pull request body, the
@@ -17,6 +19,6 @@
 # Every package listed here is run in full, so this file is also the
 # scope: a package joins the run by being declared, with a measured
 # ceiling attached.
-internal/evidence 15
+internal/evidence 12
 internal/adapter  15
-spec/evidence     10
+spec/evidence      1

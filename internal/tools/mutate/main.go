@@ -14,6 +14,11 @@
 // survivor, and every survivor is either a missing assertion or a change
 // with no observable effect.
 //
+// What it deliberately leaves alone is the zero Go returns beside an
+// error, because every caller reads the error instead: mutating it
+// produces a survivor nobody can act on, and a list full of those buries
+// the ones worth reading.
+//
 // Survivors are budgeted rather than forbidden. Some changes genuinely
 // cannot be observed — a value returned on an error path the caller
 // ignores, a comparison the enclosing condition already settled, a guard
@@ -206,6 +211,7 @@ func collect(path string, src []byte) ([]edit, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
+	skip := zerosBesideARefusal(f)
 	var edits []edit
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch e := n.(type) {
@@ -222,7 +228,7 @@ func collect(path string, src []byte) ([]edit, error) {
 		case *ast.BasicLit:
 			// 0 and 1 are where the boundaries live: an empty slice, a
 			// first element, a budget of none.
-			if e.Kind == token.INT && (e.Value == "0" || e.Value == "1") {
+			if e.Kind == token.INT && (e.Value == "0" || e.Value == "1") && !skip[e.ValuePos] {
 				p := fset.Position(e.ValuePos)
 				to := "1"
 				if e.Value == "1" {
@@ -234,6 +240,114 @@ func collect(path string, src []byte) ([]edit, error) {
 		return true
 	})
 	return edits, nil
+}
+
+// zerosBesideARefusal marks the zeros Go returns because it must, not
+// because the number means anything: `return 0, err`, `return 0, false`,
+// `return 0, fmt.Errorf(...)`. Every caller of such a function reads the
+// error or the boolean and ignores the value, so changing the zero
+// changes nothing any test could observe — and a survivor list full of
+// them buries the ones worth reading.
+//
+// Only a literal 0 beside a refusal is skipped. A 1 there still means
+// something, and a 0 returned with a nil error is a real answer: both
+// stay mutable.
+func zerosBesideARefusal(f *ast.File) map[token.Pos]bool {
+	skip := map[token.Pos]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		body, ok := functionBody(n)
+		if !ok {
+			return true
+		}
+		refusals := refusalNames(body)
+		ast.Inspect(body, func(n ast.Node) bool {
+			ret, ok := n.(*ast.ReturnStmt)
+			if !ok || len(ret.Results) < 2 {
+				return true
+			}
+			if !slices.ContainsFunc(ret.Results, func(r ast.Expr) bool { return isRefusal(r, refusals) }) {
+				return true
+			}
+			for _, r := range ret.Results {
+				if lit, ok := r.(*ast.BasicLit); ok && lit.Kind == token.INT && lit.Value == "0" {
+					skip[lit.ValuePos] = true
+				}
+			}
+			return true
+		})
+		return true
+	})
+	return skip
+}
+
+// functionBody reports the body of a function declaration or literal.
+func functionBody(n ast.Node) (*ast.BlockStmt, bool) {
+	switch fn := n.(type) {
+	case *ast.FuncDecl:
+		return fn.Body, fn.Body != nil
+	case *ast.FuncLit:
+		return fn.Body, fn.Body != nil
+	}
+	return nil, false
+}
+
+// refusalNames are the local variables a function fills with an error it
+// built itself, so that `malformed := fmt.Errorf(...); return 0, malformed`
+// reads as the refusal it is.
+func refusalNames(body *ast.BlockStmt) map[string]bool {
+	names := map[string]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+			return true
+		}
+		ident, ok := assign.Lhs[0].(*ast.Ident)
+		if !ok || !buildsAnError(assign.Rhs[0]) {
+			return true
+		}
+		names[ident.Name] = true
+		return true
+	})
+	return names
+}
+
+// isRefusal reports whether one returned expression says "this did not
+// work": an error the function built, a variable holding one, a name the
+// repository's own convention reserves for one, or a plain false.
+func isRefusal(e ast.Expr, refusals map[string]bool) bool {
+	switch v := e.(type) {
+	case *ast.CallExpr:
+		return buildsAnError(v)
+	case *ast.Ident:
+		if v.Name == "false" || refusals[v.Name] {
+			return true
+		}
+		// err, werr, cerr, perr: the suffix is this repository's
+		// convention for an error or a refusal, kept consistently.
+		return strings.HasSuffix(v.Name, "err") || strings.HasSuffix(v.Name, "Err")
+	}
+	return false
+}
+
+// buildsAnError reports whether a call makes an error value.
+func buildsAnError(e ast.Expr) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	switch pkg.Name + "." + sel.Sel.Name {
+	case "errors.New", "errors.Join", "fmt.Errorf":
+		return true
+	}
+	return false
 }
 
 // apply splices one edit into a file's bytes.
