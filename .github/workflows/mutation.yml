@@ -1,0 +1,73 @@
+# Probavi mutation testing — measures what the tests would refuse, not
+# what they ran.
+#
+# Coverage is already a gate on every pull request, and it answers a
+# narrower question than it is usually read as answering: whether a line
+# executed, not whether anything would have failed had the line behaved
+# differently. At 97% coverage, changing a signature-length check in
+# internal/evidence left every test green, and so did replacing a drill's
+# declared source parameters with empty ones on their way to the adapter.
+# Both are asserted now; this workflow is how the next one is found.
+#
+# Weekly rather than per pull request. A full run mutates every operator
+# in a package and runs that package's tests once per mutant, which costs
+# minutes per package — worth paying on a schedule, not on a keystroke.
+# The packages it covers are declared in .mutation-budget, each with the
+# number of survivors it may carry.
+
+name: Mutation
+
+on:
+  schedule:
+    # Weekly, offset from the fuzz and version-matrix runs.
+    - cron: "37 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Run a single declared package (path, e.g. internal/evidence)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mutate:
+    name: Mutate the trust core
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: mutate every declared package
+        # The tool edits sources in place and restores them, so it refuses
+        # to start on a dirty tree. A runner's checkout is clean, and the
+        # step below proves the working tree came back the way it was.
+        env:
+          ONLY: ${{ inputs.only }}
+        run: |
+          set -euo pipefail
+          if [ -n "$ONLY" ]; then
+            go run ./internal/tools/mutate -only "$ONLY"
+          else
+            go run ./internal/tools/mutate
+          fi
+
+      - name: the working tree is as it was
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::mutation testing left the tree modified — a mutant was not restored"
+            git status --porcelain
+            exit 1
+          fi

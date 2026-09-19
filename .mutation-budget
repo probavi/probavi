@@ -1,0 +1,21 @@
+# Surviving mutants each package may carry, enforced by
+# internal/tools/mutate in the scheduled Mutation workflow.
+#
+# A mutant is one small change to the code — a comparison swapped, a
+# negation dropped, a 0 turned into a 1 — that the package's own tests
+# did not notice. Each survivor is either a missing assertion or a change
+# with no observable effect, and the ceiling exists because the second
+# kind cannot be driven to zero: a value returned on an error path the
+# caller ignores, a comparison the enclosing condition already settled, a
+# guard the next line repeats.
+#
+# Lowering a ceiling in a pull request that asserts more is welcome.
+# Raising one is a decision to argue for in the pull request body, the
+# way .coverage-floor is: the number says how much of this package's
+# behaviour is nailed down, and it may not quietly go up.
+#
+# Every package listed here is run in full, so this file is also the
+# scope: a package joins the run by being declared, with a measured
+# ceiling attached.
+internal/evidence 15
+internal/adapter  15

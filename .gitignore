@@ -17,11 +17,13 @@
 /capabilities
 /coverage
 /enginetable
+/mutate
 /versionmatrix
 /internal/tools/*/adapterversion
 /internal/tools/*/capabilities
 /internal/tools/*/coverage
 /internal/tools/*/enginetable
+/internal/tools/*/mutate
 /internal/tools/*/versionmatrix
 
 # The CLI, and the independent verifier. The verifier is its own module, so
