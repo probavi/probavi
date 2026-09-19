@@ -234,3 +234,28 @@ func TestParseAnchor(t *testing.T) {
 		})
 	}
 }
+
+// TestEverySequenceNumberDigitIsAccepted: the digit range is a boundary at
+// both ends, and it is checked character by character. A verifier that
+// refused a nine would refuse the tenth record of every log, and one that
+// refused a zero would refuse the genesis head — neither failure shows up
+// until a log reaches the digit nobody tried.
+func TestEverySequenceNumberDigitIsAccepted(t *testing.T) {
+	const hash = "sha256:" + "1fab7db153a3276cb7081e1bf6d16a9b31689b9f3d4b950b5a50748e3ae3032d"
+	texts := []string{
+		// Every digit alone, and then all ten in one number.
+		"0:" + hash, "1:" + hash, "2:" + hash, "3:" + hash, "4:" + hash,
+		"5:" + hash, "6:" + hash, "7:" + hash, "8:" + hash, "9:" + hash,
+		"1234567890:" + hash,
+	}
+	for _, text := range texts {
+		head, err := ParseAnchor(text)
+		if err != nil {
+			t.Errorf("ParseAnchor(%q): %v", text, err)
+			continue
+		}
+		if head.String() != text {
+			t.Errorf("round trip: %q printed back as %q", text, head.String())
+		}
+	}
+}
