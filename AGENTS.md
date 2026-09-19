@@ -85,6 +85,11 @@ Quality tooling (all run in CI on every PR; a red check blocks merge, no excepti
 - An adapter's source may not change without its `adapterVersion` moving (`internal/tools/adapterversion`, pull requests only). The constant reaches every signed evidence record as `adapter.version`, so two builds sharing a version leave an auditor unable to tell them apart. A change that provably cannot alter behaviour is exempted with the `adapter-version-exempt` label, where a reviewer sees it.
 - Comprehensive testing is maintained continuously: every change ships with its tests in the same PR — unit (table-driven), golden-file for protocol/evidence bytes, integration behind the build tag. "Tests later" does not exist.
 
+Two gates run on a schedule rather than on every PR, because each costs minutes and answers a question a pull request cannot afford to ask every time:
+
+- **Fuzzing** (`.github/workflows/fuzz.yml`, weekly): every `Fuzz` target gets a budget to look for inputs nobody thought of, and a crasher it finds is committed as a permanent seed.
+- **Mutation testing** (`.github/workflows/mutation.yml`, weekly; `internal/tools/mutate`): coverage says a line ran, not that anything would have failed had it behaved differently. The tool makes one small change to a package's source — a comparison swapped, a negation dropped, a 0 turned into a 1 — runs that package's own tests, and reports the changes nothing noticed. `.mutation-budget` holds one committed ceiling per package; lowering it is welcome, raising it is argued for in the PR body, exactly as `.coverage-floor` works. The two gates are not substitutes: at 97% coverage, `internal/evidence` accepted a signature-length check inverted and `internal/adapter` accepted a drill's declared source parameters replaced by empty ones.
+
 Common commands (no Makefile yet — standard Go tooling):
 
 ```sh

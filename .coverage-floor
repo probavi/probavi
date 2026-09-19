@@ -15,3 +15,9 @@
 adapters 88.6
 cmd      92.5
 internal 96.2
+# internal/tools/mutate is the mutation harness: it edits sources in
+# place, shells out to git and to `go test`, and its remaining branches
+# are failures an earlier layer catches first — an unreadable file is
+# refused as uncommitted work before the read of it is reached. It
+# carries its own measured floor rather than dragging the area's.
+internal/tools/mutate 90.5
