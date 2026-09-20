@@ -218,7 +218,7 @@ func TestAnArchiveTarCannotUnpackIsCorrupt(t *testing.T) {
 	line, _, _ := driveOp(t, "provision",
 		provisionPayload(t, "scylladb_snapshot_tar", path, nil),
 		overrideStep(t, "unpack", errExec(2, "unexpected EOF")))
-	wantCode(t, parseFinal(t, line), "source_corrupt", "tar could not unpack")
+	wantCode(t, parseFinal(t, line), "source_corrupt", "could not be unpacked")
 }
 
 // TestAnOpaqueArchiveDiscoversItsTablesInTheSandbox: where the host's
@@ -363,4 +363,61 @@ func TestAMessageCrossesTheProtocolAsOneQuoteFreeLine(t *testing.T) {
 	if firstLine(nil) != "" {
 		t.Errorf("firstLine(nil) = %q, want empty", firstLine(nil))
 	}
+}
+
+// TestASandboxThatCannotUnpackIsNotABrokenBackup is issue #327. The
+// stock image ships no tar, so the archive kind reported `source_corrupt`
+// — a verdict about the operator's backup — for a sandbox that could not
+// run the tool. The two outcomes must now be told apart.
+func TestASandboxThatCannotUnpackIsNotABrokenBackup(t *testing.T) {
+	t.Run("no extractor in the image", func(t *testing.T) {
+		f := provisionArchive(t, execValue{
+			ExitCode:  noExtractorExit,
+			StderrB64: b64("no usable extractor: neither tar nor a python with tarfile filtering is on PATH"),
+		})
+		wantCode(t, f, "invalid_request", "cannot unpack an archive")
+		if strings.Contains(f.Error.Message, "corrupt") {
+			t.Errorf("message blames the backup: %q", f.Error.Message)
+		}
+		// It must say what to do instead, because the other two kinds of
+		// the same snapshot work on the same image.
+		if !strings.Contains(f.Error.Message, "scylladb_snapshot") {
+			t.Errorf("message = %q, want it to name the kind that works here", f.Error.Message)
+		}
+	})
+
+	t.Run("an extractor that ran and refused the archive", func(t *testing.T) {
+		f := provisionArchive(t, execValue{ExitCode: 2, StderrB64: b64("unexpected end of file")})
+		wantCode(t, f, "source_corrupt", "could not be unpacked")
+	})
+}
+
+// TestTheUnpackScriptPrefersTarAndFallsBackSafely pins the shape the
+// measurement forced, so a later edit cannot quietly drop the filter.
+func TestTheUnpackScriptPrefersTarAndFallsBackSafely(t *testing.T) {
+	if !strings.Contains(unpackScript, "command -v tar") {
+		t.Error("the script does not try tar first")
+	}
+	if !strings.Contains(unpackScript, `filter="data"`) {
+		t.Error("the python fallback extracts unfiltered; a backup file is attacker-controlled input")
+	}
+	if !strings.Contains(unpackScript, "data_filter") {
+		t.Error("a python without filtering support is not ruled out before it is used")
+	}
+	if !strings.Contains(unpackScript, "exit 127") {
+		t.Errorf("the script does not reserve %d for an image with no extractor", noExtractorExit)
+	}
+}
+
+func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+
+// provisionArchive drives the archive kind with one unpack answer.
+func provisionArchive(t *testing.T, unpack any) finalResponse {
+	t.Helper()
+	root := t.TempDir()
+	writeSnapshot(t, root, oneTable())
+	line, _, _ := driveOp(t, "provision",
+		provisionPayload(t, "scylladb_snapshot_tar", tarOf(t, root, ""), nil),
+		overrideStep(t, "unpack", unpack))
+	return parseFinal(t, line)
 }

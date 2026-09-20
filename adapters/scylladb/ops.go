@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "scylladb"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.2.0"
 
 	// workDirName is created under the provider's scratch directory.
 	workDirName = "probavi-scylladb"
@@ -291,6 +291,46 @@ func transferArtifact(ctx context.Context, c *core, src *resolvedSource,
 // wrapping directory above them, so the script descends exactly one
 // level when the root shows no <keyspace>/<table>/schema.cql and exactly
 // one subdirectory.
+// noExtractorExit is the status unpackScript reserves for "this image
+// has nothing that can read a tar archive". It is distinct from every
+// exit an extractor that ran could produce, so the adapter can tell a
+// sandbox that cannot do the work from a backup that is damaged.
+const noExtractorExit = 127
+
+// unpackScript extracts the archive with whatever the image has.
+//
+// `tar` is the obvious tool and seven of this repository's eight
+// archive-reading adapters find it in their own verified image. This one
+// does not: `scylladb/scylla:2026.3.1` has no tar anywhere on its
+// filesystem (measured — no tar, no bsdtar, no busybox), which made the
+// archive kind unusable on the only image the manifest verifies, and
+// reported it as `source_corrupt` — a verdict about the operator's
+// backup — because a missing program exits non-zero like a refused
+// archive does (issue #327).
+//
+// What the image does have is Python, so that is the fallback. The
+// extraction is filtered: a backup file is attacker-controlled input
+// (SECURITY.md), and `data` is the filter that refuses absolute paths,
+// parent-directory escapes and device nodes. A Python too old to offer
+// it is not used at all rather than used unfiltered — the point of the
+// fallback is to extract safely, not merely to extract.
+const unpackScript = `set -u
+archive=$1; dest=$2
+if command -v tar >/dev/null 2>&1; then
+  tar -xf "$archive" -C "$dest"
+  exit $?
+fi
+for py in python3 python; do
+  command -v "$py" >/dev/null 2>&1 || continue
+  "$py" -c 'import tarfile,sys; sys.exit(0 if hasattr(tarfile,"data_filter") else 1)' >/dev/null 2>&1 || continue
+  "$py" -c 'import sys,tarfile
+with tarfile.open(sys.argv[1]) as t:
+    t.extractall(sys.argv[2], filter="data")' "$archive" "$dest"
+  exit $?
+done
+echo "no usable extractor: neither tar nor a python with tarfile filtering is on PATH" >&2
+exit 127`
+
 const rootScript = `d="$1"
 set -- "$d"/*/*/schema.cql
 if [ ! -e "$1" ]; then
@@ -309,13 +349,24 @@ func unpackArchive(ctx context.Context, c *core, hostPath, workDir string) (tran
 	if perr != nil {
 		return 0, 0, "", perr
 	}
-	unpack, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"tar", "-xf", tarPath, "-C", extractDir}})
+	unpack, _, stderr, perr := c.exec(ctx, execArgs{
+		Argv: []string{"bash", "-c", unpackScript, "bash", tarPath, extractDir}})
 	if perr != nil {
 		return 0, 0, "", perr
 	}
+	if unpack.ExitCode == noExtractorExit {
+		// The sandbox could not run an extractor at all. That is not a
+		// verdict on the backup, and saying it was would send an
+		// operator looking for damage in a good one.
+		return 0, 0, "", protoErr("invalid_request", false,
+			"this sandbox image cannot unpack an archive: %s. The stock ScyllaDB image ships no "+
+				"tar (measured on 2026.3.1), so either use kind scylladb_snapshot with the "+
+				"collected tree, or an image carrying tar or a python with tarfile filtering",
+			firstLine(stderr))
+	}
 	if unpack.ExitCode != 0 {
 		return 0, 0, "", protoErr("source_corrupt", false,
-			"tar could not unpack the archive: %s", firstLine(stderr))
+			"the archive could not be unpacked: %s", firstLine(stderr))
 	}
 	locate, stdout, _, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", rootScript, "bash", extractDir}})
 	if perr != nil {
