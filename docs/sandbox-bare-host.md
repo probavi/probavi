@@ -1,5 +1,9 @@
 # Bare-host SSH sandbox provider (`remotehost`) — design spec
 
+The rules every provider satisfies are in
+[`sandbox-providers.md`](sandbox-providers.md); this document is one
+provider's design, and where the two meet, the general one governs.
+
 Status: **Approved by the maintainer 2026-08-01** (with the §8 decisions:
 provider name `remotehost`, system-level polkit privilege model,
 unix-socket-first engine addressing, systemd ≥ 244). Design-normative for
