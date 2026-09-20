@@ -11,6 +11,41 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **This project's position on engine licences is written down**
+  (`docs/engine-licensing.md`, normative). One group of the engine
+  catalogue is held by licensing and registration rather than by
+  engineering, and every entry under it had been read from scratch,
+  because the position itself survived only as half a sentence above the
+  list. It now states whose question a licence is — the operator's, by
+  default, since Probavi ships no engine and a drill starts the image the
+  operator named, on their machine, against their backup — and the two
+  places it becomes this project's: an image that will not start without
+  an acceptance token, and CI having to run an engine in order to publish
+  a verified claim about it.
+
+  Every mechanism it names already ships, one per shape the problem takes.
+  An acceptance is a constant the adapter sends, with the README saying
+  plainly that configuring the image is what accepted it — the
+  `ACCEPT_EULA` path `adapters/mssql` has carried since its first version,
+  for the largest EULA in the catalogue. A licence key is secret-shaped,
+  so it is a credential and travels as `credential_env`, where the schema
+  keeps even its name out of the record. Anything else engine-specific is
+  `options`, which the core hands over uninterpreted. Nothing here adds a
+  drill-configuration key, and no licence assertion reaches an evidence
+  record: `sandbox.params` is copied into the signed record verbatim, and
+  a signature vouching for a legal claim the software cannot verify is not
+  what an auditor should be handed.
+
+  The rule with teeth is the last one. A claim CI cannot repeat is not a
+  claim — the version matrix runs on `pull_request`, and a workflow
+  triggered by a fork's pull request is not given the repository's
+  secrets, so an engine needing a held EULA, registration key or licence
+  file cannot be listed at all. Otherwise "listed means exercised" would
+  be true for maintainers and quietly false for every contributor, which
+  is the drift the manifest-drives-the-job design exists to prevent.
+
 ### Fixed
 
 - **A VictoriaMetrics backup is no longer refused for being older than

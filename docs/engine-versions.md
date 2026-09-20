@@ -89,6 +89,13 @@ None of the obligations soften, and one of them gets stronger:
 Where an engine does ship as an image, listing one remains the rule. This
 is for engines that do not, and an entry may not carry both.
 
+A fourth condition is not about the version at all. An engine CI cannot run
+without a credential this repository holds — an accepted EULA, a
+registration key, a licence file — cannot be listed, because the job
+behind the claim would not run on a contributor's pull request. That rule,
+and the rest of this project's position on engine licences, is normative in
+[`engine-licensing.md`](engine-licensing.md) §6.
+
 ## 2. Listed means exercised
 
 `adapters/<id>/adapter.json` is the single source. Two mechanisms keep the

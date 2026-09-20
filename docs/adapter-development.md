@@ -129,5 +129,9 @@ drill against a real backup remains the definition of working.
 - Write a README documenting: supported source kinds and their `params`,
   required sandbox image contents, environment variables, the checksum
   rule, and any auth-reset behavior inside the sandbox.
+- If the image needs an acceptance token to start, or its tooling needs a
+  licence key, read [`engine-licensing.md`](engine-licensing.md) first: the
+  adapter sends an acceptance as a constant and says so in its README, a
+  key travels as a credential, and neither becomes a drill-config key.
 - Version your adapter independently (`adapter_version` in probe); declare
   every protocol version you speak in `protocol_versions`.
