@@ -152,7 +152,20 @@ func TestFullDrillViaCLI(t *testing.T) {
 	// is why the question is asked through sandbox.OwnerAlive rather than
 	// by hand: the label is an owner id, and since owner ids grew a
 	// pid-reuse token it has not been a bare pid.
-	for _, id := range strings.Fields(dockerOut(t, ctx, "ps", "-aq", "--filter", "label=com.probavi.sandbox=1")) {
+	//
+	// The scan is scoped to this drill host, and that is the claim rather
+	// than a softening of it: a sweep is host-scoped (internal/core runs
+	// one at startup), so "no orphan survives a drill" is a statement
+	// about the orphans this host owns. Without the scope the assertion
+	// reaches past what the product promises — and straight into a
+	// container another package plants on purpose: the docker provider's
+	// sweep test starts a dead-owner container under a foreign host id
+	// precisely to prove the sweep leaves other hosts alone, so it is
+	// meant to survive, and this test would fail whenever the two ran
+	// together.
+	hostFilter := "label=com.probavi.host=" + sandbox.HostID()
+	for _, id := range strings.Fields(dockerOut(t, ctx, "ps", "-aq",
+		"--filter", "label=com.probavi.sandbox=1", "--filter", hostFilter)) {
 		out, err := exec.CommandContext(ctx, "docker", "inspect", "-f",
 			`{{ index .Config.Labels "com.probavi.pid" }}`, id).Output()
 		if err != nil {
