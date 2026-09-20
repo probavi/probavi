@@ -11,6 +11,8 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-09-20
+
 ### Added
 
 - **ArangoDB adapter** (`adapters/arangodb` 0.1.0) — the thirty-second
@@ -5051,7 +5053,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.31.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.32.0...HEAD
+[0.32.0]: https://github.com/probavi/probavi/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/probavi/probavi/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/probavi/probavi/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/probavi/probavi/compare/v0.28.0...v0.29.0
