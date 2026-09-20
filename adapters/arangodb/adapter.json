@@ -3,7 +3,7 @@
   "id": "arangodb",
   "name": "ArangoDB",
   "status": "experimental",
-  "since": null,
+  "since": "0.32.0",
   "engine_name": "ArangoDB",
   "conformance_verified": false,
   "docs": "adapters/arangodb/README.md",
