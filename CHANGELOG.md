@@ -11,6 +11,44 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **The sandbox provider contract is written down**
+  (`docs/sandbox-providers.md`, normative). `docs/sandbox-bare-host.md`
+  was one provider's design spec; the rules *every* provider satisfies
+  were spread across five places — the adapter protocol's §4,
+  `internal/sandbox/descriptor.go`, the `Provider` and `Sandbox`
+  interfaces in `internal/core`, `AGENTS.md` §2.2, and the three
+  providers that ship. A fourth had nothing general to be written
+  against, which is how a guarantee quietly changes: the next provider
+  would either repeat one provider's reasoning or invent the general
+  rules again.
+
+  It states the two verbs and their caps, and whose rule the `put_file`
+  containment is — the core's, so a provider receives an already-resolved
+  path and must not widen it. It states cleanup as the load-bearing
+  promise, because a sandbox holds a restored copy of production data:
+  forced teardown on every path, an orphan sweep that can tell its own
+  leftovers from a concurrent drill's, and an external backstop where the
+  runtime offers one. It states the two isolation properties that are not
+  negotiable — **no published ports, ever**, which several adapters' public
+  sandbox credentials depend on rather than merely benefit from, and a
+  stated network default.
+
+  And it states what a signed record may say about a sandbox:
+  `sandbox.params` records what was *requested*, never what ran, which is
+  right for an image or a memory cap and not obviously right for a
+  parameter naming an isolation class. The provider id has the same
+  property — podman through its docker-compatible shim produces records
+  reading `provider: docker`, because the id names the code path and not
+  the runtime. Both are open doors, restated here as doors rather than
+  left as observations, alongside the third: whether a drill may run on
+  the host that signs its record.
+
+  The rate limits move here too, out of the roadmap entry that held them:
+  at most one new provider per release cycle, and none while a shipped
+  provider is still `experimental` — all three are.
+
 ## [0.31.0] - 2026-09-20
 
 ### Added
