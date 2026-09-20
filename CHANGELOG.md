@@ -13,6 +13,61 @@ always called out explicitly.
 
 ### Added
 
+- **ArangoDB adapter** (`adapters/arangodb` 0.1.0) — the thirty-second
+  engine, and the third in a row whose measurement day ran before a line
+  of it was written. Restores an `arangodump` output in three shapes
+  (`arangodb_dump`, `arangodb_dump_tar`, `arangodb_dump_dir`), verified
+  against 3.12. The licence reading that unblocked it is in
+  `docs/engine-licensing.md` and the adapter README; two of the
+  measurements corrected assumptions that would otherwise have shipped
+  silently.
+
+  **Issue #166 resolves to the suspend, not the fence** — the better
+  outcome, and not the one the Cassandra family could manage. A TTL index
+  is deleted by a background thread rather than filtered on read, and
+  `--ttl.frequency 0` turns that thread off entirely. Measured on a dump
+  of 200 documents each already an hour past a 60-second TTL: with the
+  default they were all gone 40 seconds after the restore, and with the
+  flag every one survived. **Suspend, never rewrite** — the restored
+  collection still carries its TTL index with the `expireAfter` the
+  operator declared, so a check that reads it sees what the backup held.
+
+  **The restore's exit code is not the verdict.** Pointed at an empty
+  dump directory `arangorestore` reports `Processed 0 collection(s)` and
+  exits 0, and so it does for a directory holding only `dump.json`. What
+  the restored database holds is the verdict.
+
+  **A damaged dump's error quotes the restored documents.** The tool's
+  message carries the request payload — hundreds of production documents
+  — so it is deliberately kept out of the evidence record and sent to the
+  drill host's log instead; a record must be shareable as it stands.
+
+  **The core's three generating built-ins apply**, which is more than the
+  MongoDB adapter can offer. Getting there needed one measured trap
+  designed around: this engine's option parser collapses `@@` into `@` in
+  an option value, because `@file` is its own syntax — and an AQL
+  collection bind is written `@@coll`. A statement passed as an option
+  value arrives mangled, so the declared runner takes it as its own
+  argument and exports it, and a JavaScript file reads it from the
+  environment.
+
+  `dump.json` dates the backup exactly (RFC 3339, literal `Z`), so
+  `backup_timezone` is refused rather than ignored, and it names the
+  database the restore goes into — with no default invented, because
+  restoring into a database the backup never mentioned proves nothing.
+  It carries no list of collections, so completeness is a pairing check:
+  every collection needs both its definition and its data file, which is
+  safe to require because `arangodump` writes both even for a collection
+  with no documents (measured). An encrypted dump is recognised by its
+  own `ENCRYPTION` marker and refused by name.
+
+  **Conformance is 12 of 15, and `conformance_verified` is `false`** —
+  stated rather than quietly omitted. Check 9 provisions 64 KiB of random
+  bytes and expects a restore; this adapter's artifact is a dump whose
+  `dump.json` names the database to restore into, a random file names
+  none, and inventing one would restore into a database nobody backed up.
+  The other two failures are that one's cascade.
+
 - **The sandbox provider contract is written down**
   (`docs/sandbox-providers.md`, normative). `docs/sandbox-bare-host.md`
   was one provider's design spec; the rules *every* provider satisfies

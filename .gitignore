@@ -80,6 +80,8 @@
 /adapters/*/neo4j
 /scylladb
 /adapters/*/scylladb
+/arangodb
+/adapters/*/arangodb
 /solr
 /adapters/*/solr
 /firebird

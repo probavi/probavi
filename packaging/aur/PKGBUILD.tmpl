@@ -33,7 +33,8 @@ pkgname=('probavi' 'probavi-adapter-postgres' 'probavi-adapter-mysql'
          'probavi-adapter-tdengine'
          'probavi-adapter-chroma'
          'probavi-adapter-iotdb'
-         'probavi-adapter-scylladb')
+         'probavi-adapter-scylladb'
+         'probavi-adapter-arangodb')
 pkgver=${PKGVER}
 pkgrel=1
 # The git tag, which differs from pkgver for a pre-release: makepkg
@@ -124,4 +125,5 @@ package_probavi-adapter-tdengine() { _package_adapter tdengine; }
 package_probavi-adapter-chroma() { _package_adapter chroma; }
 package_probavi-adapter-iotdb() { _package_adapter iotdb; }
 package_probavi-adapter-scylladb() { _package_adapter scylladb; }
+package_probavi-adapter-arangodb() { _package_adapter arangodb; }
 package_probavi-adapter-mssql()    { _package_adapter mssql; }

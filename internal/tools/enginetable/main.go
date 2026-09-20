@@ -260,6 +260,7 @@ var engineBadgeStyles = map[string]badgeStyle{
 	"h2":              {logo: "h2database", colour: "09476B"},
 	"influxdb":        {logo: "influxdb", colour: "22ADF6"},
 	"iotdb":           {},
+	"arangodb":        {logo: "arangodb", colour: "DDDF72"},
 	"scylladb":        {logo: "scylladb", colour: "6CD5E7"},
 	"mariadb":         {logo: "mariadb", colour: "003545"},
 	"mongodb":         {logo: "mongodb", colour: "47A248"},
