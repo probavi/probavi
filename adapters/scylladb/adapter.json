@@ -3,7 +3,7 @@
   "id": "scylladb",
   "name": "ScyllaDB",
   "status": "experimental",
-  "since": null,
+  "since": "0.31.0",
   "engine_name": "ScyllaDB",
   "conformance_verified": true,
   "docs": "adapters/scylladb/README.md",
