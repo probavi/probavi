@@ -356,3 +356,58 @@ func destroy(t *testing.T, sbx *docker.Sandbox) {
 		t.Errorf("destroy sandbox: %v", err)
 	}
 }
+
+// TestArchiveDrillOnAnImageWithoutTar is the test whose absence let
+// issue #327 ship. The archive kind unpacks inside the sandbox, and the
+// only image this adapter verifies against has no tar at all — so the
+// kind could not pass on it, and the drill reported `source_corrupt`,
+// blaming the operator's backup for a tool the image does not carry.
+//
+// The archive is built on the host, which is where an operator builds
+// one and the only place that can: there is no tar in the image to make
+// it with either.
+func TestArchiveDrillOnAnImageWithoutTar(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := verifiedImage(t)
+	provider := docker.New(nil)
+
+	tree := filepath.Join(t.TempDir(), "collect")
+	makeTree(t, ctx, provider, image, tree, seedScript)
+
+	archive := filepath.Join(t.TempDir(), "snapshot.tar.gz")
+	tarCmd := exec.CommandContext(ctx, "tar", "-C", tree, "-czf", archive, ".")
+	if out, err := tarCmd.CombinedOutput(); err != nil {
+		t.Fatalf("pack the archive on the host: %v: %s", err, out)
+	}
+
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("scylladb", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "scylladb_snapshot_tar", Path: archive},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision from the archive kind: %v", err)
+	}
+
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	// Every row, through the archive path, on an image with no tar.
+	assertRunner(t, ctx, sbx, probe, res.Connection.Database,
+		`SELECT count(*) FROM orders;`, "500")
+	assertRunner(t, ctx, sbx, probe, res.Connection.Database,
+		`SELECT v FROM meta WHERE k = 'origin';`, "restored-ok")
+}

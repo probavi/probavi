@@ -205,8 +205,6 @@ func classifyExec(argv []string, sim simulated) (string, any) {
 		return classifyShellExec(argv[2], sim)
 	case "mkdir":
 		return "mkdir", okExec()
-	case "tar":
-		return "unpack", sim.unpack
 	case "nodetool":
 		return "refresh", sim.refresh
 	case "cqlsh":
@@ -229,6 +227,8 @@ func classifyShellExec(script string, sim simulated) (string, any) {
 		return "stage", sim.stage
 	case ttlProbeScript:
 		return "ttl", sim.ttl
+	case unpackScript:
+		return "unpack", sim.unpack
 	}
 	switch {
 	case strings.Contains(script, "command -v scylla >"):

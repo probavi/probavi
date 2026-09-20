@@ -11,6 +11,39 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A ScyllaDB archive drill no longer calls a good backup corrupt**
+  (`adapters/scylladb` 0.2.0, issue #327). `scylladb_snapshot_tar`
+  unpacks inside the sandbox with `tar`, and the only image the manifest
+  verifies — `scylladb/scylla:2026.3.1` — ships **no tar at all**: no
+  `tar`, no `bsdtar`, no `busybox`, anywhere on its filesystem. The exec
+  therefore never started a process, and the adapter mapped every
+  non-zero exit to `source_corrupt` — "source read but rejected by the
+  engine tooling". Nothing had read the source. An operator got a failed
+  drill, exit code 1, and a signed record saying their backup was
+  corrupt, for a backup that restores whole.
+
+  Two things are fixed, and they are independent. The unpack step now
+  uses whatever the image has: `tar` when present, otherwise Python's
+  `tarfile`, which this image does ship. Extraction is filtered
+  (`filter="data"`), since a backup file is attacker-controlled input,
+  and a Python too old to offer that filter is not used at all rather
+  than used unfiltered. And an image that can run no extractor now fails
+  with **`invalid_request` naming what was missing**, never
+  `source_corrupt`: a tool the sandbox cannot run says nothing about the
+  backup, and the message points at the two source kinds that restore
+  the same snapshot on the same image with no extractor at all.
+
+  The gap was a missing test, not a missing thought: the archive kind was
+  exercised only against a fake sandbox, and `integration_test.go` never
+  provisioned it. It does now, against the verified image, and that test
+  fails on the code this release fixes.
+
+  Checked across the repository rather than only where it was reported:
+  the seven other adapters that unpack an archive in the sandbox all find
+  `tar` in their own verified baseline image.
+
 ## [0.32.0] - 2026-09-20
 
 ### Added

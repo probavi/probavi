@@ -95,7 +95,7 @@ reporting process at all. Best effort by design: an image without
 1. Wait for the node to answer CQL.
 2. Stop the version-check service.
 3. Move the artifact into the sandbox (`put_file` per file, or one archive
-   plus `tar -xf`).
+   unpacked there — see below).
 4. Create each keyspace, then apply each table's own `schema.cql`.
 5. Copy each table's sstables into that table's `upload/` directory and
    ask the engine to take them with `nodetool refresh`.
@@ -114,6 +114,28 @@ non-zero and the drill reports `source_corrupt`.
 
 Note that refresh **consumes** `upload/`: the files are moved out, and the
 directory is empty afterwards.
+
+### Unpacking an archive: this image has no `tar`
+
+`scylladb/scylla:2026.3.1` ships **no tar at all** — no `tar`, no
+`bsdtar`, no `busybox` (measured on the whole filesystem). Seven of this
+repository's eight archive-reading adapters find tar in their own
+verified image; this one does not, which made `scylladb_snapshot_tar`
+unusable on the only image the manifest verifies (issue #327).
+
+So the unpack step uses whatever the image has: `tar` when it is there,
+and otherwise Python's `tarfile`, which this image does ship. The
+extraction is **filtered** (`filter="data"`), because a backup file is
+attacker-controlled input and that filter refuses absolute paths,
+parent-directory escapes and device nodes. A Python too old to offer the
+filter is not used at all rather than used unfiltered.
+
+If an image has neither, the drill fails with `invalid_request` naming
+what was missing — **not** `source_corrupt`. That distinction is the
+point: a tool the sandbox cannot run says nothing about the backup, and
+reporting it as a verdict sends an operator looking for damage in a good
+one. The other two source kinds restore the same snapshot on the same
+image and need no extractor at all.
 
 ## Tablets, and why the drill's shape need not match production's
 
