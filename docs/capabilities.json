@@ -76,6 +76,46 @@
       "docs": "adapters/aerospike/README.md"
     },
     {
+      "id": "arangodb",
+      "name": "ArangoDB",
+      "status": "experimental",
+      "since": null,
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "arangodb",
+        "name": "ArangoDB"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "3.12",
+          "image": "arangodb/arangodb:3.12.4"
+        }
+      ],
+      "sources": [
+        {
+          "id": "arangodb_dump",
+          "name": "One `arangodump` output directory",
+          "pitr": false
+        },
+        {
+          "id": "arangodb_dump_dir",
+          "name": "A directory of `arangodump` outputs; the one whose own dump.json claims the newest instant is restored",
+          "pitr": false
+        },
+        {
+          "id": "arangodb_dump_tar",
+          "name": "One tar archive (plain or gzip) of an `arangodump` output, its files at the root or under one wrapping directory",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": false,
+      "docs": "adapters/arangodb/README.md"
+    },
+    {
       "id": "cassandra",
       "name": "Apache Cassandra",
       "status": "experimental",

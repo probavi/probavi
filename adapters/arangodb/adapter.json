@@ -1,0 +1,24 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the image listed under verified — the baseline on every run — so neither can drift. The official image idles under `command: sleep infinity` (its entrypoint passes a non-arangod command through, measured) and the adapter starts the server itself, with the engine's own TTL thread held back for the drill. The image is Alpine-based and ships no bash, so every script this adapter runs is `sh` (measured). The server reached readiness at a 768 MiB cap, which is the lightest of the recent engines. Licence position: the Community licence permits internal business use within a dataset below 100 GB; see docs/engine-licensing.md and the adapter README. conformance_verified is false and stated rather than quietly omitted: §10 check 9 provisions 64 KiB of random bytes as the source and expects a restore, and this adapter's artifact is an arangodump output whose dump.json names the database to restore into. A random file names none, and inventing one would restore into a database the backup never mentioned. Twelve of the fifteen checks pass; the other two are that one's cascade. See docs/capabilities.md and docs/engine-versions.md.",
+  "id": "arangodb",
+  "name": "ArangoDB",
+  "status": "experimental",
+  "since": null,
+  "engine_name": "ArangoDB",
+  "conformance_verified": false,
+  "docs": "adapters/arangodb/README.md",
+  "versions_checked": "2026-09-20",
+  "verified": [
+    {
+      "engine_version": "3.12",
+      "image": "arangodb/arangodb:3.12.4",
+      "supported_until": null,
+      "baseline": true
+    }
+  ],
+  "sources": {
+    "arangodb_dump": "One `arangodump` output directory",
+    "arangodb_dump_tar": "One tar archive (plain or gzip) of an `arangodump` output, its files at the root or under one wrapping directory",
+    "arangodb_dump_dir": "A directory of `arangodump` outputs; the one whose own dump.json claims the newest instant is restored"
+  }
+}
