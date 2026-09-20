@@ -1134,6 +1134,46 @@
       "docs": "adapters/redis/README.md"
     },
     {
+      "id": "scylladb",
+      "name": "ScyllaDB",
+      "status": "experimental",
+      "since": null,
+      "adapter_version": "0.1.0",
+      "engine": {
+        "id": "scylladb",
+        "name": "ScyllaDB"
+      },
+      "protocol_versions": [
+        "probavi-adapter/0"
+      ],
+      "verified": [
+        {
+          "engine_version": "2026.3",
+          "image": "scylladb/scylla:2026.3.1"
+        }
+      ],
+      "sources": [
+        {
+          "id": "scylladb_snapshot",
+          "name": "One collected snapshot tree: `<keyspace>/<table>/` holding each table's `snapshots/<tag>/` contents",
+          "pitr": false
+        },
+        {
+          "id": "scylladb_snapshot_dir",
+          "name": "A directory of collected snapshot trees; the one whose own manifests claim the newest instant is restored",
+          "pitr": false
+        },
+        {
+          "id": "scylladb_snapshot_tar",
+          "name": "One tar archive (plain or gzip) of a collected snapshot, keyspaces at the root or under one wrapping directory",
+          "pitr": false
+        }
+      ],
+      "pitr": false,
+      "conformance_verified": true,
+      "docs": "adapters/scylladb/README.md"
+    },
+    {
       "id": "solr",
       "name": "Apache Solr",
       "status": "experimental",

@@ -78,6 +78,8 @@
 /adapters/*/oracle
 /neo4j
 /adapters/*/neo4j
+/scylladb
+/adapters/*/scylladb
 /solr
 /adapters/*/solr
 /firebird
