@@ -1137,7 +1137,7 @@
       "id": "scylladb",
       "name": "ScyllaDB",
       "status": "experimental",
-      "since": null,
+      "since": "0.31.0",
       "adapter_version": "0.1.0",
       "engine": {
         "id": "scylladb",

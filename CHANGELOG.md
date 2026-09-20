@@ -11,6 +11,8 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-09-20
+
 ### Added
 
 - **ScyllaDB adapter** (`adapters/scylladb` 0.1.0) — the thirty-first
@@ -66,6 +68,39 @@ always called out explicitly.
   restored table that returns no rows fails the drill when the artifact's
   own sstables declare a time-to-live. Measured on a real expired
   snapshot, with two healthy tables in the same artifact as the control.
+
+- **Mutation testing, as a weekly gate with a committed budget**
+  (`internal/tools/mutate`, `.github/workflows/mutation.yml`,
+  `.mutation-budget`). Coverage says a line ran, not that anything would
+  have failed had it behaved differently, and the gap was not theoretical:
+  at 97% coverage `internal/evidence` accepted a signature-length check
+  inverted, and `internal/adapter` accepted a drill's declared source
+  parameters replaced by empty ones. Both are asserted now.
+
+  The tool makes one small change to a package's source — a comparison
+  swapped, a negation dropped, a `0` turned into a `1` — runs that
+  package's own tests, and reports what nothing noticed. It is stdlib
+  only, writes through `os.Root` so a mutant cannot land outside the
+  package it belongs to, refuses to start on a dirty tree because it
+  edits sources in place, and the workflow proves the tree came back
+  unchanged whether the run passed or failed.
+
+  It found **21 missing assertions** across the trust core and the
+  independent verifier, each now a test: a timestamp outside the recorded
+  form, every environment field required on its own, zero as a
+  measurement where negative is not, a record exactly at the size limit, a
+  signature of the wrong length, a one-byte torn tail, canonical ordering
+  where one key is a prefix of another, the request reaching the adapter
+  as the drill declared it, `put_file` needing both its paths, a timing
+  exactly at the limit, a log line kept to its cap, and every way a pipe
+  closes. The survivors that remain are budgeted per package — 12, 15 and
+  1 — and lowering a budget is welcome while raising one is argued for in
+  the pull request, exactly as `.coverage-floor` works.
+
+  Weekly rather than per pull request: a full run mutates every operator
+  in a package and runs that package's tests once per mutant, which costs
+  minutes per package. The two scheduled gates are not substitutes for
+  each other, and `AGENTS.md` §3.1 now says why.
 
 - **This project's position on engine licences is written down**
   (`docs/engine-licensing.md`, normative). One group of the engine
@@ -4923,7 +4958,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.30.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/probavi/probavi/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/probavi/probavi/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/probavi/probavi/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/probavi/probavi/compare/v0.27.0...v0.28.0
