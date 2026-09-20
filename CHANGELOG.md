@@ -13,6 +13,60 @@ always called out explicitly.
 
 ### Added
 
+- **ScyllaDB adapter** (`adapters/scylladb` 0.1.0) — the thirty-first
+  engine. Restores a collected `nodetool snapshot` in three shapes
+  (`scylladb_snapshot`, `scylladb_snapshot_tar`, `scylladb_snapshot_dir`),
+  verified against 2026.3, conformance 15/15 on the first run. The
+  licence reading that unblocked it is in `docs/engine-licensing.md` and
+  the adapter README; the measurement day that preceded a line of code
+  corrected the entry's own premises, three of them in ways a port of the
+  Cassandra adapter would have got wrong.
+
+  **It is not a Cassandra variant.** That adapter restores with
+  `sstableloader` and gates on the binary being present; ScyllaDB ships
+  neither it nor a `cassandra` binary, because its restore path is
+  `nodetool refresh` against the table's own `upload/` directory. The
+  sstable component names differ too (`Partitions.db`, `Rows.db`,
+  `Scylla.db`).
+
+  **The sandbox runs the engine, and `sleep infinity` breaks it.** Where
+  the official Cassandra images pass a non-engine command through their
+  entrypoint, this one *appends* the container command to the server's own
+  argv: with `sleep infinity` the server exits with `too many positional
+  options` before it serves anything. The drill config passes the engine's
+  own flags instead (`--smp 1`), and below about 2 GiB the server aborts
+  on startup — both stated in the README and in the adapter's own
+  readiness message, because a drill that times out there is almost always
+  one of the two.
+
+  **The node serves on 127.0.0.2, not 127.0.0.1**, which the image pins
+  and the other address refuses. That value reaches the evidence record,
+  so the record states where the drill really talked.
+
+  **Refresh is not the verdict.** Pointed at an empty upload directory it
+  loads nothing and exits 0, so an empty stage is refused before refresh
+  is asked and every restored table is read back afterwards. A damaged
+  sstable is loud by contrast: the engine validates compressed chunks as
+  it reads them and names the file and offset.
+
+  **The manifest is the completeness gate.** This engine writes one
+  sstable per tablet and `manifest.json` names every set, with an epoch
+  `created_at` beside them — so `backup.created_at` is exact with no
+  timezone to declare (`source.params.backup_timezone` is refused rather
+  than ignored), and a copy that lost a tablet's files is refused on the
+  host before a byte is transferred.
+
+  **Tablet shape need not match.** A snapshot from a 16-tablet table
+  restores whole into a table the drill created with 2, with a plain
+  refresh. A production source has many nodes and a drill sandbox has one,
+  so without this there would be no adapter.
+
+  Issue #166 resolves to the **fence**, as it does for Cassandra: TTL is
+  applied on read, none of the engine's 352 options suspends it, and a
+  restored table that returns no rows fails the drill when the artifact's
+  own sstables declare a time-to-live. Measured on a real expired
+  snapshot, with two healthy tables in the same artifact as the control.
+
 - **This project's position on engine licences is written down**
   (`docs/engine-licensing.md`, normative). One group of the engine
   catalogue is held by licensing and registration rather than by

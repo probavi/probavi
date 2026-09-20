@@ -1,0 +1,24 @@
+{
+  "_comment": "Facts about this adapter that its probe response cannot carry: display names, maturity, and the engine versions CI actually restores from. Everything the probe declares (adapter version, engine id, source kinds, pitr) is read from testdata/probe_response.golden instead — never duplicated here. The capabilities generator fails if the source names below do not match the probe exactly, and the integration suite restores from the images listed under verified — the baseline on every run — so neither can drift. Unlike the Cassandra image, this one does not idle under `command: sleep infinity`: its entrypoint appends the container command to the server's own argv, so that command makes the server exit with 'too many positional options' before it serves anything (measured 2026-09-20). The sandbox therefore runs the engine and the drill config passes the engine's own flags as the command — `--smp 1` is what makes a small sandbox viable, and below about 2 GiB the server aborts on startup. The vendor's support policy is relative (the two latest versions under active maintenance) rather than a published forward date, so supported_until is null and versions_checked records the reading (docs/engine-versions.md §1). Licence position: docs/engine-licensing.md and the adapter README. See docs/capabilities.md.",
+  "id": "scylladb",
+  "name": "ScyllaDB",
+  "status": "experimental",
+  "since": null,
+  "engine_name": "ScyllaDB",
+  "conformance_verified": true,
+  "docs": "adapters/scylladb/README.md",
+  "versions_checked": "2026-09-20",
+  "verified": [
+    {
+      "engine_version": "2026.3",
+      "image": "scylladb/scylla:2026.3.1",
+      "supported_until": null,
+      "baseline": true
+    }
+  ],
+  "sources": {
+    "scylladb_snapshot_tar": "One tar archive (plain or gzip) of a collected snapshot, keyspaces at the root or under one wrapping directory",
+    "scylladb_snapshot": "One collected snapshot tree: `<keyspace>/<table>/` holding each table's `snapshots/<tag>/` contents",
+    "scylladb_snapshot_dir": "A directory of collected snapshot trees; the one whose own manifests claim the newest instant is restored"
+  }
+}

@@ -43,6 +43,7 @@
 [![Qdrant](https://img.shields.io/badge/Qdrant-DC244C?logo=qdrant&logoColor=white)](adapters/qdrant/README.md)
 [![QuestDB](https://img.shields.io/badge/QuestDB-4B5563)](adapters/questdb/README.md)
 [![Redis](https://img.shields.io/badge/Redis-FF4438?logo=redis&logoColor=white)](adapters/redis/README.md)
+[![ScyllaDB](https://img.shields.io/badge/ScyllaDB-6CD5E7?logo=scylladb&logoColor=333333)](adapters/scylladb/README.md)
 [![SQL Server](https://img.shields.io/badge/SQL%20Server-4B5563)](adapters/mssql/README.md)
 [![SQLite](https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white)](adapters/sqlite/README.md)
 [![TDengine](https://img.shields.io/badge/TDengine-4B5563)](adapters/tdengine/README.md)
