@@ -182,6 +182,28 @@ jobs:
           (cd dist && sha256sum -- *.tar.gz *.deb *.rpm *.apk PKGBUILD *.ebuild > SHA256SUMS)
           cat dist/SHA256SUMS
 
+      - name: drill with the artifacts this release publishes
+        # The first thing in this workflow that runs what it built. Every
+        # gate before this one proves the source tree; the archives are
+        # built with flags nothing else uses, and -X main.version stamps
+        # the identity every signed evidence record carries. A stamp that
+        # silently failed to apply would put the wrong build into an
+        # auditor's record, and -X against a symbol that moved is silent
+        # by design — so the script reads the version back out of the
+        # running binary and out of the record it signs.
+        #
+        # Deliberately before the draft: a release must not be assembled
+        # out of binaries that have never completed a drill. amd64 only,
+        # because this runner is amd64 and an emulated engine container
+        # would cost more than it proves; ci.yml runs the same script on
+        # both architectures, natively, on every pull request.
+        env:
+          VERSION: ${{ github.ref_name }}
+          ARCH: amd64
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}" ARCH=amd64 packaging/drill-from-archives.sh dist
+
       - name: render the Homebrew formulae
         # Checksums come from the SHA256SUMS just written, never
         # recomputed: a formula can then only pin what this release

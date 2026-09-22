@@ -308,9 +308,14 @@ jobs:
       # failure this exists to catch installs cleanly and leaves the
       # adapter where the core's PATH lookup will never find it, so every
       # family gets installed and asked to resolve an adapter for real.
+      #
+      # -i is what makes that happen. Without it the container's stdin is
+      # empty, `sh -s` reads EOF, and the step passes having run nothing —
+      # which is what these three did from 2026-08-05 until this comment
+      # was written. TestContainerHeredocsReachTheShell is the gate.
       - name: install and run on Debian
         run: |
-          docker run --rm -v "$PWD/dist/pkgs:/pkgs:ro" debian:stable-slim sh -eus <<'SH'
+          docker run --rm -i -v "$PWD/dist/pkgs:/pkgs:ro" debian:stable-slim sh -eus <<'SH'
             apt-get update -qq
             apt-get install -y -qq /pkgs/probavi_0.0.0_amd64.deb /pkgs/probavi-adapter-postgres_0.0.0_amd64.deb
             command -v probavi
@@ -322,7 +327,7 @@ jobs:
 
       - name: install and run on Fedora
         run: |
-          docker run --rm -v "$PWD/dist/pkgs:/pkgs:ro" fedora:latest sh -eus <<'SH'
+          docker run --rm -i -v "$PWD/dist/pkgs:/pkgs:ro" fedora:latest sh -eus <<'SH'
             dnf install -y -q /pkgs/probavi-0.0.0-1.x86_64.rpm /pkgs/probavi-adapter-postgres-0.0.0-1.x86_64.rpm
             probavi adapter probe postgres | grep -q '"name":"postgres"'
             rpm -q --requires probavi-adapter-postgres | grep -qx probavi
@@ -354,9 +359,70 @@ jobs:
 
       - name: install and run on Alpine
         run: |
-          docker run --rm -v "$PWD/dist/pkgs:/pkgs:ro" alpine:3.22 sh -eus <<'SH'
+          docker run --rm -i -v "$PWD/dist/pkgs:/pkgs:ro" alpine:3.22 sh -eus <<'SH'
             apk add --no-cache --allow-untrusted /pkgs/probavi_0.0.0_x86_64.apk /pkgs/probavi-adapter-postgres_0.0.0_x86_64.apk
             probavi adapter probe postgres | grep -q '"name":"postgres"'
             apk del probavi-adapter-postgres probavi
             test ! -e /usr/bin/probavi
           SH
+
+  # Everything above proves the source tree. This proves the artifact: the
+  # tar.gz archives a release publishes and the README tells a reader to
+  # download first, unpacked in a container that has no Go, no build tree
+  # and no glibc, and asked to complete a real drill. The release workflow
+  # runs the same script over its own dist/ before it drafts anything, so
+  # what is proven on a pull request is what ships.
+  artifacts:
+    name: Released artifacts (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      # Both architectures are published, so a failure on one must not
+      # hide the other's result.
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: build the archives a release publishes
+        # The same flags and the same tar invocation as release.yml, on the
+        # runner's own architecture so the result can be executed rather
+        # than only built. -X main.version is the reason the version here
+        # is a real number instead of a word: the script reads it back out
+        # of the running binary and out of the signed record.
+        env:
+          VERSION: 0.0.0
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          pack() {
+            bin="$1"; pkg="$2"; ldflags="$3"
+            out="dist/${bin}_${VERSION}_linux_${ARCH}"
+            mkdir -p "${out}"
+            CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" \
+              go build -trimpath -ldflags "${ldflags}" -o "${out}/${bin}" "${pkg}"
+            cp LICENSE "${out}/"
+            tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' \
+              -cf - -C "${out}" . | gzip -n -9 > "dist/${bin}_${VERSION}_linux_${ARCH}.tar.gz"
+            rm -r "${out}"
+          }
+          pack probavi ./cmd/probavi "-s -w -buildid= -X main.version=${VERSION}"
+          pack probavi-adapter-postgres ./adapters/postgres "-s -w -buildid="
+          (cd dist && sha256sum -- *.tar.gz > SHA256SUMS)
+
+      - name: drill with them
+        env:
+          VERSION: 0.0.0
+          ARCH: ${{ matrix.arch }}
+        run: packaging/drill-from-archives.sh dist
