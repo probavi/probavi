@@ -93,6 +93,105 @@ func TestAdapterSinceMatchesTheChangelog(t *testing.T) {
 	}
 }
 
+// TestOneNewEngineReachesARelease enforces the release-cadence rule that
+// three sentences state and nothing else checks.
+//
+// AGENTS.md §2.4 closes the non-goals with "No more than one new engine
+// per release cycle", ROADMAP.md repeats that list verbatim, and the
+// engine catalogue restates it in its own preamble — while
+// docs/capabilities.json deliberately carries no entry for it, because a
+// release cadence is not a capability. So the rule lives only in prose,
+// in a repository where almost every other claim is machine-checked, and
+// the pressure against it is real: the catalogue holds dozens of engines
+// whose adapters are individually cheap to write.
+//
+// `since: null` is already this repository's spelling of "shipped in no
+// release yet" — TestAdapterSinceMatchesTheChangelog holds it there in
+// both directions, failing an adapter that names a release it does not
+// appear in and one that claims none while a released section already
+// ships it. Counting the nulls therefore needs no git history, no tag
+// lookup and nothing to diff: the question is answered by the same files
+// the neighbouring gate reads, offline, in microseconds.
+//
+// Adapter ids are the unit, which is also the honest one. PostGIS,
+// pgvector, TimescaleDB and Percona arrived as `verified` entries on
+// adapters that already shipped and rightly spend nothing from the
+// budget — what changed was an image, not an engine anyone has to keep
+// green. MariaDB took an id of its own and rightly did spend it, because
+// an evidence record names what performed a restore by `adapter.name`,
+// so a new id is a new thing this project has promised to maintain.
+func TestOneNewEngineReachesARelease(t *testing.T) {
+	var unreleased []string
+	for _, a := range readManifest(t).Adapters {
+		if a.Since == nil {
+			unreleased = append(unreleased, a.ID)
+		}
+	}
+	if len(unreleased) > 1 {
+		sort.Strings(unreleased)
+		t.Errorf("%d adapters state since: null (%s), but a release ships at most one new engine "+
+			"(AGENTS.md §2.4) — hold the others back until the release after this one",
+			len(unreleased), strings.Join(unreleased, ", "))
+	}
+}
+
+// cadenceFloor is the oldest release held to the one-engine rule. Three
+// releases before it carry more than one adapter — 0.1.0 (postgres and
+// mysql), 0.2.0 (mongodb and mssql) and 0.7.0 (clickhouse, etcd and
+// mariadb) — and rewriting history is not on offer: `since` is a fact
+// about what shipped, and a gate that demanded otherwise would be asking
+// for a lie. From here the record is unbroken, and that is what this
+// pins.
+const cadenceFloor = "0.8.0"
+
+// releasesSince returns the released versions from floor to the newest,
+// read out of the changelog rather than compared as numbers: the sections
+// are already in release order, so walking them from the top until the
+// floor appears is both the simplest way to say it and the one that
+// cannot disagree with the document it is protecting.
+func releasesSince(t *testing.T, floor string) map[string]bool {
+	t.Helper()
+	in := make(map[string]bool)
+	for _, s := range changelogSections(t) {
+		if !s.released {
+			continue
+		}
+		in[s.version] = true
+		if s.version == floor {
+			return in
+		}
+	}
+	t.Fatalf("%s has no released section [%s] — this gate cannot find its floor", changelog, floor)
+	return nil
+}
+
+// TestNoReleaseShippedTwoEngines is the other half of the cadence rule:
+// the forward-looking gate counts what is unreleased, and this one keeps
+// the releases that already happened from acquiring a second engine.
+//
+// Both halves are needed because they close different doors. An adapter
+// added with `since: null` is caught before it ships; an adapter added in
+// the same pull request that dates the changelog would carry a `since`
+// naming that brand-new release and never be null at all. That is the
+// release-preparation PR doing double duty, and it is the one route where
+// two engines could reach users in one version.
+func TestNoReleaseShippedTwoEngines(t *testing.T) {
+	inScope := releasesSince(t, cadenceFloor)
+	shipped := make(map[string][]string)
+	for _, a := range readManifest(t).Adapters {
+		if a.Since != nil && inScope[*a.Since] {
+			shipped[*a.Since] = append(shipped[*a.Since], a.ID)
+		}
+	}
+	for version, ids := range shipped {
+		if len(ids) > 1 {
+			sort.Strings(ids)
+			t.Errorf("%s ships %d new engines (%s), but a release ships at most one "+
+				"(AGENTS.md §2.4)", version, len(ids), strings.Join(ids, ", "))
+		}
+	}
+}
+
 // assertUnreleased checks an adapter that states no release: it must be in
 // the tree and in the Unreleased section, and in no released one. The
 // release that moves that heading therefore fails this gate until `since`

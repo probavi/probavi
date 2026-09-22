@@ -39,6 +39,27 @@ always called out explicitly.
   order and the coverage, because a drill after the draft reports on a
   release instead of stopping one.
 
+- **The one-engine-per-release rule is now a gate.** AGENTS.md §2.4 closes
+  the non-goals with *"No more than one new engine per release cycle"*,
+  `ROADMAP.md` repeats that list, and the engine catalogue restates it in
+  its own preamble — while `docs/capabilities.json` deliberately carries
+  no entry for it, because a release cadence is not a capability. The
+  rule therefore lived only in prose, in a repository where nearly every
+  other claim is machine-checked, and the pressure against it is a
+  catalogue of dozens of engines whose adapters are each cheap to write.
+
+  Two gates, because two different doors are open. `since: null` is
+  already this repository's spelling of *shipped in no release yet*, so
+  counting the nulls catches a second adapter before it ships — no git
+  history, no tag lookup, the same files the neighbouring `since` gate
+  already reads. And no release from **0.8.0** onward may be named by
+  more than one adapter's `since`, which closes the one route the first
+  gate cannot see: a pull request that adds an adapter *and* dates the
+  changelog would carry a `since` naming that brand-new release and never
+  be null at all. The floor is 0.8.0 because 0.1.0, 0.2.0 and 0.7.0 each
+  shipped more than one and `since` records what happened; the
+  twenty-five releases since have shipped exactly one apiece.
+
 ### Fixed
 
 - **Three CI container steps had been passing without running anything.**
