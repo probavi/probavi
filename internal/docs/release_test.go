@@ -208,3 +208,54 @@ func sortedKeys(set map[string]bool) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// drillScript is the shared script that unpacks the published archives in
+// a clean container and completes a real drill with them.
+const drillScript = "packaging/drill-from-archives.sh"
+
+// draftStep is the step that assembles the GitHub release.
+const draftStep = "name: draft the release"
+
+// TestReleaseDrillsWhatItPublishesBeforeDrafting keeps the release from
+// assembling itself out of binaries nothing has run.
+//
+// The archives are built with flags no other build uses — -trimpath, -s
+// -w, and the -X main.version that stamps the identity every signed
+// evidence record carries as env.probavi_version. Until this gate the
+// workflow built them, checksummed them, attested them and published
+// them without executing one, so a stamp that failed to apply, or a
+// binary that could not run outside the build tree, would have reached
+// users before it reached anyone here. Order is half the gate: a drill
+// after the draft proves the same thing about a release that already
+// exists.
+func TestReleaseDrillsWhatItPublishesBeforeDrafting(t *testing.T) {
+	workflow := read(t, releaseWorkflow)
+	drill := strings.Index(workflow, drillScript)
+	if drill < 0 {
+		t.Fatalf("%s no longer runs %s — nothing executes the artifacts it publishes",
+			releaseWorkflow, drillScript)
+	}
+	draft := strings.Index(workflow, draftStep)
+	if draft < 0 {
+		t.Fatalf("%s no longer has a %q step; this gate cannot order against it",
+			releaseWorkflow, draftStep)
+	}
+	if drill > draft {
+		t.Errorf("%s runs %s after it drafts the release — the drill has to be able to stop "+
+			"the release, not report on one", releaseWorkflow, drillScript)
+	}
+}
+
+// TestPullRequestsDrillTheArchivesToo keeps the same proof on every pull
+// request, where a regression is cheap to fix, rather than only at the
+// tag, where it is not.
+func TestPullRequestsDrillTheArchivesToo(t *testing.T) {
+	const ciWorkflow = ".github/workflows/ci.yml"
+	if !strings.Contains(read(t, ciWorkflow), drillScript) {
+		t.Errorf("%s no longer runs %s — the archive path would then be proven only by a release",
+			ciWorkflow, drillScript)
+	}
+	if _, err := os.Stat(path.Join(repoRoot, drillScript)); err != nil {
+		t.Errorf("%s is referenced by the workflows but missing: %v", drillScript, err)
+	}
+}

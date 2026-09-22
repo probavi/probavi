@@ -11,7 +11,49 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **A release now runs the binaries it publishes.** Everything else in
+  this repository proves the source tree: the unit suite, the integration
+  suite and the version matrix all build from the working directory, and
+  the release workflow built the archives, checksummed them, attested
+  them and drafted a release without ever executing one. Two things were
+  only provable that way. The archives are built with flags no other
+  build uses — `-trimpath`, `-s -w`, and the `-X main.version` that
+  stamps the identity every signed record carries as
+  `env.probavi_version` — and `-X` against a symbol that has moved is
+  silent by design, so a failed stamp would have put the wrong build into
+  an auditor's record. And the binaries are meant to run where there is
+  no Go, no build tree and no glibc, which is what `CGO_ENABLED=0` is
+  for.
+
+  `packaging/drill-from-archives.sh` unpacks the published archives in a
+  musl container holding nothing but the docker CLI, checks them against
+  the release's own `SHA256SUMS`, asserts no toolchain is present, and
+  completes a real drill — a live `pg_dump` restored into a real sandbox,
+  `service_healthy` and `row_count`, then the log verified offline by the
+  same released binary. The version is read back twice: from
+  `probavi version` and from the signed record. The release workflow runs
+  it over its own `dist/` **before it drafts anything**, and CI runs it on
+  every pull request on **amd64 and arm64**, natively. Two gates hold the
+  order and the coverage, because a drill after the draft reports on a
+  release instead of stopping one.
+
 ### Fixed
+
+- **Three CI container steps had been passing without running anything.**
+  `docker run` without `-i` gives the container an empty standard input,
+  so `sh -eus` fed by a heredoc reads end of file, executes nothing and
+  exits 0 — a green step whose log shows the image being pulled and not
+  one line after it. The package jobs that install the `.deb`, `.rpm` and
+  `.apk` into Debian, Fedora and Alpine and ask the core to resolve an
+  adapter — the check that catches a package putting a binary where the
+  `PATH` lookup will never find it — did exactly that from the commit
+  that introduced them on 2026-08-05 until this one. Every release since
+  shipped packages CI claimed to have installed and probed. The flag is
+  added, and `TestContainerHeredocsReachTheShell` now fails any workflow
+  or packaging script that feeds a heredoc to a shell reading standard
+  input without it, with its own reversed test proving the gate can fail.
 
 - **A ScyllaDB archive drill no longer calls a good backup corrupt**
   (`adapters/scylladb` 0.2.0, issue #327). `scylladb_snapshot_tar`
