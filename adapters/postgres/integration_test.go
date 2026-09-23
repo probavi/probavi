@@ -1940,3 +1940,228 @@ func newestArchiveStop(t *testing.T, repo, stanza string) string {
 	newest := stops[len(stops)-1][1]
 	return newest
 }
+
+// buildBarmanImage adds Barman to the verified postgres image. It is the
+// *seeding* image only: the drill below restores in the stock image,
+// because placing a cluster and letting PostgreSQL replay WAL needs no
+// Barman at all — which is this source kind's whole point.
+func buildBarmanImage(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	image := verifiedImage(t)
+	const tag = "probavi-it-barman:16"
+	dir := t.TempDir()
+	// Same waiver as the pgbackrest tool image: an image's base can outlive
+	// its distribution's security suite, and barman comes from the
+	// PostgreSQL project's own repository, which is current.
+	dockerfile := "FROM " + image + "\n" +
+		"RUN apt-get -o Acquire::Check-Valid-Until=false update" +
+		" && apt-get install -y --no-install-recommends barman barman-cli" +
+		" && rm -rf /var/lib/apt/lists/*\n"
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o600); err != nil {
+		t.Fatalf("write dockerfile: %v", err)
+	}
+	out, err := exec.CommandContext(ctx, "docker", "build", "-q", "-t", tag, dir).CombinedOutput()
+	if err == nil {
+		return tag
+	}
+	// A variant image may be unable to host the seed, and that is not this
+	// flow's failure: the postgis variant is Debian 11, whose security
+	// archive no longer carries the python3.9 packages barman depends on
+	// (measured 2026-09-23: four 404s out of debian-security), and the
+	// timescale variant is Alpine with no apt at all. What those images
+	// claim is an extension and a framed logical restore; the Barman flow
+	// keeps its coverage from the plain postgres matrix jobs, which is the
+	// same division buildPgBackRestImage already makes.
+	//
+	// A plain postgres image failing here is a real failure and must stay
+	// one, so the forgiveness is scoped to the variants by name.
+	if strings.HasPrefix(image, "postgres:") {
+		t.Fatalf("build barman seed image on %s: %v: %s", image, err, out)
+	}
+	t.Skipf("variant image %s cannot host the barman seed build (%v); the Barman flow is exercised "+
+		"by the plain postgres matrix jobs", image, err)
+	return ""
+}
+
+// barmanSeedScript bootstraps Barman against a local cluster and takes one
+// backup, then writes a second batch of rows whose WAL is archived after
+// it. The order matters and was measured: `barman backup` refuses until a
+// WAL segment has arrived through the streaming archiver, so cron starts
+// the receiver, switch-wal --force --archive delivers the first segment,
+// and only then is a backup possible.
+const barmanSeedScript = `set -e
+export PGDATA=/var/lib/postgresql/data
+mkdir -p "$PGDATA" /var/lib/barman /var/log/barman /etc/barman.d
+chown -R postgres:postgres "$PGDATA"
+id barman >/dev/null 2>&1 || useradd -m -s /bin/bash barman
+chown -R barman:barman /var/lib/barman /var/log/barman
+gosu postgres initdb -U postgres -D "$PGDATA" >/dev/null 2>&1
+{ echo "wal_level=replica"; echo "max_wal_senders=4"; echo "max_replication_slots=4"; \
+  echo "listen_addresses='127.0.0.1'"; } >> "$PGDATA/postgresql.conf"
+echo "host all all 127.0.0.1/32 trust"         >> "$PGDATA/pg_hba.conf"
+echo "host replication all 127.0.0.1/32 trust" >> "$PGDATA/pg_hba.conf"
+gosu postgres pg_ctl -D "$PGDATA" -w -l /tmp/pg.log start >/dev/null
+gosu postgres psql -U postgres -q -c "CREATE ROLE barman SUPERUSER LOGIN;"
+gosu postgres psql -U postgres -q -c "CREATE ROLE streaming_barman REPLICATION LOGIN;"
+gosu postgres psql -U postgres -q -c "CREATE TABLE events AS SELECT generate_series(1,500) AS id;"
+printf '[barman]\nbarman_home = /var/lib/barman\nbarman_user = barman\nlog_file = /var/log/barman/barman.log\nconfiguration_files_directory = /etc/barman.d\n' > /etc/barman.conf
+printf '[demo]\ndescription = demo\nconninfo = host=127.0.0.1 user=barman dbname=postgres\nstreaming_conninfo = host=127.0.0.1 user=streaming_barman dbname=postgres\nbackup_method = postgres\nstreaming_archiver = on\nslot_name = barman\ncreate_slot = auto\n' > /etc/barman.d/demo.conf
+gosu barman barman cron >/dev/null 2>&1 || true
+sleep 4
+gosu barman barman switch-wal --force --archive demo >/dev/null 2>&1 || true
+sleep 3
+gosu barman barman backup demo >/dev/null
+gosu postgres psql -U postgres -qtAc "SELECT now()" > /tmp/between
+sleep 2
+gosu postgres psql -U postgres -q -c "CREATE TABLE later AS SELECT generate_series(1,100) AS id;"
+gosu barman barman switch-wal --force --archive demo >/dev/null 2>&1 || true
+sleep 3
+gosu barman barman cron >/dev/null 2>&1 || true
+sleep 2
+gosu postgres pg_ctl -D "$PGDATA" -w stop >/dev/null`
+
+// makeBarmanServer seeds a Barman catalogue and copies the server
+// directory out, returning it and the instant between the two batches.
+func makeBarmanServer(t *testing.T, ctx context.Context, image, dest string) time.Time {
+	t.Helper()
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d",
+		"--label", docker.LabelSandbox+"=1", "--label", "com.probavi.pid="+strconv.Itoa(os.Getpid()),
+		"--network", "none", "--memory", engineMemoryLimit, image, "sleep", "infinity").Output()
+	if err != nil {
+		t.Fatalf("start seed container: %v", err)
+	}
+	id := strings.TrimSpace(string(out))
+	defer exec.Command("docker", "rm", "-f", "-v", id).Run() //nolint:errcheck // best-effort cleanup
+
+	if out, err := exec.CommandContext(ctx, "docker", "exec", id, "sh", "-c", barmanSeedScript).CombinedOutput(); err != nil {
+		t.Fatalf("seed barman catalogue: %v: %s", err, out)
+	}
+	raw, err := exec.CommandContext(ctx, "docker", "exec", id, "cat", "/tmp/between").Output()
+	if err != nil {
+		t.Fatalf("read the instant between the batches: %v", err)
+	}
+	between, err := time.Parse("2006-01-02 15:04:05.999999-07", strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("parse %q: %v", strings.TrimSpace(string(raw)), err)
+	}
+	if out, err := exec.CommandContext(ctx, "docker", "cp", id+":/var/lib/barman/demo", dest).CombinedOutput(); err != nil {
+		t.Fatalf("extract the catalogue: %v: %s", err, out)
+	}
+	// Barman writes the catalogue as its own user; a drill host reads it
+	// as whoever runs the drill.
+	if out, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none",
+		"-v", dest+":/c", image, "chmod", "-R", "a+rX", "/c").CombinedOutput(); err != nil {
+		t.Fatalf("make the catalogue readable: %v: %s", err, out)
+	}
+	return between.UTC()
+}
+
+// TestBarmanEndToEnd restores a real Barman backup in the **stock**
+// postgres image — no barman, no pgbackrest — and proves the drill carries
+// both what the base backup held and what was written after it and
+// recovered from archived WAL.
+func TestBarmanEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	seedImage := buildBarmanImage(t, ctx)
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-postgres"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	catalogue := filepath.Join(t.TempDir(), "demo")
+	makeBarmanServer(t, ctx, seedImage, catalogue)
+
+	provider := docker.New(nil)
+	sbx, err := provider.Create(ctx, map[string]string{
+		"image": verifiedImage(t), "command": "sleep infinity", "memory": engineMemoryLimit})
+	if err != nil {
+		t.Fatalf("create idle sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("postgres", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "barman", Path: catalogue},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if res.Timings.RestoreSeconds <= 0 || res.Timings.EngineReadySeconds <= 0 {
+		t.Errorf("timings = %+v, want real measurements", res.Timings)
+	}
+	if res.SourceIdentity.CreatedAt == nil {
+		t.Error("the catalogue dates itself in backup.info; created_at should not be null")
+	}
+
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{
+		"psql", "-U", "postgres", "-h", "127.0.0.1", "-tA", "-c",
+		"SELECT (SELECT count(*) FROM events) || '/' || (SELECT count(*) FROM later) || '/' || pg_is_in_recovery()"}})
+	if err != nil {
+		t.Fatalf("query the restored cluster: %v", err)
+	}
+	if got := strings.TrimSpace(string(out.Stdout)); got != "500/100/false" {
+		t.Errorf("events/later/in_recovery = %s, want 500/100/f — the second batch comes from "+
+			"archived WAL, and the cluster must be promoted rather than left in recovery", got)
+	}
+	if _, err := runner.Teardown(ctx, res.State, "completed", sbx); err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+}
+
+// TestBarmanPITREndToEnd demands the instant captured between the two
+// batches: the restored database must hold the first and not the second,
+// even though the second's WAL is in the archive.
+func TestBarmanPITREndToEnd(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	seedImage := buildBarmanImage(t, ctx)
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-postgres"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	catalogue := filepath.Join(t.TempDir(), "demo")
+	between := makeBarmanServer(t, ctx, seedImage, catalogue)
+
+	provider := docker.New(nil)
+	sbx, err := provider.Create(ctx, map[string]string{
+		"image": verifiedImage(t), "command": "sleep infinity", "memory": engineMemoryLimit})
+	if err != nil {
+		t.Fatalf("create idle sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("postgres", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	if _, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source:  adapter.ProvisionSource{Kind: "barman", Path: catalogue},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+		PITR:    &adapter.PITR{TargetTime: between.Format(time.RFC3339Nano)},
+	}, sbx); err != nil {
+		t.Fatalf("provision to a point in time: %v", err)
+	}
+
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{
+		"psql", "-U", "postgres", "-h", "127.0.0.1", "-tA", "-c",
+		"SELECT (SELECT count(*) FROM events) || '/' || (to_regclass('later') IS NULL) || '/' || pg_is_in_recovery()"}})
+	if err != nil {
+		t.Fatalf("query the restored cluster: %v", err)
+	}
+	if got := strings.TrimSpace(string(out.Stdout)); got != "500/true/false" {
+		t.Errorf("events/later-absent/in_recovery = %s, want 500/true/false: the first batch, no later "+
+			"table, and a promoted cluster — recovery stopped at the requested instant", got)
+	}
+}

@@ -299,6 +299,73 @@ layout, an archive that is not there, all pass through untouched. A
 pre-check that declines to answer costs a late failure; one that answers
 wrongly refuses a good backup.
 
+## The barman kind (catalogue restore)
+
+`path` is a Barman **server directory** — the one holding `base/`, `wals/`
+and `meta/`, not the Barman home above it. No parameter names the server:
+the directory is the server.
+
+Barman's own restore is server-side. `barman recover` runs where the
+catalogue lives and ships the files to the target over rsync or ssh, which
+is not a shape a drill has: a drill has the artifact and a sandbox and no
+Barman server. What it does have is the catalogue's layout, measured
+against Barman 3.20.0 and PostgreSQL 16:
+
+```
+<server>/meta/<id>-backup.info   key=value: begin_wal, end_wal, timeline,
+                                 end_time, status, parent_backup_id
+<server>/base/<id>/data/         the cluster, as pg_basebackup wrote it
+<server>/wals/<16 hex>/<segment> plain segment files, uncompressed,
+                                 named exactly as the segment
+```
+
+So the adapter places `data`, points `restore_command` at the WAL tree, and
+lets PostgreSQL recover. **Measured: this needs nothing the official
+postgres image does not already ship** — a real Barman backup restored in
+stock `postgres:16`, promoted, and carried both the rows inside the base
+backup and the rows written after it and replayed from archived WAL. That
+is the difference from the `pgbackrest` kind, which needs its own tool in
+the sandbox image. What both need is an **idle** sandbox, because both
+replace the data directory: `command: sleep infinity` on the docker
+provider.
+
+Point-in-time recovery works the same way it does for `pgbackrest`:
+`target.pitr` resolves to an absolute instant, the adapter picks the newest
+backup that finished before it, and recovery stops there and promotes.
+
+Three things the adapter does to the restored configuration, and why.
+`archive_mode` is forced **off**: the configuration inside the backup is
+the source host's, whose `archive_command` addresses a Barman server this
+sandbox has no business reaching, and a drill must not run the engine's own
+policies against the artifact it is proving. `pg_hba.conf` is replaced with
+sandbox-local trust, as it is for every physical restore here. And the WAL
+directory inside `restore_command` is derived with `cut` rather than a
+printf width, because PostgreSQL rejects a `restore_command` containing any
+`%` escape it does not recognise.
+
+Two verified images cannot host the **seeding** side of that test, which
+is a fact about them rather than about this source kind. The PostGIS
+variant is Debian 11, whose security archive no longer carries the
+python3.9 packages Barman depends on (measured 2026-09-23: four 404s out
+of `debian-security`), and the TimescaleDB variant is Alpine with no apt
+at all. What those images claim is an extension and a framed logical
+restore; the Barman flow keeps its coverage from the plain postgres matrix
+jobs, which is the division the pgbackrest flow already makes. A **plain**
+postgres image failing to host the seed is a real failure and stays one.
+
+### What is refused, before the transfer
+
+The same three questions `pgbackrest` is asked, and for the same reasons:
+the ancestor chain through `parent_backup_id`, the chosen backup's own
+`begin_wal` and `end_wal` in the archive, and — with `pitr` — whether any
+backup finished before the requested instant at all. Refusals are
+`source_not_found` and name what is absent.
+
+One more, which is Barman's own vocabulary: a backup whose `status` is
+**`WAITING_FOR_WALS`** is not restored from. Barman means by it that the
+WAL making that backup consistent has not arrived yet, which is exactly
+what a drill must not assume it will find.
+
 ## Where the cluster goes (`PGDATA`)
 
 A physical restore replaces the data directory, so the adapter has to know

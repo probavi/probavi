@@ -50,6 +50,7 @@ type resolvedSource struct {
 //	                      database: the globals load first, then the framed
 //	                      restore
 //	pgbackrest          — path is a pgBackRest repository directory (filesystem repo)
+//	barman              — path is a Barman server directory (base/, wals/, meta/)
 func resolveSource(ctx context.Context, kind, path string, params map[string]string) (*resolvedSource, *protoError) {
 	loc, perr := backupLocation(params)
 	if perr != nil {
@@ -78,11 +79,13 @@ func resolveSource(ctx context.Context, kind, path string, params map[string]str
 		return timescaleSource(resolveWithGlobals(ctx, path, params, loc))
 	case "pgbackrest":
 		return resolveRepo(path, params["stanza"])
+	case "barman":
+		return resolveBarman(path)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: pgdump, pgdump_dir, pgdump_with_globals, "+
 				"timescaledb_dump, timescaledb_dump_dir, timescaledb_dump_with_globals, "+
-				"pgbackrest)", kind)
+				"pgbackrest, barman)", kind)
 	}
 }
 
