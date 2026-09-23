@@ -39,6 +39,40 @@ always called out explicitly.
   order and the coverage, because a drill after the draft reports on a
   release instead of stopping one.
 
+- **A pgBackRest repository with a hole in its chain is refused before
+  the transfer** (`adapters/postgres` 0.16.0). A physical restore is a
+  chain: a differential or incremental is meaningless without the full it
+  was taken against, and no backup reaches consistency without the WAL
+  written while it ran. Measured against pgbackrest 2.59.1 and PostgreSQL
+  16, neither absence said so usefully. With the restored backup's stop
+  segment removed from the archive, `pgbackrest restore` **exits 0** and
+  the failure appeared only when the server would not start — the adapter
+  reported `restored cluster failed to start: pg_ctl: could not start
+  server`, naming nothing — after the whole repository had been copied
+  into the sandbox. With the prior full's directory removed, the restore
+  failed naming a relation file inside the backup that was gone.
+
+  The repository is now read host-side first, beside the version
+  pre-check, and refused with `source_not_found` naming what is absent:
+  the ancestor chain walked through `backup-prior`, the chosen backup's
+  own archive-start and archive-stop segments, and — with `pitr` — that
+  some backup finished before the requested instant at all, since
+  recovery rolls forward and never back. This is the behaviour
+  `adapters/mssql` already had for a log-sequence gap, carried to the
+  other engine that has a chain.
+
+  Three limits are stated rather than left to be found. Only the chosen
+  backup's **own** WAL range is required: deleting the full's archive
+  segment was measured to leave a differential restore working end to
+  end, so demanding the whole chain's WAL would refuse repositories whose
+  older segments have legitimately expired. Only that range's
+  **endpoints**, because a repository records no WAL segment size and the
+  names between two segments therefore cannot be enumerated from it. And
+  a repository this code cannot read — encrypted manifest, unfamiliar
+  layout, absent archive — is not judged at all: a pre-check that
+  declines to answer costs a late failure, while one that answers wrongly
+  refuses a good backup, which is what issue #327 was.
+
 - **Translations now say where they came from, where they are read.**
   `docs/i18n.md` has always required a linguistic review before merge,
   dates the full review of every shipped catalog and README translation,

@@ -64,16 +64,16 @@ var stanzaPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
 // resolvePITRTarget converts the protocol's RFC 3339 pitr.target_time into
 // pgbackrest's --target form; empty when the drill did not request PITR.
-func resolvePITRTarget(req *provisionRequest) (string, *protoError) {
+func resolvePITRTarget(req *provisionRequest) (string, time.Time, *protoError) {
 	if req.PITR == nil {
-		return "", nil
+		return "", time.Time{}, nil
 	}
 	ts, err := time.Parse(time.RFC3339, req.PITR.TargetTime)
 	if err != nil {
-		return "", protoErr("invalid_request", false,
+		return "", time.Time{}, protoErr("invalid_request", false,
 			"pitr.target_time %q is not an RFC 3339 timestamp", req.PITR.TargetTime)
 	}
-	return ts.UTC().Format(pgbackrestTimeFormat), nil
+	return ts.UTC().Format(pgbackrestTimeFormat), ts.UTC(), nil
 }
 
 // provisionPhysical runs the pgbackrest provision flow and returns the
@@ -84,7 +84,7 @@ func provisionPhysical(ctx context.Context, c *core, req *provisionRequest, src 
 		return nil, protoErr("invalid_request", false,
 			"pgbackrest source requires source.params.stanza (letters, digits, - and _)")
 	}
-	pitrTarget, perr := resolvePITRTarget(req)
+	pitrTarget, pitrAt, perr := resolvePITRTarget(req)
 	if perr != nil {
 		return nil, perr
 	}
@@ -98,6 +98,12 @@ func provisionPhysical(ctx context.Context, c *core, req *provisionRequest, src 
 		return nil, perr
 	}
 	if perr := checkEngineVersion(ctx, c, repoDBVersion(src.path, stanza)); perr != nil {
+		return nil, perr
+	}
+	// Host-side, beside the version pre-check and for the same reason: a
+	// repository that cannot serve this restore should say so before its
+	// bytes are moved, naming what is absent (chain.go).
+	if perr := checkRestoreChain(src.path, stanza, pitrAt); perr != nil {
 		return nil, perr
 	}
 
