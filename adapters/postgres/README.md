@@ -343,6 +343,16 @@ directory inside `restore_command` is derived with `cut` rather than a
 printf width, because PostgreSQL rejects a `restore_command` containing any
 `%` escape it does not recognise.
 
+Two verified images cannot host the **seeding** side of that test, which
+is a fact about them rather than about this source kind. The PostGIS
+variant is Debian 11, whose security archive no longer carries the
+python3.9 packages Barman depends on (measured 2026-09-23: four 404s out
+of `debian-security`), and the TimescaleDB variant is Alpine with no apt
+at all. What those images claim is an extension and a framed logical
+restore; the Barman flow keeps its coverage from the plain postgres matrix
+jobs, which is the division the pgbackrest flow already makes. A **plain**
+postgres image failing to host the seed is a real failure and stays one.
+
 ### What is refused, before the transfer
 
 The same three questions `pgbackrest` is asked, and for the same reasons:
