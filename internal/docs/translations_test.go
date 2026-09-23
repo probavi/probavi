@@ -38,6 +38,9 @@ var (
 	linkRe = regexp.MustCompile(`\(README\.([a-z]{2})\.md\)`)
 	// versionRe matches a release-version claim (v1.4.0, v2.0, …).
 	versionRe = regexp.MustCompile(`\bv[0-9]+\.[0-9]+`)
+	// nativeReviewRe matches a translation's provenance pin:
+	//   <!-- i18n-native-review: yes -->
+	nativeReviewRe = regexp.MustCompile(`(?m)^<!-- i18n-native-review: (yes|no) -->$`)
 )
 
 // read returns a repository file as a string, failing the test if it is
@@ -218,6 +221,43 @@ func TestLanguageRowListsEveryTranslation(t *testing.T) {
 		name := fmt.Sprintf("README.%s.md", tag)
 		if _, err := os.Stat(filepath.Join(repoRoot, name)); err != nil {
 			t.Errorf("%s links %s, which does not exist", sourceDoc, name)
+		}
+	}
+}
+
+// TestTranslationsStateTheirProvenance keeps a translation from implying a
+// review it never had.
+//
+// Every one of these was made inside this project and passed the review
+// docs/i18n.md §5 requires; none but Hungarian has been read by anyone who
+// reads the language natively. A reader opening README.de.md learned none
+// of that and had nowhere obvious to send a correction, while the
+// specification had said it all along — which is the wrong place for it,
+// because the person who can improve a German sentence is reading the
+// German file and not the i18n spec.
+//
+// The pin is the machine-readable half of the sentence that now stands in
+// each file's notice. It exists so the claim cannot quietly vanish from
+// one translation during an edit: prose is what a reader is owed, a gate
+// cannot read prose in four languages, but it can insist the claim is
+// still declared.
+//
+// Deliberately not a draft label and not a gate on reviews arriving
+// (docs/i18n.md §7.2): a label saying "do not trust this yet" discourages
+// the reader most able to fix it, and a gate whose green depends on an
+// outside volunteer appearing cannot be satisfied by doing better work,
+// which is what every other gate here asks of whoever trips it.
+func TestTranslationsStateTheirProvenance(t *testing.T) {
+	for _, file := range translationFiles(t) {
+		pins := nativeReviewRe.FindAllStringSubmatch(read(t, file), -1)
+		switch len(pins) {
+		case 1:
+		case 0:
+			t.Errorf("%s carries no <!-- i18n-native-review: yes|no --> pin, so its notice can "+
+				"lose the provenance sentence without anything noticing (docs/i18n.md §7.3)", file)
+		default:
+			t.Errorf("%s carries %d i18n-native-review pins; exactly one is a statement, two are "+
+				"a question", file, len(pins))
 		}
 	}
 }

@@ -1,6 +1,7 @@
 <!-- i18n-source: README.md -->
 <!-- i18n-span: intro sha256:0b3afd4c9bcca86fbeec4c2152c985e53748fc1a38706288b97fb0634a82921d -->
 <!-- i18n-span: non-goals sha256:e100e9decc99337fb657e9e70709a723716108a104f3b03018a23724c597071d -->
+<!-- i18n-native-review: no -->
 
 # Probavi
 
@@ -53,7 +54,7 @@
 [![Weaviate](https://img.shields.io/badge/Weaviate-4B5563)](adapters/weaviate/README.md)
 <!-- capabilities:engine-badges:end -->
 
-> **English is authoritative.** Dies ist eine Übersetzung der Einleitung von [README.md](README.md), Stand 2026-08-04. Bei Abweichungen gilt der englische Text: Installation, Beispiele und die aktuelle Aufstellung der Fähigkeiten sind nur auf Englisch aktuell.
+> **English is authoritative.** Dies ist eine Übersetzung der Einleitung von [README.md](README.md), Stand 2026-08-04. Bei Abweichungen gilt der englische Text: Installation, Beispiele und die aktuelle Aufstellung der Fähigkeiten sind nur auf Englisch aktuell. Diese Übersetzung ist im Projekt selbst entstanden und hat die in [docs/i18n.md](docs/i18n.md) geforderte sprachliche Durchsicht (2026-08-05) durchlaufen, wurde aber von keiner muttersprachlichen Person geprüft. Korrekturen sind willkommen: ein Issue, das die beanstandete Stelle und die bessere Formulierung nennt, genügt.
 
 *Probavi* — lateinisch für **„Ich habe bewiesen“.** Das Perfekt ist der Punkt: nicht „wir testen Restores“, sondern „dieser Restore wurde durchgeführt und bewiesen, hier ist der signierte Datensatz“.
 
