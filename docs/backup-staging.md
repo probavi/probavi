@@ -195,6 +195,6 @@ have to be measured, which makes it an evidence-schema question rather than
 a convenience.
 
 The one case this document cannot cover is an engine whose backups only
-ever exist in a bucket, with no filesystem form to copy. `ROADMAP.md`
-tracks that as an open question; if that is your situation, it is worth
+ever exist in a bucket, with no filesystem form to copy. [The engine
+catalogue](engine-catalog.md) tracks that as an open one-way door; if that is your situation, it is worth
 saying so on the issue tracker rather than working around it.

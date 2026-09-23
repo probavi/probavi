@@ -39,6 +39,22 @@ always called out explicitly.
   order and the coverage, because a drill after the draft reports on a
   release instead of stopping one.
 
+- **The engine catalogue moved to `docs/engine-catalog.md`.** It was 109 KB
+  of `ROADMAP.md`'s 184 — two thirds of a plan given over to something
+  that is not one. The catalogue is a measurement and refusal record: what
+  an engine costs, what was measured on the day it was read, and why a
+  refusal is a refusal, for 43 surveyed engines of which most have no
+  adapter and may never have one, so there is no adapter README to carry
+  the notes. It moved whole rather than as one file per engine, because
+  the DB-Engines lens and the four groupings are a single argument that
+  splitting by engine is exactly what destroys.
+
+  Every entry travelled unchanged — the 52 checkbox lines are the same 52
+  — and the four group paragraphs became headings. What stays in the plan
+  is the rate it runs at and a pointer. `ROADMAP.md` is now 77 KB and
+  reads as a plan; `docs/engine-licensing.md` and `docs/backup-staging.md`
+  point at the catalogue rather than at a file that no longer holds it.
+
 - **The one-engine-per-release rule is now a gate.** AGENTS.md §2.4 closes
   the non-goals with *"No more than one new engine per release cycle"*,
   `ROADMAP.md` repeats that list, and the engine catalogue restates it in
