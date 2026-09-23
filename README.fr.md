@@ -1,6 +1,7 @@
 <!-- i18n-source: README.md -->
 <!-- i18n-span: intro sha256:0b3afd4c9bcca86fbeec4c2152c985e53748fc1a38706288b97fb0634a82921d -->
 <!-- i18n-span: non-goals sha256:e100e9decc99337fb657e9e70709a723716108a104f3b03018a23724c597071d -->
+<!-- i18n-native-review: no -->
 
 # Probavi
 
@@ -53,7 +54,7 @@
 [![Weaviate](https://img.shields.io/badge/Weaviate-4B5563)](adapters/weaviate/README.md)
 <!-- capabilities:engine-badges:end -->
 
-> **English is authoritative.** Ceci est une traduction de l'introduction de [README.md](README.md), à jour au 2026-08-04. En cas de divergence, le texte anglais fait foi : l'installation, les exemples et l'inventaire des capacités ne sont à jour qu'en anglais.
+> **English is authoritative.** Ceci est une traduction de l'introduction de [README.md](README.md), à jour au 2026-08-04. En cas de divergence, le texte anglais fait foi : l'installation, les exemples et l'inventaire des capacités ne sont à jour qu'en anglais. Cette traduction a été réalisée au sein du projet et a fait l'objet de la relecture linguistique exigée par [docs/i18n.md](docs/i18n.md) (2026-08-05), mais elle n'a été relue par aucune personne de langue maternelle. Les corrections sont bienvenues : une issue nommant le passage en cause et la meilleure formulation suffit.
 
 *Probavi* — du latin **« j'ai prouvé ».** Le parfait latin est tout l'enjeu : non pas « nous testons les restaurations », mais « cette restauration a été effectuée et prouvée, voici l'enregistrement signé ».
 

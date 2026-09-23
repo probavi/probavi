@@ -39,6 +39,30 @@ always called out explicitly.
   order and the coverage, because a drill after the draft reports on a
   release instead of stopping one.
 
+- **Translations now say where they came from, where they are read.**
+  `docs/i18n.md` has always required a linguistic review before merge,
+  dates the full review of every shipped catalog and README translation,
+  and invites native-speaker corrections — but all of that lived in the
+  specification, and a reader opening `README.de.md` learned none of it
+  and had nowhere obvious to send a fix. The person who can improve a
+  German sentence is reading the German file, not the i18n spec.
+
+  The notice each translation already carries is extended with it: made
+  inside this project, passed the review §5 requires, read natively only
+  where a maintainer reads that language — Hungarian today — and how to
+  send a correction. Stated uniformly across the four translated READMEs
+  and, for the twenty-three catalogs, in the Localization section of
+  `README.md`, since a catalog is a flat JSON map with nowhere to put a
+  note. An `i18n-native-review` pin is the machine-readable half, gated
+  so the claim cannot quietly vanish from one file during an edit.
+
+  Deliberately not a draft label and not a gate blocking new languages
+  until reviews arrive. A label saying *do not trust this yet*
+  discourages the reader most able to fix it, and a gate whose green
+  depends on an outside volunteer appearing cannot be satisfied by doing
+  better work — which is what every other gate here asks of whoever
+  trips it.
+
 - **The engine catalogue moved to `docs/engine-catalog.md`.** It was 109 KB
   of `ROADMAP.md`'s 184 — two thirds of a plan given over to something
   that is not one. The catalogue is a measurement and refusal record: what

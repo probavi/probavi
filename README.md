@@ -427,6 +427,8 @@ members:
 
 The CLI speaks English by default and is localizable (`docs/i18n.md`): set `PROBAVI_LANG=hu` — or just have a Hungarian `LANG` — and the usage text and diagnostics switch to Hungarian. All 24 official EU languages ship today; `docs/capabilities.json` lists them, and contributions for further languages are welcome under the same gates (`docs/i18n.md` §5). Machine outputs never change language: evidence records, JSON summaries, the adapter protocol, and logs are contracts and stay English everywhere.
 
+Where the translations came from is stated rather than left to be assumed. Every catalog and every translated README was made inside this project and passed the linguistic review `docs/i18n.md` §8 records, dated 2026-08-05. Hungarian is the one language a maintainer reads natively; none of the others has had a native-speaker pass, and each translated README says so where it is read. Corrections are welcome and small ones are the most useful kind — an issue naming the wording and a better one is enough.
+
 ## Design principles
 
 - **Build on top of backup tools, never replace them.** Probavi orchestrates and verifies; pgBackRest and friends keep doing what they do best.

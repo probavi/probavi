@@ -1,6 +1,7 @@
 <!-- i18n-source: README.md -->
 <!-- i18n-span: intro sha256:0b3afd4c9bcca86fbeec4c2152c985e53748fc1a38706288b97fb0634a82921d -->
 <!-- i18n-span: non-goals sha256:e100e9decc99337fb657e9e70709a723716108a104f3b03018a23724c597071d -->
+<!-- i18n-native-review: no -->
 
 # Probavi
 
@@ -53,7 +54,7 @@
 [![Weaviate](https://img.shields.io/badge/Weaviate-4B5563)](adapters/weaviate/README.md)
 <!-- capabilities:engine-badges:end -->
 
-> **English is authoritative.** Esta es una traducción de la introducción de [README.md](README.md), actualizada a 2026-08-04. En caso de discrepancia, prevalece el texto en inglés: la instalación, los ejemplos y el inventario de capacidades solo están actualizados en inglés.
+> **English is authoritative.** Esta es una traducción de la introducción de [README.md](README.md), actualizada a 2026-08-04. En caso de discrepancia, prevalece el texto en inglés: la instalación, los ejemplos y el inventario de capacidades solo están actualizados en inglés. Esta traducción se hizo dentro del proyecto y pasó la revisión lingüística que exige [docs/i18n.md](docs/i18n.md) (2026-08-05), pero ninguna persona hablante nativa la ha revisado. Las correcciones son bienvenidas: basta una issue que indique el pasaje y una redacción mejor.
 
 *Probavi* — del latín **«he probado».** El pretérito perfecto es la clave: no «ponemos a prueba las restauraciones», sino «esta restauración se realizó y quedó probada, aquí está el registro firmado».
 

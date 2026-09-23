@@ -1,6 +1,7 @@
 <!-- i18n-source: README.md -->
 <!-- i18n-span: intro sha256:0b3afd4c9bcca86fbeec4c2152c985e53748fc1a38706288b97fb0634a82921d -->
 <!-- i18n-span: non-goals sha256:e100e9decc99337fb657e9e70709a723716108a104f3b03018a23724c597071d -->
+<!-- i18n-native-review: yes -->
 
 # Probavi
 
@@ -53,7 +54,7 @@
 [![Weaviate](https://img.shields.io/badge/Weaviate-4B5563)](adapters/weaviate/README.md)
 <!-- capabilities:engine-badges:end -->
 
-> **English is authoritative.** Ez a [README.md](README.md) bevezetőjének fordítása, a 2026-08-04-i állapot szerint. Eltérés esetén az angol szöveg az irányadó: a telepítés, a példák és az aktuális képességlista csak angolul naprakész.
+> **English is authoritative.** Ez a [README.md](README.md) bevezetőjének fordítása, a 2026-08-04-i állapot szerint. Eltérés esetén az angol szöveg az irányadó: a telepítés, a példák és az aktuális képességlista csak angolul naprakész. A fordítás a projekten belül készült, és a magyar az egyetlen nyelv, amelyet a projekt karbantartója anyanyelvként olvas. Javítást szívesen fogadunk: elég egy issue, amely megnevezi a kifogásolt részt és a jobb megfogalmazást.
 
 *Probavi* — latinul **„bebizonyítottam”.** A befejezett múlt a lényeg: nem „teszteljük a visszaállításokat”, hanem „ez a visszaállítás megtörtént és bizonyított, itt az aláírt rekord”.
 
