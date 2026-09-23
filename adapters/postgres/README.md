@@ -261,6 +261,44 @@ later. The check refuses only on positive evidence: an encrypted or
 otherwise unreadable manifest simply skips it, and the restore speaks for
 itself.
 
+### A repository with a hole in it is refused before the transfer
+
+A physical restore is a chain. A differential or incremental backup is
+meaningless without the full it was taken against, and no backup reaches a
+consistent state without the WAL written while it ran. Both can be absent
+from a repository that looks complete, and measured against pgbackrest
+2.59.1 and PostgreSQL 16 neither says so usefully on its own: with the
+restored backup's stop segment removed from the archive, `pgbackrest
+restore` **exits 0** and the failure surfaces only when the server will not
+start, logging nothing more than `startup process exited with exit code 1`;
+with the prior full's directory removed, the restore fails naming a
+relation file deep inside the backup that is gone.
+
+So the adapter reads the repository host-side first, beside the version
+pre-check and before a byte is transferred, and refuses with
+`source_not_found`:
+
+- the chain the chosen backup rests on, walked through `backup-prior` to
+  the full — naming both backups when an ancestor has left the repository;
+- that backup's own `backup-archive-start` and `backup-archive-stop`
+  segments, which are what carry the cluster to consistency — naming the
+  segment and which end of the range it is;
+- with `pitr`, that some backup finished before the requested instant at
+  all, since recovery rolls forward and never back.
+
+Three limits, stated rather than left to be discovered. **Only the chosen
+backup's own WAL range is required**: deleting the *full's* archive segment
+was measured to leave a differential restore working end to end, so
+demanding the whole chain's WAL would refuse repositories whose older
+segments have legitimately expired. **Only the endpoints of that range**,
+not the segments between them — a repository records no WAL segment size,
+so the names in between cannot be enumerated from it, and an interior hole
+in a long range stays the late failure it is today. And **a repository this
+code cannot read is not judged**: an encrypted manifest, an unfamiliar
+layout, an archive that is not there, all pass through untouched. A
+pre-check that declines to answer costs a late failure; one that answers
+wrongly refuses a good backup.
+
 ## Where the cluster goes (`PGDATA`)
 
 A physical restore replaces the data directory, so the adapter has to know

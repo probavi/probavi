@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -1826,4 +1827,116 @@ func makeTimescaleFixture(t *testing.T, ctx context.Context, provider *docker.Pr
 		t.Fatalf("extract fixture: %v: %s", err, out)
 	}
 	return true
+}
+
+// TestPgBackRestRefusesAnIncompleteChain proves the host-side pre-check
+// against a repository a real pgbackrest wrote.
+//
+// Measured on the same repository before this check existed: with the
+// restored backup's stop segment removed, `pgbackrest restore` exits 0 and
+// the failure appears only when the server will not start, logging
+// "startup process exited with exit code 1" — which the adapter reported
+// as "restored cluster failed to start", naming nothing. The refusal now
+// happens before the repository is transferred, and the assertion below
+// that the sandbox holds no copy of it is the half that says so.
+func TestPgBackRestRefusesAnIncompleteChain(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	image := buildPgBackRestImage(t, ctx)
+
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-postgres"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	hostRepo := filepath.Join(t.TempDir(), "repo")
+	makeBackRestRepo(t, ctx, image, hostRepo)
+
+	// The stop segment of the only backup: the WAL that carries the
+	// cluster to a consistent state.
+	stop := newestArchiveStop(t, hostRepo, "demo")
+	removed := 0
+	matches, err := filepath.Glob(filepath.Join(hostRepo, "archive", "demo", "*", stop[:16], stop+"*"))
+	if err != nil {
+		t.Fatalf("glob the archive: %v", err)
+	}
+	for _, m := range matches {
+		if strings.HasSuffix(m, ".backup") {
+			continue
+		}
+		if err := os.Remove(m); err != nil {
+			t.Fatalf("remove %s: %v", m, err)
+		}
+		removed++
+	}
+	if removed == 0 {
+		t.Fatalf("found no archived copy of %s to remove — the fixture is not what this test assumes", stop)
+	}
+
+	provider := docker.New(nil)
+	sbx, err := provider.Create(ctx, map[string]string{"image": image, "command": "sleep infinity", "memory": engineMemoryLimit})
+	if err != nil {
+		t.Fatalf("create idle sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("postgres", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	_, err = runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source: adapter.ProvisionSource{
+			Kind: "pgbackrest", Path: hostRepo, Params: map[string]string{"stanza": "demo"},
+		},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err == nil {
+		t.Fatal("provisioned from a repository whose WAL cannot reach consistency")
+	}
+	var aerr *adapter.Error
+	if !errors.As(err, &aerr) {
+		t.Fatalf("error %v is not a protocol error", err)
+	}
+	if aerr.Code != "source_not_found" {
+		t.Errorf("code = %q, want source_not_found — the segment is absent, not corrupt", aerr.Code)
+	}
+	if !strings.Contains(aerr.Message, stop) {
+		t.Errorf("message = %q, want it to name the missing segment %s", aerr.Message, stop)
+	}
+
+	// The point of doing this host-side: the bytes never moved.
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{
+		"sh", "-c", "test -e " + sbx.ScratchDir() + "/probavi-pgbackrest-repo && echo present || echo absent",
+	}})
+	if err != nil {
+		t.Fatalf("inspect the sandbox: %v", err)
+	}
+	if got := strings.TrimSpace(string(out.Stdout)); got != "absent" {
+		t.Errorf("the sandbox holds the repository (%s) — the refusal came after the transfer, "+
+			"which is the cost this check exists to avoid", got)
+	}
+}
+
+// newestArchiveStop reads the archive-stop segment of the repository's
+// newest backup out of backup.info, so the test removes the segment the
+// adapter will actually ask for rather than one it guessed. This package
+// is the adapter's external test package, so it reads the manifest with
+// its own eyes rather than through the adapter's parser.
+func newestArchiveStop(t *testing.T, repo, stanza string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(repo, "backup", stanza, "backup.info"))
+	if err != nil {
+		t.Fatalf("read backup.info: %v", err)
+	}
+	// The manifest's current section lists one backup per line as
+	// LABEL={json}; the fixture takes exactly one full backup.
+	stops := regexp.MustCompile(`"backup-archive-stop":"([0-9A-Fa-f]{24})"`).FindAllStringSubmatch(string(raw), -1)
+	if len(stops) == 0 {
+		t.Fatal("the seeded repository names no archive-stop segment")
+	}
+	newest := stops[len(stops)-1][1]
+	return newest
 }
