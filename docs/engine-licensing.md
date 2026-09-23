@@ -1,8 +1,8 @@
 # Engine licences: who accepts what, and on whose behalf
 
-One group in [`ROADMAP.md`](../ROADMAP.md)'s engine catalogue is headed
-"Needs a decision before code — licensing, registration, or a sandbox
-capability we do not have". Every entry under it has been read from
+One group in [the engine catalogue](engine-catalog.md) is headed "Needs a
+decision before code", and what it turns on is licensing, registration, or
+a sandbox capability we do not have. Every entry under it has been read from
 scratch, because this project's position on engine licences survived only
 as half a sentence above the list. This document is that position, stated
 normatively: whose question a licence is, where an acceptance may live,
@@ -182,8 +182,8 @@ Two consequences:
 
 ## 7. Out of reach is written down, by name
 
-Where the answer is no, the engine is named in `ROADMAP.md`'s catalogue
-with its reason, at its rank, rather than left as a silent gap. IBM Db2 is
+Where the answer is no, the engine is named in [the engine
+catalogue](engine-catalog.md) with its reason, at its rank, rather than left as a silent gap. IBM Db2 is
 recorded there as out of reach on this provider because `--privileged`
 stays shut; Greenplum because its open development stopped. Both are
 refusals a user can read and argue with.
