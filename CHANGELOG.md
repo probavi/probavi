@@ -39,6 +39,40 @@ always called out explicitly.
   order and the coverage, because a drill after the draft reports on a
   release instead of stopping one.
 
+- **Barman backups drill, with point-in-time recovery** (`adapters/postgres`
+  0.17.0, source kind `barman`). The point-in-time item in Phase 2 promised
+  *WAL replay via wal-g or pgBackRest* and shipped only the second; of
+  thirty-two adapters exactly one declared `pitr`, and within it exactly
+  one source kind carried it. This is the second.
+
+  Barman's own restore is server-side — `barman recover` runs where the
+  catalogue lives and ships files over rsync or ssh — which is not a shape
+  a drill has. Its *layout* is, and that is what the adapter reads,
+  measured against Barman 3.20.0: `meta/<id>-backup.info` for the
+  metadata, `base/<id>/data/` for the cluster as `pg_basebackup` wrote it,
+  and `wals/<first sixteen>/<segment>` for plain uncompressed WAL. So the
+  adapter places the cluster, points `restore_command` at the WAL tree,
+  and lets PostgreSQL recover.
+
+  **It needs nothing the official postgres image does not already ship.** A
+  real Barman backup restores in stock `postgres:16`, promotes, and carries
+  both the rows inside the base backup and the rows written after it and
+  replayed from archived WAL — that is the difference from the `pgbackrest`
+  kind, which needs its tool in the sandbox image. Both need an idle
+  sandbox, because both replace the data directory.
+
+  Refused before the transfer, as `pgbackrest` now is: the ancestor chain
+  through `parent_backup_id`, the chosen backup's own WAL endpoints, and a
+  point in time no backup finished before. One refusal is Barman's own
+  vocabulary — a backup whose status is `WAITING_FOR_WALS` is not restored
+  from, because Barman means by it that the WAL making the backup
+  consistent has not arrived. Three settings the restored configuration
+  gets: `archive_mode` off, because the configuration in the backup
+  addresses a Barman server the sandbox has no business reaching;
+  sandbox-local trust auth; and a `restore_command` whose WAL directory is
+  derived with `cut`, because PostgreSQL rejects any `%` escape it does not
+  recognise.
+
 - **A pgBackRest repository with a hole in its chain is refused before
   the transfer** (`adapters/postgres` 0.16.0). A physical restore is a
   chain: a differential or incremental is meaningless without the full it

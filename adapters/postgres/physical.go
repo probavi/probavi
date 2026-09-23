@@ -168,13 +168,8 @@ func provisionPhysical(ctx context.Context, c *core, req *provisionRequest, src 
 // checkIdleSandbox verifies the preconditions of a physical restore: no
 // engine running, pgbackrest present.
 func checkIdleSandbox(ctx context.Context, c *core) *protoError {
-	ready, _, perr := execChecked(ctx, c, "pg_isready", "-h", "127.0.0.1", "-U", defaultUser, "-q")
-	if perr != nil {
+	if perr := checkEngineStopped(ctx, c, "pgbackrest restore"); perr != nil {
 		return perr
-	}
-	if ready.ExitCode == 0 {
-		return protoErr("invalid_request", false,
-			"pgbackrest restore needs an idle sandbox: set sandbox params command to keep the engine stopped (docker: command: sleep infinity)")
 	}
 	version, stderr, perr := execChecked(ctx, c, "pgbackrest", "version")
 	if perr != nil {
@@ -183,6 +178,23 @@ func checkIdleSandbox(ctx context.Context, c *core) *protoError {
 	if version.ExitCode != 0 {
 		return protoErr("invalid_request", false,
 			"sandbox image lacks pgbackrest (%s): use an image with postgres, pgbackrest, and gosu", firstLine(stderr))
+	}
+	return nil
+}
+
+// checkEngineStopped is the half of the precondition every restore that
+// replaces the data directory shares. The barman kind needs only this one:
+// measured, it restores in the stock postgres image, because placing a
+// cluster and letting PostgreSQL recover asks for no tool the image does
+// not ship — which is the whole difference from the pgbackrest kind.
+func checkEngineStopped(ctx context.Context, c *core, what string) *protoError {
+	ready, _, perr := execChecked(ctx, c, "pg_isready", "-h", "127.0.0.1", "-U", defaultUser, "-q")
+	if perr != nil {
+		return perr
+	}
+	if ready.ExitCode == 0 {
+		return protoErr("invalid_request", false,
+			"%s needs an idle sandbox: set sandbox params command to keep the engine stopped (docker: command: sleep infinity)", what)
 	}
 	return nil
 }

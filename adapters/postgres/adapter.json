@@ -56,6 +56,7 @@
     "pgdump_dir": "A directory of pg_dump files; the one whose own head records the newest time is restored",
     "pgdump_with_globals": "One pg_dump file plus the cluster globals (roles and grants) loaded before it; either member may be gzip-compressed",
     "pgbackrest": "A pgBackRest filesystem repository (physical restore)",
+    "barman": "A Barman server directory \u2014 base/, wals/ and meta/ \u2014 restored by placing the cluster and letting PostgreSQL replay the archived WAL",
     "timescaledb_dump": "One pg_dump file of a TimescaleDB database; the restore is framed with timescaledb_pre_restore()/timescaledb_post_restore()",
     "timescaledb_dump_dir": "A directory of them; the one whose own head records the newest time is restored, framed the same way",
     "timescaledb_dump_with_globals": "A directory holding a pg_dumpall --globals-only script and one TimescaleDB dump; the globals load first, then the framed restore"
