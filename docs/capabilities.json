@@ -594,7 +594,7 @@
       "name": "MariaDB",
       "status": "experimental",
       "since": "0.7.0",
-      "adapter_version": "0.4.0",
+      "adapter_version": "0.5.0",
       "engine": {
         "id": "mariadb",
         "name": "MariaDB"
@@ -633,7 +633,7 @@
         },
         {
           "id": "mariadb_dump_dir",
-          "name": "A directory of dump files, plain or gzip-compressed; the one whose own trailer records the newest time is restored",
+          "name": "A directory of dump files, plain or gzip-compressed; source.params.select picks which one is restored — newest by the time each dump records in its own trailer (the default), oldest, or random",
           "pitr": false
         }
       ],
@@ -748,7 +748,7 @@
       "name": "MySQL",
       "status": "experimental",
       "since": "0.1.0",
-      "adapter_version": "0.14.0",
+      "adapter_version": "0.15.0",
       "engine": {
         "id": "mysql",
         "name": "MySQL"
@@ -778,12 +778,12 @@
         },
         {
           "id": "mysqldump_dir",
-          "name": "A directory of mysqldump files, plain or gzip-compressed; the one whose own trailer records the newest time is restored",
+          "name": "A directory of mysqldump files, plain or gzip-compressed; source.params.select picks which one is restored — newest by the time each dump records in its own trailer (the default), oldest, or random",
           "pitr": false
         },
         {
           "id": "mysqldump_with_users",
-          "name": "A directory holding one dump and an accounts-and-grants script, restored together; either may be gzip-compressed",
+          "name": "A directory holding one dump and an accounts-and-grants script, restored together — the dump named by source.params.dump, or picked by source.params.select; either may be gzip-compressed",
           "pitr": false
         },
         {

@@ -59,7 +59,7 @@ func dumpCompletedAt(ctx context.Context, path string, loc *time.Location) *stri
 // time.Time labelled UTC that is a wall clock and not an instant.
 //
 // It exists so two backups can be ranked against each other (see
-// newestBackupIn): both came off the same backup host, so whatever zone
+// chooseBackupIn): both came off the same backup host, so whatever zone
 // that host was in cancels out of the comparison, and ranking therefore
 // works whether or not the operator declared one. Reporting a creation
 // time is the other job, and that one does need the zone.

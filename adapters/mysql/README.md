@@ -10,7 +10,7 @@ from the protocol document alone.
 | Kind            | Meaning                                                     |
 |-----------------|-------------------------------------------------------------|
 | `mysqldump`     | One `mysqldump` SQL file, plain or gzip-compressed.         |
-| `mysqldump_dir` | A directory of dump files, plain or gzip-compressed; the dump whose own trailer records the newest time is restored. |
+| `mysqldump_dir` | A directory of dump files, plain or gzip-compressed; `params.select` picks which one — `newest` by the time each dump records in its own trailer (the default), `oldest`, or `random`. |
 | `mysqldump_with_users` | A directory holding an accounts-and-grants script (`params.users`) and one dump — either may be gzip-compressed; the accounts are replayed first, and the drill fails while the restored principal chain is broken. |
 | `xtrabackup`    | A Percona XtraBackup full-backup directory (unprepared, as `xtrabackup --backup` leaves it) — a physical restore. |
 
@@ -295,12 +295,14 @@ in afterwards, use `mysqldump_with_users`.
 ## Which backup a drill restores, and when it refuses
 
 When the drill config names a **directory**, the adapter picks the
-artifact itself: the dump whose **own `-- Dump completed on` trailer
-records the newest time**. The file's modification time is not what ranks
-candidates — copying a backup in (`cp` without `-p`, an object-store
-download, an `rsync` without `-t`) resets it, and a stale artifact would
-then look like the newest thing in the directory. What a dump says about
-itself does not move when the file is copied.
+artifact itself, and `params.select` says which one: `newest` (the
+default), `oldest` or `random`. Whichever is asked for, candidates are
+ordered by the time each dump records in its **own `-- Dump completed on`
+trailer**. The file's modification time is not what orders them — copying
+a backup in (`cp` without `-p`, an object-store download, an `rsync`
+without `-t`) resets it, and a stale artifact would then look like the
+newest thing in the directory. What a dump says about itself does not
+move when the file is copied.
 
 Ranking needs no declared zone: two dumps being compared came off the
 same backup host, so whatever zone it was in cancels out. Declaring
@@ -308,21 +310,66 @@ same backup host, so whatever zone it was in cancels out. Declaring
 
 A dump the adapter cannot date — taken with `--skip-dump-date` or
 `--compact`, so no trailer carries a date — ranks below every dump it
-can. Between two such files the previous rule still decides: newest
-mtime, ties broken by the larger name.
+can, under **every** policy including `oldest`, because being undatable
+is not a clock (see below). Between two such files the previous rule
+still decides: newest mtime, ties broken by the larger name.
 
 **Compressed candidates cost a pass each.** A gzip member carries no index
 and its header records no usable date (measured: `gzip` zeroes that field
 whenever it compresses a pipe, which is exactly the `mysqldump | gzip -c`
 shape), so the only way to its trailer is through the whole member.
-Ranking a directory therefore decompresses every compressed candidate —
+Ordering a directory therefore decompresses every compressed candidate —
 about a second per 60 MiB of compressed data on ordinary hardware, so
 seven daily 1 GiB dumps add roughly two minutes before the restore
 starts. The alternative was ranking compressed backups by file
 modification time, which is the claim this whole section exists to stop
-making. Naming the file outright (kind `mysqldump`, or `params.dump`)
-skips the ranking entirely and pays the pass only for the artifact the
-drill restores. The scan honors the drill's deadline.
+making. Every policy pays the same price, `oldest` and `random` included:
+the directory has to be ordered before either end of it can be named.
+Naming the file outright (kind `mysqldump`, or `params.dump`) skips the
+ordering entirely and pays the pass only for the artifact the drill
+restores. The scan honors the drill's deadline.
+
+### Which backup in the retention window
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one
+an incident reaches for, once it is clear the damage predates yesterday.
+A rotated encryption key, bit rot on colder media, a format the current
+tooling no longer reads: none of them are visible from the newest end.
+
+```yaml
+target:
+  source:
+    kind: mysqldump_dir
+    path: /backups/orders
+    params:
+      select: oldest        # newest (default) | oldest | random
+```
+
+**`oldest` is not `newest` turned around.** The rule that a datable dump
+outranks an undatable one does *not* invert: a dump taken with
+`--skip-dump-date` is not "the oldest backup", it is the one nothing is
+known about, and it loses under either policy. Only the comparisons after
+that one turn around — earlier trailer, then older file, then the smaller
+name.
+
+**`random` is not reproducible, and does not need to be.** It draws
+uniformly from the dumps that carry a trailer date, which keeps a draw
+away from the stray file a backup directory collects (a `SHA256SUMS`, a
+lock file). What was restored is still recorded: `source.params` never
+enters an evidence record, but `backup.checksum`, `backup.size_bytes` and
+`backup.created_at` do, and those name the artifact. A scheduled drill
+choosing randomly covers the whole window over time, which is the honest
+way to prove a window rather than a day.
+
+**It applies where the adapter chooses**, which is `mysqldump_dir` and
+`mysqldump_with_users` when `params.dump` does not name the member
+outright. Anywhere else — `mysqldump`, `xtrabackup`, or beside an explicit
+`params.dump` — it is **refused** rather than ignored, because a parameter
+nothing reads is a config the operator believes in and a drill doing
+something else. Everything below still holds whichever policy is set: the
+adapter chose the file, so it still refuses one a backup job is in the
+middle of writing.
 
 Two more things follow, and both are stated here rather than left for an
 operator to discover.
@@ -458,7 +505,8 @@ Set under `source.params` in the drill config.
 | Param             | Kinds                  | Meaning                                            |
 |-------------------|------------------------|----------------------------------------------------|
 | `users`           | `mysqldump_with_users` | **Required.** Bare filename of the accounts-and-grants script inside the source directory. |
-| `dump`            | `mysqldump_with_users` | Optional. Bare filename of the dump; without it the newest-by-trailer non-users file is used. |
+| `dump`            | `mysqldump_with_users` | Optional. Bare filename of the dump; without it `select` picks from the non-users files. |
+| `select`          | `mysqldump_dir`, and `mysqldump_with_users` without `dump` | Optional, default `newest`. Which backup in the directory the drill restores: `newest`, `oldest` or `random` — see below. Refused on the kinds that select nothing. |
 | `backup_timezone` | all                    | Optional. IANA zone name of the host that took the backup (e.g. `Europe/Budapest`). Without it `backup.created_at` is null — see above. |
 
 ## Drill config options

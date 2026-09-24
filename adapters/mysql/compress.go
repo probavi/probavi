@@ -35,7 +35,7 @@ var gzipMagic = [2]byte{0x1f, 0x8b}
 
 // inflateBufferBytes is the read buffer the decompressor pulls through.
 // Measured: 400 MiB of dump inflates in under a second at this size, and a
-// directory source pays that per candidate (see newestBackupIn).
+// directory source pays that per candidate (see chooseBackupIn).
 const inflateBufferBytes = 1 << 20
 
 // sniffCompressed reports whether an artifact is gzip-compressed. A file
@@ -71,7 +71,7 @@ func sniffCompressed(path string) (bool, *protoError) {
 // The scan is therefore proportional to the artifact, and a directory
 // source pays it once per candidate. That is deliberate: the alternative
 // is ranking compressed backups by file modification time, which is the
-// claim newestBackupIn exists to stop making.
+// claim chooseBackupIn exists to stop making.
 func readDumpTail(ctx context.Context, path string) (string, bool) {
 	compressed, perr := sniffCompressed(path)
 	if perr != nil {
