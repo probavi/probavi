@@ -18,7 +18,7 @@ runner's `{{database}}` placeholder.
 | `source.kind` | What `source.path` points at |
 | --- | --- |
 | `duckdb_db` | one database file — a copy of a cleanly closed database |
-| `duckdb_db_dir` | a directory of them; the newest by file time is restored |
+| `duckdb_db_dir` | a directory of them; `params.select` picks which one — `newest` by file time (the default), `oldest`, or `random` |
 | `duckdb_export` | one `EXPORT DATABASE` directory: `schema.sql`, `load.sql` and one data file per table (CSV or Parquet — both restore offline, measured) |
 
 PITR does not exist for a DuckDB file; the probe declares `pitr: false`
@@ -125,12 +125,45 @@ is not reported either. The `source.params.backup_timezone` key the
 other adapters use has nothing to act on here, and a config that sets it
 is refused rather than silently ignored.
 
-The same fact drives the directory kind: with nothing better to rank by,
-`duckdb_db_dir` picks the newest file by mtime, with the in-flight guard
+The same fact drives the directory kind: with nothing better to order
+by, `duckdb_db_dir` orders candidates by mtime, with the in-flight guard
 the other directory kinds share (see `settle.go`). Only files carrying
-the `DUCK` magic are candidates (checksum sidecars and stray `.wal`
-files are not) — but a chosen artifact with a live sibling is still
-refused by name, never silently passed over.
+the `DUCK` magic are candidates (checksum sidecars and stray `.wal` files
+are not), which is also what keeps a `random` draw off a file that is not
+a database — but a chosen artifact with a live sibling is still refused
+by name, never silently passed over.
+
+### Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: duckdb_db_dir
+  path: /backups/analytics
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one
+an incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum` and `backup.size_bytes` do, and a
+scheduled drill choosing randomly covers the whole window over time.
+
+**Read the ordering caveat above before choosing `oldest`.** File time is
+all this adapter has, so a backup copied in without its timestamps looks
+like the newest thing in the directory under `newest` — and stops looking
+like the oldest under `oldest`. The policy is exactly as strong as the
+modification times in the directory are.
+
+`select` on a kind that chooses nothing — `duckdb_db` and `duckdb_export` — is **refused**
+rather than ignored, the same way `backup_timezone` already is.
+
 
 ## Backup identity
 

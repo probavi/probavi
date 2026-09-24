@@ -37,7 +37,11 @@ type resolvedSource struct {
 // carries checksums and version fields only, and an export is undated SQL
 // plus data files (both measured) — so created_at is always null and the
 // directory kind ranks by modification time, the etcd precedent.
-func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *protoError) {
+func resolveSource(ctx context.Context, kind, path string, params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "duckdb_db":
 		if perr := refuseDirectoryForFileKind(path); perr != nil {
@@ -45,11 +49,11 @@ func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *pr
 		}
 		return resolveDatabase(path)
 	case "duckdb_db_dir":
-		latest, perr := latestDatabaseIn(ctx, path)
+		chosen, perr := chosenDatabaseIn(ctx, path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveDatabase(latest)
+		return resolveDatabase(chosen)
 	case "duckdb_export":
 		return resolveExport(path)
 	default:
@@ -180,16 +184,17 @@ func resolveExport(dir string) (*resolvedSource, *protoError) {
 	return &resolvedSource{path: dir, checksum: checksum, sizeBytes: size, export: true}, nil
 }
 
-// latestDatabaseIn picks the directory's newest database file. The header
-// records no wall clock (measured), so file modification time is the only
-// rank available — the etcd precedent, and the README says so. Files
-// without the DUCK magic are skipped as non-candidates (checksum
-// sidecars, README files, and the .wal siblings themselves, which carry
-// their own format); the file the ranking chooses still faces every
-// single-file gate, so a live copy that wins the ranking is refused by
-// name rather than silently passed over — the same not-a-filter principle
-// as settle.go.
-func latestDatabaseIn(ctx context.Context, dir string) (string, *protoError) {
+// chosenDatabaseIn picks the database file in dir that the policy asks
+// for (selection.go). The header records no wall clock (measured), so
+// file modification time is the only order available — the etcd
+// precedent, and the README says so. Files without the DUCK magic are
+// skipped as non-candidates (checksum sidecars, README files, and the
+// .wal siblings themselves, which carry their own format), which is also
+// what keeps a random draw on a file that is not a database; the file the
+// policy chooses still faces every single-file gate, so a live copy that
+// wins is refused by name rather than silently passed over — the same
+// not-a-filter principle as settle.go.
+func chosenDatabaseIn(ctx context.Context, dir string, policy selectPolicy) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -197,8 +202,7 @@ func latestDatabaseIn(ctx context.Context, dir string) (string, *protoError) {
 	case err != nil:
 		return "", protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var best string
-	var bestInfo os.FileInfo
+	candidates := make([]dirCandidate, 0, len(entries))
 	skipped := 0
 	for _, e := range entries {
 		if !e.Type().IsRegular() {
@@ -217,9 +221,11 @@ func latestDatabaseIn(ctx context.Context, dir string) (string, *protoError) {
 		if err != nil {
 			return "", protoErr("source_unreadable", false, "stat %s: %v", e.Name(), err)
 		}
-		if beats(info, e.Name(), bestInfo, filepath.Base(best)) {
-			best, bestInfo = path, info
-		}
+		candidates = append(candidates, dirCandidate{path: path, name: e.Name(), mtime: info.ModTime()})
+	}
+	var best string
+	if len(candidates) > 0 {
+		best = pick(candidates, policy).path
 	}
 	switch {
 	case best != "":
@@ -236,20 +242,6 @@ func latestDatabaseIn(ctx context.Context, dir string) (string, *protoError) {
 		return "", perr
 	}
 	return best, nil
-}
-
-// beats orders two directory candidates: newer modification time wins,
-// then the lexicographically larger name, so the choice never depends on
-// directory iteration order.
-func beats(info os.FileInfo, name string, bestInfo os.FileInfo, bestName string) bool {
-	switch {
-	case bestInfo == nil:
-		return true
-	case !info.ModTime().Equal(bestInfo.ModTime()):
-		return info.ModTime().After(bestInfo.ModTime())
-	default:
-		return name > bestName
-	}
 }
 
 // exportFiles lists the export directory's regular files for transfer,

@@ -39,7 +39,7 @@ func snapshotAt(t *testing.T, dir, name string, when time.Time) string {
 
 func TestASnapshotIsIdentifiedByItsBytes(t *testing.T) {
 	snap := writeAged(t, "member.snapshot.db", time.Hour)
-	src, perr := resolveSource(context.Background(), "etcd_snapshot", snap)
+	src, perr := resolveSource(context.Background(), "etcd_snapshot", snap, nil)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
@@ -68,7 +68,7 @@ func TestTheNewestSnapshotInADirectoryIsChosen(t *testing.T) {
 	if err := os.Symlink(want, filepath.Join(dir, "zz-latest.db")); err != nil {
 		t.Fatal(err)
 	}
-	src, perr := resolveSource(context.Background(), "etcd_snapshot_dir", dir)
+	src, perr := resolveSource(context.Background(), "etcd_snapshot_dir", dir, nil)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
@@ -86,7 +86,7 @@ func TestSnapshotsOfTheSameAgeBreakTowardTheLaterName(t *testing.T) {
 	snapshotAt(t, dir, "a.db", same)
 	want := snapshotAt(t, dir, "b.db", same)
 	for range 3 {
-		src, perr := resolveSource(context.Background(), "etcd_snapshot_dir", dir)
+		src, perr := resolveSource(context.Background(), "etcd_snapshot_dir", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolve: %+v", perr)
 		}
@@ -133,7 +133,7 @@ func TestSourceRefusalsNameWhatWasWrong(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, perr := resolveSource(context.Background(), tc.kind, tc.path)
+			_, perr := resolveSource(context.Background(), tc.kind, tc.path, nil)
 			if perr == nil || perr.Code != tc.code || !strings.Contains(perr.Message, tc.message) {
 				t.Errorf("got %+v, want %s mentioning %q", perr, tc.code, tc.message)
 			}
@@ -158,7 +158,7 @@ func TestBytesTheHostCannotReadAreUnreadable(t *testing.T) {
 				t.Errorf("restore the mode: %v", err)
 			}
 		})
-		_, perr := resolveSource(context.Background(), "etcd_snapshot", snap)
+		_, perr := resolveSource(context.Background(), "etcd_snapshot", snap, nil)
 		if perr == nil || perr.Code != "source_unreadable" || !strings.Contains(perr.Message, "open backup source") {
 			t.Errorf("got %+v, want source_unreadable", perr)
 		}

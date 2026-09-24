@@ -291,7 +291,7 @@
       "name": "DuckDB",
       "status": "experimental",
       "since": "0.11.0",
-      "adapter_version": "0.1.0",
+      "adapter_version": "0.2.0",
       "engine": {
         "id": "duckdb",
         "name": "DuckDB"
@@ -317,7 +317,7 @@
         },
         {
           "id": "duckdb_db_dir",
-          "name": "A directory of database files; the newest by file time is restored (the header records no wall clock)",
+          "name": "A directory of database files; source.params.select picks which one is restored — newest by file time (the default), oldest, or random, because the header records no wall clock",
           "pitr": false
         },
         {
@@ -374,7 +374,7 @@
       "name": "etcd",
       "status": "experimental",
       "since": "0.7.0",
-      "adapter_version": "0.4.0",
+      "adapter_version": "0.5.0",
       "engine": {
         "id": "etcd",
         "name": "etcd"
@@ -404,7 +404,7 @@
         },
         {
           "id": "etcd_snapshot_dir",
-          "name": "A directory of snapshot files; the newest file is restored (a snapshot carries no timestamp of its own)",
+          "name": "A directory of snapshot files; source.params.select picks which one is restored — newest by file time (the default), oldest, or random, because a snapshot carries no timestamp of its own",
           "pitr": false
         }
       ],
@@ -646,7 +646,7 @@
       "name": "MongoDB",
       "status": "experimental",
       "since": "0.2.0",
-      "adapter_version": "0.5.0",
+      "adapter_version": "0.6.0",
       "engine": {
         "id": "mongodb",
         "name": "MongoDB"
@@ -672,7 +672,7 @@
         },
         {
           "id": "mongodump_dir",
-          "name": "A directory of mongodump archives; the newest file is restored (an archive carries no timestamp of its own)",
+          "name": "A directory of mongodump archives; source.params.select picks which one is restored — newest by file time (the default), oldest, or random, because an archive carries no timestamp of its own",
           "pitr": false
         },
         {
@@ -1263,7 +1263,7 @@
       "name": "SQLite",
       "status": "experimental",
       "since": "0.10.0",
-      "adapter_version": "0.1.0",
+      "adapter_version": "0.2.0",
       "engine": {
         "id": "sqlite",
         "name": "SQLite"
@@ -1301,7 +1301,7 @@
         },
         {
           "id": "sqlite_db_dir",
-          "name": "A directory of database files; the newest by file time is restored (the header records no wall clock)",
+          "name": "A directory of database files; source.params.select picks which one is restored — newest by file time (the default), oldest, or random, because the header records no wall clock",
           "pitr": false
         },
         {
@@ -1311,7 +1311,7 @@
         },
         {
           "id": "sqlite_dump_dir",
-          "name": "A directory of dumps; the newest by file time is restored",
+          "name": "A directory of dumps; chosen the same way, by source.params.select",
           "pitr": false
         }
       ],

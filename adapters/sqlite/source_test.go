@@ -33,7 +33,7 @@ func writeArtifact(t *testing.T, dir, name string, content []byte) string {
 }
 
 func TestResolveSourceUnknownKind(t *testing.T) {
-	_, perr := resolveSource(context.Background(), "sqlite_backup", "/nowhere")
+	_, perr := resolveSource(context.Background(), "sqlite_backup", "/nowhere", nil)
 	if perr == nil || perr.Code != "unsupported_source" {
 		t.Fatalf("perr = %+v, want unsupported_source", perr)
 	}
@@ -49,7 +49,7 @@ func TestResolveDatabase(t *testing.T) {
 		dir := t.TempDir()
 		content := dbFixture()
 		path := writeArtifact(t, dir, "nightly.db", content)
-		src, perr := resolveSource(context.Background(), "sqlite_db", path)
+		src, perr := resolveSource(context.Background(), "sqlite_db", path, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -66,7 +66,7 @@ func TestResolveDatabase(t *testing.T) {
 		dir := t.TempDir()
 		path := writeArtifact(t, dir, "nightly.db", dbFixture())
 		writeArtifact(t, dir, "nightly.db-wal", nil)
-		if _, perr := resolveSource(context.Background(), "sqlite_db", path); perr != nil {
+		if _, perr := resolveSource(context.Background(), "sqlite_db", path, nil); perr != nil {
 			t.Fatalf("resolveSource: %+v — a zero-byte -wal holds no transactions", perr)
 		}
 	})
@@ -75,7 +75,7 @@ func TestResolveDatabase(t *testing.T) {
 		dir := t.TempDir()
 		path := writeArtifact(t, dir, "nightly.db", dbFixture())
 		writeArtifact(t, dir, "nightly.db-wal", []byte("wal frames"))
-		_, perr := resolveSource(context.Background(), "sqlite_db", path)
+		_, perr := resolveSource(context.Background(), "sqlite_db", path, nil)
 		if perr == nil {
 			t.Fatal("a live copy resolved")
 		}
@@ -123,7 +123,7 @@ func TestResolveDatabaseRefusals(t *testing.T) {
 	for _, tc := range refusals {
 		t.Run(tc.name, func(t *testing.T) {
 			path := tc.prepare(t, t.TempDir())
-			_, perr := resolveSource(context.Background(), "sqlite_db", path)
+			_, perr := resolveSource(context.Background(), "sqlite_db", path, nil)
 			if perr == nil || perr.Code != tc.wantCode {
 				t.Fatalf("perr = %+v, want %s", perr, tc.wantCode)
 			}
@@ -137,7 +137,7 @@ func TestResolveDatabaseRefusals(t *testing.T) {
 func TestResolveDump(t *testing.T) {
 	t.Run("a complete dump resolves as sql", func(t *testing.T) {
 		path := writeArtifact(t, t.TempDir(), "nightly.sql", dumpFixture())
-		src, perr := resolveSource(context.Background(), "sqlite_dump", path)
+		src, perr := resolveSource(context.Background(), "sqlite_dump", path, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -151,7 +151,7 @@ func TestResolveDump(t *testing.T) {
 		// replay inside the sandbox is the judge.
 		path := writeArtifact(t, t.TempDir(), "schema.sql",
 			[]byte("CREATE TABLE t(id INTEGER);\nINSERT INTO t VALUES(1);\n"))
-		if _, perr := resolveSource(context.Background(), "sqlite_dump", path); perr != nil {
+		if _, perr := resolveSource(context.Background(), "sqlite_dump", path, nil); perr != nil {
 			t.Fatalf("resolveSource: %+v — generic SQL must stay for the sandbox to judge", perr)
 		}
 	})
@@ -172,7 +172,7 @@ func TestResolveDump(t *testing.T) {
 	for _, tc := range refusals {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeArtifact(t, t.TempDir(), "nightly.sql", tc.content)
-			_, perr := resolveSource(context.Background(), "sqlite_dump", path)
+			_, perr := resolveSource(context.Background(), "sqlite_dump", path, nil)
 			if perr == nil || perr.Code != tc.wantCode {
 				t.Fatalf("perr = %+v, want %s", perr, tc.wantCode)
 			}
@@ -183,7 +183,7 @@ func TestResolveDump(t *testing.T) {
 	}
 
 	t.Run("a directory needs the dir kind", func(t *testing.T) {
-		_, perr := resolveSource(context.Background(), "sqlite_dump", t.TempDir())
+		_, perr := resolveSource(context.Background(), "sqlite_dump", t.TempDir(), nil)
 		if perr == nil || perr.Code != "invalid_request" || !strings.Contains(perr.Message, "sqlite_dump_dir") {
 			t.Fatalf("perr = %+v, want invalid_request naming sqlite_dump_dir", perr)
 		}
@@ -208,7 +208,7 @@ func TestLatestDatabaseIn(t *testing.T) {
 		age(t, newest, 24*time.Hour)
 		sidecar := writeArtifact(t, dir, "checksums.txt", []byte("sha256 sums\n"))
 		age(t, sidecar, time.Hour) // newer than every database, still not a candidate
-		src, perr := resolveSource(context.Background(), "sqlite_db_dir", dir)
+		src, perr := resolveSource(context.Background(), "sqlite_db_dir", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -223,7 +223,7 @@ func TestLatestDatabaseIn(t *testing.T) {
 		b := writeArtifact(t, dir, "b.db", dbFixture())
 		age(t, a, time.Hour)
 		age(t, b, time.Hour)
-		src, perr := resolveSource(context.Background(), "sqlite_db_dir", dir)
+		src, perr := resolveSource(context.Background(), "sqlite_db_dir", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -236,21 +236,21 @@ func TestLatestDatabaseIn(t *testing.T) {
 		dir := t.TempDir()
 		writeArtifact(t, dir, "README.md", []byte("backups live here\n"))
 		writeArtifact(t, dir, "checksums.txt", []byte("sums\n"))
-		_, perr := resolveSource(context.Background(), "sqlite_db_dir", dir)
+		_, perr := resolveSource(context.Background(), "sqlite_db_dir", dir, nil)
 		if perr == nil || perr.Code != "source_not_found" || !strings.Contains(perr.Message, "2 files") {
 			t.Fatalf("perr = %+v, want source_not_found counting the 2 passed-over files", perr)
 		}
 	})
 
 	t.Run("an empty directory says so", func(t *testing.T) {
-		_, perr := resolveSource(context.Background(), "sqlite_db_dir", t.TempDir())
+		_, perr := resolveSource(context.Background(), "sqlite_db_dir", t.TempDir(), nil)
 		if perr == nil || perr.Code != "source_not_found" || !strings.Contains(perr.Message, "contains no files") {
 			t.Fatalf("perr = %+v, want source_not_found for an empty directory", perr)
 		}
 	})
 
 	t.Run("a missing directory is source_not_found", func(t *testing.T) {
-		_, perr := resolveSource(context.Background(), "sqlite_db_dir", filepath.Join(t.TempDir(), "gone"))
+		_, perr := resolveSource(context.Background(), "sqlite_db_dir", filepath.Join(t.TempDir(), "gone"), nil)
 		if perr == nil || perr.Code != "source_not_found" {
 			t.Fatalf("perr = %+v, want source_not_found", perr)
 		}
@@ -270,7 +270,7 @@ func TestDirectoryRefusesTheNewestWhenItIsALiveCopy(t *testing.T) {
 	wal := writeArtifact(t, dir, "tuesday.db-wal", []byte("wal frames"))
 	age(t, wal, 24*time.Hour)
 
-	_, perr := resolveSource(context.Background(), "sqlite_db_dir", dir)
+	_, perr := resolveSource(context.Background(), "sqlite_db_dir", dir, nil)
 	if perr == nil || perr.Code != "unsupported_source" || !strings.Contains(perr.Message, "-wal") {
 		t.Fatalf("perr = %+v, want the live copy refused by name", perr)
 	}
@@ -286,7 +286,7 @@ func TestLatestDumpIn(t *testing.T) {
 		age(t, old, 48*time.Hour)
 		newest := writeArtifact(t, dir, "tuesday.sql", dumpFixture())
 		age(t, newest, 24*time.Hour)
-		src, perr := resolveSource(context.Background(), "sqlite_dump_dir", dir)
+		src, perr := resolveSource(context.Background(), "sqlite_dump_dir", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -302,7 +302,7 @@ func TestLatestDumpIn(t *testing.T) {
 		truncated := writeArtifact(t, dir, "tuesday.sql",
 			[]byte(dumpSignature+"CREATE TABLE t(id INTEGER);\nINSERT INTO t VALUES(1);\n"))
 		age(t, truncated, 24*time.Hour)
-		_, perr := resolveSource(context.Background(), "sqlite_dump_dir", dir)
+		_, perr := resolveSource(context.Background(), "sqlite_dump_dir", dir, nil)
 		if perr == nil || perr.Code != "source_corrupt" || !strings.Contains(perr.Message, "COMMIT;") {
 			t.Fatalf("perr = %+v, want the truncated newest dump refused by name", perr)
 		}
@@ -312,7 +312,7 @@ func TestLatestDumpIn(t *testing.T) {
 	})
 
 	t.Run("an empty directory says so", func(t *testing.T) {
-		_, perr := resolveSource(context.Background(), "sqlite_dump_dir", t.TempDir())
+		_, perr := resolveSource(context.Background(), "sqlite_dump_dir", t.TempDir(), nil)
 		if perr == nil || perr.Code != "source_not_found" {
 			t.Fatalf("perr = %+v, want source_not_found", perr)
 		}

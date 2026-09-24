@@ -4,8 +4,11 @@ package main_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -315,6 +318,89 @@ func TestDirectoryDrillPicksTheNewest(t *testing.T) {
 		t.Fatalf("provision: %v", err)
 	}
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database, "SELECT v FROM meta WHERE k='origin';", "fresh")
+}
+
+// TestDirectoryDrillProvesTheOldestBackup is the exit criterion of the
+// selection policy, measured on the family of adapters whose artifacts
+// record no clock of their own: a drill can prove the *oldest* backup in
+// a retention window, not only last night's.
+//
+// One end-to-end test stands for the four adapters in that family. What
+// each of them shares is the host-side scan, which their unit suites
+// cover in full; what only a real drill can show is that a policy other
+// than newest still reaches provision, the sandbox, and the checks. The
+// two databases carry different marker rows, so which one was restored is
+// a measurement rather than an inference, and the checksum the adapter
+// reports for the evidence record names the older file's own bytes.
+func TestDirectoryDrillProvesTheOldestBackup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := verifiedImage(t)
+	provider := docker.New(nil)
+
+	dir := t.TempDir()
+	old := filepath.Join(dir, "monday.db")
+	makeFixtures(t, ctx, provider, image, "stale", old, "")
+	past := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(old, past, past); err != nil {
+		t.Fatal(err)
+	}
+	makeFixtures(t, ctx, provider, image, "fresh", filepath.Join(dir, "tuesday.db"), "")
+
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("sqlite", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source: adapter.ProvisionSource{
+			Kind: "sqlite_db_dir", Path: dir, Params: map[string]string{"select": "oldest"},
+		},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	assertCheck(t, ctx, sbx, probe, res.Connection.Database, "SELECT v FROM meta WHERE k='origin';", "stale")
+
+	// The record has to name what was proved, because source.params never
+	// reaches it (docs/drill-config.md §7): the checksum is what tells an
+	// auditor which of the two backups this run stands for.
+	if want := hostSum(t, old); res.SourceIdentity.Checksum != want {
+		t.Errorf("backup checksum = %s, want %s — the record would name the wrong artifact",
+			res.SourceIdentity.Checksum, want)
+	}
+}
+
+// hostSum is the artifact identity the adapter reports, computed
+// independently here so the two have to agree.
+func hostSum(t *testing.T, path string) string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("close %s: %v", path, err)
+		}
+	}()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 
 // assertCheck runs one SQL check through the probe-declared runner —

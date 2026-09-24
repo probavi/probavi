@@ -19,9 +19,9 @@ the template ever hardcoding a path.
 | `source.kind` | What `source.path` points at |
 | --- | --- |
 | `sqlite_db` | one database file from `sqlite3 .backup` or `VACUUM INTO` (or a copy of a cleanly closed database) |
-| `sqlite_db_dir` | a directory of them; the newest by file time is restored |
+| `sqlite_db_dir` | a directory of them; `params.select` picks which one — `newest` by file time (the default), `oldest`, or `random` |
 | `sqlite_dump` | SQL text from `sqlite3 .dump` |
-| `sqlite_dump_dir` | a directory of dumps; the newest by file time is restored |
+| `sqlite_dump_dir` | a directory of dumps; chosen the same way, by `params.select` |
 
 PITR does not exist for a bare SQLite file (Litestream is a different
 product and a different artifact); the probe declares `pitr: false` so
@@ -136,13 +136,46 @@ reported either. The `source.params.backup_timezone` key the other
 adapters use has nothing to act on here, and a config that sets it is
 refused rather than silently ignored.
 
-The same fact drives the directory kinds: with nothing better to rank
-by, they pick the newest file by mtime, with the in-flight guard the
-other directory kinds share (see `settle.go`). `sqlite_db_dir` considers
-only files carrying the SQLite magic (checksum sidecars and stray `-wal`
-files are not candidates — but a chosen artifact with a live sibling is
-still refused by name, never silently passed over); `sqlite_dump_dir`
-ranks every regular file, SQL text having no magic to filter by.
+The same fact drives the directory kinds: with nothing better to order
+by, they order candidates by mtime, with the in-flight guard the other
+directory kinds share (see `settle.go`). `sqlite_db_dir` considers only
+files carrying the SQLite magic (checksum sidecars and stray `-wal` files
+are not candidates — which is also what keeps a `random` draw off a file
+that is not a database; a chosen artifact with a live sibling is still
+refused by name, never silently passed over); `sqlite_dump_dir` considers
+every regular file, SQL text having no magic to filter by.
+
+### Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: sqlite_db_dir
+  path: /backups/app
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one
+an incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum` and `backup.size_bytes` do, and a
+scheduled drill choosing randomly covers the whole window over time.
+
+**Read the ordering caveat above before choosing `oldest`.** File time is
+all this adapter has, so a backup copied in without its timestamps looks
+like the newest thing in the directory under `newest` — and stops looking
+like the oldest under `oldest`. The policy is exactly as strong as the
+modification times in the directory are.
+
+`select` on a kind that chooses nothing — `sqlite_db` and `sqlite_dump` — is **refused**
+rather than ignored, the same way `backup_timezone` already is.
+
 
 ## Backup identity
 

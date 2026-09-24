@@ -30,16 +30,20 @@ type resolvedSource struct {
 // mongodb adapter's archive kinds already established: created_at is
 // always null rather than an mtime that dates a copy, and a directory is
 // ranked by mtime because there is nothing better to rank by.
-func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *protoError) {
+func resolveSource(ctx context.Context, kind, path string, params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "etcd_snapshot":
 		return resolveFile(path)
 	case "etcd_snapshot_dir":
-		latest, perr := latestSnapshotIn(ctx, path)
+		chosen, perr := chosenSnapshotIn(ctx, path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveFile(latest)
+		return resolveFile(chosen)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: etcd_snapshot, etcd_snapshot_dir)", kind)
@@ -64,9 +68,10 @@ func resolveFile(path string) (*resolvedSource, *protoError) {
 	return &resolvedSource{path: path, checksum: checksum, sizeBytes: info.Size()}, nil
 }
 
-// latestSnapshotIn picks the newest regular file in dir; ties break toward
-// the lexicographically larger name so the choice is deterministic.
-func latestSnapshotIn(ctx context.Context, dir string) (string, *protoError) {
+// chosenSnapshotIn picks the snapshot in dir that the policy asks for
+// (see selection.go); ties break by name so the choice never depends on
+// directory iteration order.
+func chosenSnapshotIn(ctx context.Context, dir string, policy selectPolicy) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -74,8 +79,7 @@ func latestSnapshotIn(ctx context.Context, dir string) (string, *protoError) {
 	case err != nil:
 		return "", protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var best string
-	var bestInfo os.FileInfo
+	candidates := make([]dirCandidate, 0, len(entries))
 	for _, e := range entries {
 		if !e.Type().IsRegular() {
 			continue
@@ -84,14 +88,14 @@ func latestSnapshotIn(ctx context.Context, dir string) (string, *protoError) {
 		if err != nil {
 			return "", protoErr("source_unreadable", false, "stat %s: %v", e.Name(), err)
 		}
-		if best == "" || info.ModTime().After(bestInfo.ModTime()) ||
-			(info.ModTime().Equal(bestInfo.ModTime()) && e.Name() > filepath.Base(best)) {
-			best, bestInfo = filepath.Join(dir, e.Name()), info
-		}
+		candidates = append(candidates, dirCandidate{
+			path: filepath.Join(dir, e.Name()), name: e.Name(), mtime: info.ModTime(),
+		})
 	}
-	if best == "" {
+	if len(candidates) == 0 {
 		return "", protoErr("source_not_found", false, "backup directory %s contains no files", dir)
 	}
+	best := pick(candidates, policy).path
 	// The adapter chose this file, not the operator: make sure a backup job
 	// is not still writing it (see settle.go).
 	if perr := assertSettled(ctx, best, settleWindow); perr != nil {

@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 )
 
 // resolvedSource is a concrete backup artifact chosen for restore.
@@ -42,16 +41,20 @@ type resolvedSource struct {
 // the archive is replayed and what the drill then proves — which is why
 // they are distinct kinds rather than options: backup.kind is the only
 // field an auditor can read the difference from.
-func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *protoError) {
+func resolveSource(ctx context.Context, kind, path string, params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "mongodump", "mongodump_with_users", "mongodump_with_oplog":
 		return resolveFile(path)
 	case "mongodump_dir":
-		latest, perr := latestDumpIn(ctx, path)
+		chosen, perr := chosenDumpIn(ctx, path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveFile(latest)
+		return resolveFile(chosen)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: mongodump, mongodump_dir, "+
@@ -82,9 +85,10 @@ func resolveFile(path string) (*resolvedSource, *protoError) {
 	}, nil
 }
 
-// latestDumpIn picks the newest regular file in dir; ties break toward the
-// lexicographically larger name so the choice is deterministic.
-func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
+// chosenDumpIn picks the archive in dir that the policy asks for (see
+// selection.go); ties break by name so the choice never depends on
+// directory iteration order.
+func chosenDumpIn(ctx context.Context, dir string, policy selectPolicy) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -92,10 +96,7 @@ func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
 	case err != nil:
 		return "", protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var (
-		best     string
-		bestTime time.Time
-	)
+	candidates := make([]dirCandidate, 0, len(entries))
 	for _, e := range entries {
 		if !e.Type().IsRegular() {
 			continue
@@ -104,15 +105,14 @@ func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
 		if err != nil {
 			return "", protoErr("source_unreadable", false, "stat %s: %v", e.Name(), err)
 		}
-		if best == "" || info.ModTime().After(bestTime) ||
-			(info.ModTime().Equal(bestTime) && e.Name() > filepath.Base(best)) {
-			best = filepath.Join(dir, e.Name())
-			bestTime = info.ModTime()
-		}
+		candidates = append(candidates, dirCandidate{
+			path: filepath.Join(dir, e.Name()), name: e.Name(), mtime: info.ModTime(),
+		})
 	}
-	if best == "" {
+	if len(candidates) == 0 {
 		return "", protoErr("source_not_found", false, "backup directory %s contains no files", dir)
 	}
+	best := pick(candidates, policy).path
 	// The adapter chose this file, not the operator: make sure a backup job
 	// is not still writing it (see settle.go).
 	if perr := assertSettled(ctx, best, settleWindow); perr != nil {

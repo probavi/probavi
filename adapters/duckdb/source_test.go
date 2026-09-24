@@ -49,7 +49,7 @@ func writeExport(t *testing.T, dir string, names ...string) string {
 }
 
 func TestResolveSourceUnknownKind(t *testing.T) {
-	_, perr := resolveSource(context.Background(), "duckdb_backup", "/nowhere")
+	_, perr := resolveSource(context.Background(), "duckdb_backup", "/nowhere", nil)
 	if perr == nil || perr.Code != "unsupported_source" {
 		t.Fatalf("perr = %+v, want unsupported_source", perr)
 	}
@@ -64,7 +64,7 @@ func TestResolveDatabase(t *testing.T) {
 	t.Run("a cold copy resolves with its measured identity", func(t *testing.T) {
 		content := duckFixture(64, "v1.4.5")
 		path := writeArtifact(t, t.TempDir(), "nightly.duckdb", content)
-		src, perr := resolveSource(context.Background(), "duckdb_db", path)
+		src, perr := resolveSource(context.Background(), "duckdb_db", path, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -84,7 +84,7 @@ func TestResolveDatabase(t *testing.T) {
 		// Metadata is a bonus: the engine in the sandbox is the authority
 		// on whether the bytes are a database.
 		path := writeArtifact(t, t.TempDir(), "opaque.duckdb", []byte("not a duckdb file"))
-		src, perr := resolveSource(context.Background(), "duckdb_db", path)
+		src, perr := resolveSource(context.Background(), "duckdb_db", path, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -97,7 +97,7 @@ func TestResolveDatabase(t *testing.T) {
 		dir := t.TempDir()
 		path := writeArtifact(t, dir, "nightly.duckdb", dbFixture())
 		writeArtifact(t, dir, "nightly.duckdb.wal", nil)
-		if _, perr := resolveSource(context.Background(), "duckdb_db", path); perr != nil {
+		if _, perr := resolveSource(context.Background(), "duckdb_db", path, nil); perr != nil {
 			t.Fatalf("resolveSource: %+v — a zero-byte .wal holds no transactions", perr)
 		}
 	})
@@ -110,7 +110,7 @@ func TestLiveCopyRefusalTeachesTheFix(t *testing.T) {
 	dir := t.TempDir()
 	path := writeArtifact(t, dir, "nightly.duckdb", dbFixture())
 	writeArtifact(t, dir, "nightly.duckdb.wal", []byte("wal frames"))
-	_, perr := resolveSource(context.Background(), "duckdb_db", path)
+	_, perr := resolveSource(context.Background(), "duckdb_db", path, nil)
 	if perr == nil {
 		t.Fatal("a live copy resolved")
 	}
@@ -146,7 +146,7 @@ func TestResolveDatabaseRefusals(t *testing.T) {
 	for _, tc := range refusals {
 		t.Run(tc.name, func(t *testing.T) {
 			path := tc.prepare(t, t.TempDir())
-			_, perr := resolveSource(context.Background(), "duckdb_db", path)
+			_, perr := resolveSource(context.Background(), "duckdb_db", path, nil)
 			if perr == nil || perr.Code != tc.wantCode {
 				t.Fatalf("perr = %+v, want %s", perr, tc.wantCode)
 			}
@@ -161,7 +161,7 @@ func TestResolveExport(t *testing.T) {
 	t.Run("a complete export resolves with a tree checksum", func(t *testing.T) {
 		dir := writeExport(t, filepath.Join(t.TempDir(), "nightly"),
 			"schema.sql", "load.sql", "t.csv")
-		src, perr := resolveSource(context.Background(), "duckdb_export", dir)
+		src, perr := resolveSource(context.Background(), "duckdb_export", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -173,14 +173,14 @@ func TestResolveExport(t *testing.T) {
 	t.Run("the tree checksum sees content changes", func(t *testing.T) {
 		dir := writeExport(t, filepath.Join(t.TempDir(), "nightly"),
 			"schema.sql", "load.sql", "t.csv")
-		before, perr := resolveSource(context.Background(), "duckdb_export", dir)
+		before, perr := resolveSource(context.Background(), "duckdb_export", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
 		if err := os.WriteFile(filepath.Join(dir, "t.csv"), []byte("changed\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		after, perr := resolveSource(context.Background(), "duckdb_export", dir)
+		after, perr := resolveSource(context.Background(), "duckdb_export", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -214,7 +214,7 @@ func TestResolveExportRefusals(t *testing.T) {
 	for _, tc := range refusals {
 		t.Run(tc.name, func(t *testing.T) {
 			path := tc.prepare(t, t.TempDir())
-			_, perr := resolveSource(context.Background(), "duckdb_export", path)
+			_, perr := resolveSource(context.Background(), "duckdb_export", path, nil)
 			if perr == nil || perr.Code != tc.wantCode {
 				t.Fatalf("perr = %+v, want %s", perr, tc.wantCode)
 			}
@@ -258,7 +258,7 @@ func TestLatestDatabaseIn(t *testing.T) {
 		age(t, newest, 24*time.Hour)
 		sidecar := writeArtifact(t, dir, "checksums.txt", []byte("sha256 sums\n"))
 		age(t, sidecar, time.Hour) // newer than every database, still not a candidate
-		src, perr := resolveSource(context.Background(), "duckdb_db_dir", dir)
+		src, perr := resolveSource(context.Background(), "duckdb_db_dir", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -273,7 +273,7 @@ func TestLatestDatabaseIn(t *testing.T) {
 		b := writeArtifact(t, dir, "b.duckdb", dbFixture())
 		age(t, a, time.Hour)
 		age(t, b, time.Hour)
-		src, perr := resolveSource(context.Background(), "duckdb_db_dir", dir)
+		src, perr := resolveSource(context.Background(), "duckdb_db_dir", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -286,21 +286,21 @@ func TestLatestDatabaseIn(t *testing.T) {
 		dir := t.TempDir()
 		writeArtifact(t, dir, "README.md", []byte("backups live here\n"))
 		writeArtifact(t, dir, "checksums.txt", []byte("sums\n"))
-		_, perr := resolveSource(context.Background(), "duckdb_db_dir", dir)
+		_, perr := resolveSource(context.Background(), "duckdb_db_dir", dir, nil)
 		if perr == nil || perr.Code != "source_not_found" || !strings.Contains(perr.Message, "2 files") {
 			t.Fatalf("perr = %+v, want source_not_found counting the 2 passed-over files", perr)
 		}
 	})
 
 	t.Run("an empty directory says so", func(t *testing.T) {
-		_, perr := resolveSource(context.Background(), "duckdb_db_dir", t.TempDir())
+		_, perr := resolveSource(context.Background(), "duckdb_db_dir", t.TempDir(), nil)
 		if perr == nil || perr.Code != "source_not_found" || !strings.Contains(perr.Message, "contains no files") {
 			t.Fatalf("perr = %+v, want source_not_found for an empty directory", perr)
 		}
 	})
 
 	t.Run("a missing directory is source_not_found", func(t *testing.T) {
-		_, perr := resolveSource(context.Background(), "duckdb_db_dir", filepath.Join(t.TempDir(), "gone"))
+		_, perr := resolveSource(context.Background(), "duckdb_db_dir", filepath.Join(t.TempDir(), "gone"), nil)
 		if perr == nil || perr.Code != "source_not_found" {
 			t.Fatalf("perr = %+v, want source_not_found", perr)
 		}
@@ -320,7 +320,7 @@ func TestDirectoryRefusesTheNewestWhenItIsALiveCopy(t *testing.T) {
 	wal := writeArtifact(t, dir, "tuesday.duckdb.wal", []byte("wal frames"))
 	age(t, wal, 24*time.Hour)
 
-	_, perr := resolveSource(context.Background(), "duckdb_db_dir", dir)
+	_, perr := resolveSource(context.Background(), "duckdb_db_dir", dir, nil)
 	if perr == nil || perr.Code != "unsupported_source" || !strings.Contains(perr.Message, ".wal") {
 		t.Fatalf("perr = %+v, want the live copy refused by name", perr)
 	}
