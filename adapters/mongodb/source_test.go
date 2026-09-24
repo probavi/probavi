@@ -24,7 +24,7 @@ func TestResolveSourceKinds(t *testing.T) {
 	}
 
 	t.Run("mongodump file", func(t *testing.T) {
-		src, perr := resolveSource(context.Background(), "mongodump", latest)
+		src, perr := resolveSource(context.Background(), "mongodump", latest, nil)
 		if perr != nil {
 			t.Fatalf("resolve: %+v", perr)
 		}
@@ -36,7 +36,7 @@ func TestResolveSourceKinds(t *testing.T) {
 	})
 
 	t.Run("mongodump_dir picks the newest", func(t *testing.T) {
-		src, perr := resolveSource(context.Background(), "mongodump_dir", dir)
+		src, perr := resolveSource(context.Background(), "mongodump_dir", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolve: %+v", perr)
 		}
@@ -46,7 +46,7 @@ func TestResolveSourceKinds(t *testing.T) {
 	})
 
 	t.Run("unknown kind", func(t *testing.T) {
-		if _, perr := resolveSource(context.Background(), "pgdump", latest); perr == nil || perr.Code != "unsupported_source" {
+		if _, perr := resolveSource(context.Background(), "pgdump", latest, nil); perr == nil || perr.Code != "unsupported_source" {
 			t.Errorf("perr = %+v, want unsupported_source", perr)
 		}
 	})
@@ -68,7 +68,7 @@ func TestResolveSourceGzipSniff(t *testing.T) {
 			if err := os.WriteFile(path, tt.content, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			src, perr := resolveSource(context.Background(), "mongodump", path)
+			src, perr := resolveSource(context.Background(), "mongodump", path, nil)
 			if perr != nil {
 				t.Fatalf("resolve: %+v", perr)
 			}
@@ -83,17 +83,17 @@ func TestResolveSourceErrors(t *testing.T) {
 	dir := t.TempDir()
 
 	t.Run("missing file", func(t *testing.T) {
-		if _, perr := resolveSource(context.Background(), "mongodump", filepath.Join(dir, "gone")); perr == nil || perr.Code != "source_not_found" {
+		if _, perr := resolveSource(context.Background(), "mongodump", filepath.Join(dir, "gone"), nil); perr == nil || perr.Code != "source_not_found" {
 			t.Errorf("perr = %+v, want source_not_found", perr)
 		}
 	})
 	t.Run("directory for the file kind", func(t *testing.T) {
-		if _, perr := resolveSource(context.Background(), "mongodump", dir); perr == nil || perr.Code != "invalid_request" {
+		if _, perr := resolveSource(context.Background(), "mongodump", dir, nil); perr == nil || perr.Code != "invalid_request" {
 			t.Errorf("perr = %+v, want invalid_request pointing at mongodump_dir", perr)
 		}
 	})
 	t.Run("missing directory", func(t *testing.T) {
-		if _, perr := resolveSource(context.Background(), "mongodump_dir", filepath.Join(dir, "gone")); perr == nil || perr.Code != "source_not_found" {
+		if _, perr := resolveSource(context.Background(), "mongodump_dir", filepath.Join(dir, "gone"), nil); perr == nil || perr.Code != "source_not_found" {
 			t.Errorf("perr = %+v, want source_not_found", perr)
 		}
 	})
@@ -102,7 +102,7 @@ func TestResolveSourceErrors(t *testing.T) {
 		if err := os.Mkdir(empty, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if _, perr := resolveSource(context.Background(), "mongodump_dir", empty); perr == nil || perr.Code != "source_not_found" {
+		if _, perr := resolveSource(context.Background(), "mongodump_dir", empty, nil); perr == nil || perr.Code != "source_not_found" {
 			t.Errorf("perr = %+v, want source_not_found", perr)
 		}
 	})
@@ -111,7 +111,7 @@ func TestResolveSourceErrors(t *testing.T) {
 		if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, perr := resolveSource(context.Background(), "mongodump_dir", file); perr == nil || perr.Code != "source_unreadable" {
+		if _, perr := resolveSource(context.Background(), "mongodump_dir", file, nil); perr == nil || perr.Code != "source_unreadable" {
 			t.Errorf("perr = %+v, want source_unreadable", perr)
 		}
 	})
@@ -129,9 +129,9 @@ func TestLatestDumpTieBreak(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	latest, perr := latestDumpIn(context.Background(), dir)
+	latest, perr := chosenDumpIn(context.Background(), dir, selectNewest)
 	if perr != nil {
-		t.Fatalf("latestDumpIn: %+v", perr)
+		t.Fatalf("chosenDumpIn: %+v", perr)
 	}
 	if filepath.Base(latest) != "b.archive" {
 		t.Errorf("latest = %s, want the lexicographically larger name on an mtime tie", latest)

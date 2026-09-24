@@ -10,7 +10,7 @@ written from the protocol document alone.
 | Kind             | Meaning                                                    |
 |------------------|------------------------------------------------------------|
 | `mongodump`      | One `mongodump --archive` file, plain or `--gzip` — the compression is sniffed from the bytes, never from the file name. |
-| `mongodump_dir`  | A directory of archive files; the newest regular file is restored (mtime, ties broken by name — an archive carries no timestamp of its own). |
+| `mongodump_dir`  | A directory of archive files; `params.select` picks which one — `newest` by file time (the default), `oldest`, or `random`, an archive carrying no timestamp of its own. |
 | `mongodump_with_users` | An archive taken with `--dumpDbUsersAndRoles`; the account layer is restored with the data, and the drill fails unless it arrived and resolves. |
 | `mongodump_with_oplog` | A full archive taken with `--oplog`; the captured oplog is replayed, and the drill fails unless the replay happened. |
 
@@ -108,16 +108,19 @@ server's argv — and it lasts exactly as long as the sandbox does.
 ## Which backup a drill restores, and when it refuses
 
 When the drill config names a **directory**, the adapter picks the
-artifact itself: the newest regular file (mtime, ties broken by name).
+artifact itself, and `params.select` says which one. Candidates are
+ordered by modification time, ties broken by name.
 
-This is the one directory kind still ranked that way, and the reason is
-the archive format: a `mongodump` archive records **no timestamp of its
-own** (measured), so there is nothing else to rank by. The other adapters
-rank by what the backup says about itself, which survives copying; here a
+The reason it is mtime rather than anything better is the archive format:
+a `mongodump` archive records **no timestamp of its own** (measured), so
+there is nothing else to order by. The postgres and mysql adapters order
+by what the backup says about itself, which survives copying; here a
 backup copied in later (`cp` without `-p`, an object-store download, an
 `rsync` without `-t`) still looks like the newest thing in the
 directory. Preserve modification times, or name the artifact outright
-with a file `path`.
+with a file `path`. Every regular file is a candidate — an archive has no
+magic this adapter filters on — so keep the directory to archives.
+
 Two things follow from that, and both are stated here rather than left
 for an operator to discover.
 
@@ -136,6 +139,37 @@ finished files, and that is the arrangement worth having.
 
 An artifact the config names outright is never second-guessed this way:
 the operator chose that file, so the drill restores that file.
+
+### Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: mongodump_dir
+  path: /backups/orders
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one
+an incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum` and `backup.size_bytes` do, and a
+scheduled drill choosing randomly covers the whole window over time.
+
+**Read the ordering caveat above before choosing `oldest`.** File time is
+all this adapter has, so a backup copied in without its timestamps looks
+like the newest thing in the directory under `newest` — and stops looking
+like the oldest under `oldest`. The policy is exactly as strong as the
+modification times in the directory are.
+
+`select` on a kind that chooses nothing — `mongodump`, `mongodump_with_users`, `mongodump_with_oplog` — is **refused**
+rather than ignored, the same way `backup_timezone` already is.
 
 ## The mongodump_with_users kind (the account layer)
 

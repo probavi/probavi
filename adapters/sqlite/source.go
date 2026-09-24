@@ -35,7 +35,11 @@ type resolvedSource struct {
 // carries format and version fields only, and a dump is undated SQL text
 // (both measured) — so created_at is always null and directories rank by
 // modification time, the etcd adapter's precedent.
-func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *protoError) {
+func resolveSource(ctx context.Context, kind, path string, params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "sqlite_db":
 		if perr := refuseDirectory(path, "sqlite_db_dir"); perr != nil {
@@ -43,22 +47,22 @@ func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *pr
 		}
 		return resolveDatabase(path)
 	case "sqlite_db_dir":
-		latest, perr := latestDatabaseIn(ctx, path)
+		chosen, perr := chosenDatabaseIn(ctx, path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveDatabase(latest)
+		return resolveDatabase(chosen)
 	case "sqlite_dump":
 		if perr := refuseDirectory(path, "sqlite_dump_dir"); perr != nil {
 			return nil, perr
 		}
 		return resolveDump(path)
 	case "sqlite_dump_dir":
-		latest, perr := latestDumpIn(ctx, path)
+		chosen, perr := chosenDumpIn(ctx, path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveDump(latest)
+		return resolveDump(chosen)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: sqlite_db, sqlite_db_dir, sqlite_dump, sqlite_dump_dir)", kind)
@@ -278,8 +282,8 @@ func refuseTruncatedDump(path string, head []byte) *protoError {
 // faces every single-file gate, so a live copy that wins the ranking is
 // refused by name rather than silently passed over — the same
 // not-a-filter principle as settle.go.
-func latestDatabaseIn(ctx context.Context, dir string) (string, *protoError) {
-	best, skipped, perr := newestWhere(dir, func(path string) (bool, *protoError) {
+func chosenDatabaseIn(ctx context.Context, dir string, policy selectPolicy) (string, *protoError) {
+	best, skipped, perr := chooseWhere(dir, policy, func(path string) (bool, *protoError) {
 		head, err := readHead(path, len(sqliteMagic))
 		if err != nil {
 			return false, protoErr("source_unreadable", false, "read %s: %v", filepath.Base(path), err)
@@ -312,8 +316,8 @@ func latestDatabaseIn(ctx context.Context, dir string) (string, *protoError) {
 // newest artifact is the odd one — the mariadb adapter's precedent is to
 // rank every regular file and let the chosen one face the single-file
 // gates by name.
-func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
-	best, _, perr := newestWhere(dir, func(string) (bool, *protoError) { return true, nil })
+func chosenDumpIn(ctx context.Context, dir string, policy selectPolicy) (string, *protoError) {
+	best, _, perr := chooseWhere(dir, policy, func(string) (bool, *protoError) { return true, nil })
 	if perr != nil {
 		return "", perr
 	}
@@ -326,11 +330,17 @@ func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
 	return best, nil
 }
 
-// newestWhere scans dir for the newest regular file the candidate
-// predicate accepts; ties break toward the lexicographically larger name
+// chooseWhere scans dir for the regular files the candidate predicate
+// accepts and hands them to the policy (selection.go); ties break by name
 // so the choice never depends on directory iteration order. skipped
 // counts the regular files the predicate declined.
-func newestWhere(dir string, candidate func(path string) (bool, *protoError)) (string, int, *protoError) {
+//
+// The predicate runs before the policy rather than after it, which is
+// what keeps a random draw on the file that is not a backup: a checksum
+// sidecar is never a candidate at all, rather than one an ordering merely
+// happened not to reach.
+func chooseWhere(dir string, policy selectPolicy,
+	candidate func(path string) (bool, *protoError)) (string, int, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -338,8 +348,7 @@ func newestWhere(dir string, candidate func(path string) (bool, *protoError)) (s
 	case err != nil:
 		return "", 0, protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var best string
-	var bestInfo os.FileInfo
+	candidates := make([]dirCandidate, 0, len(entries))
 	skipped := 0
 	for _, e := range entries {
 		if !e.Type().IsRegular() {
@@ -358,24 +367,12 @@ func newestWhere(dir string, candidate func(path string) (bool, *protoError)) (s
 		if err != nil {
 			return "", 0, protoErr("source_unreadable", false, "stat %s: %v", e.Name(), err)
 		}
-		if beats(info, e.Name(), bestInfo, filepath.Base(best)) {
-			best, bestInfo = path, info
-		}
+		candidates = append(candidates, dirCandidate{path: path, name: e.Name(), mtime: info.ModTime()})
 	}
-	return best, skipped, nil
-}
-
-// beats orders two directory candidates: newer modification time wins,
-// then the lexicographically larger name.
-func beats(info os.FileInfo, name string, bestInfo os.FileInfo, bestName string) bool {
-	switch {
-	case bestInfo == nil:
-		return true
-	case !info.ModTime().Equal(bestInfo.ModTime()):
-		return info.ModTime().After(bestInfo.ModTime())
-	default:
-		return name > bestName
+	if len(candidates) == 0 {
+		return "", skipped, nil
 	}
+	return pick(candidates, policy).path, skipped, nil
 }
 
 // fileChecksum streams the artifact once. The hash feeds the evidence

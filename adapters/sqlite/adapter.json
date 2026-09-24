@@ -38,8 +38,8 @@
   ],
   "sources": {
     "sqlite_db": "One database file from `sqlite3 .backup` or `VACUUM INTO` (or a copy of a cleanly closed database)",
-    "sqlite_db_dir": "A directory of database files; the newest by file time is restored (the header records no wall clock)",
+    "sqlite_db_dir": "A directory of database files; source.params.select picks which one is restored \u2014 newest by file time (the default), oldest, or random, because the header records no wall clock",
     "sqlite_dump": "SQL text from `sqlite3 .dump`",
-    "sqlite_dump_dir": "A directory of dumps; the newest by file time is restored"
+    "sqlite_dump_dir": "A directory of dumps; chosen the same way, by source.params.select"
   }
 }

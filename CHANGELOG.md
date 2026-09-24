@@ -47,11 +47,18 @@ always called out explicitly.
 
   Rolling out across the catalogue on those semantics: **`adapters/mysql`
   0.15.0** (`mysqldump_dir`, and `mysqldump_with_users` without
-  `params.dump`) and **`adapters/mariadb` 0.5.0** (`mariadb_dump_dir`).
-  Each adapter carries its own copy of the policy, which is what the
-  protocol boundary costs and buys: no adapter is obliged to implement
-  it, and none can break another's. Twenty-seven `*_dir` kinds across
-  twenty-four adapters are still to come.
+  `params.dump`) and **`adapters/mariadb` 0.5.0** (`mariadb_dump_dir`);
+  then the four adapters whose artifacts record no clock at all —
+  **`adapters/etcd` 0.5.0**, **`adapters/mongodb` 0.6.0**,
+  **`adapters/sqlite` 0.2.0** and **`adapters/duckdb` 0.2.0**. There the
+  order is file modification time, so `oldest` is exactly as strong as
+  the timestamps in the directory are, and each README says so rather
+  than leaving it to be discovered; `precedes` really is `beats` turned
+  around in those four, which is the difference from the adapters above
+  and is stated in each. Each adapter carries its own copy of the policy,
+  which is what the protocol boundary costs and buys: no adapter is
+  obliged to implement it, and none can break another's. Twenty-two
+  `*_dir` kinds across twenty adapters are still to come.
 
 - **A release now runs the binaries it publishes.** Everything else in
   this repository proves the source tree: the unit suite, the integration

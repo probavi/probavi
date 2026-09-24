@@ -15,7 +15,7 @@ that does not restore is a cluster that does not come back.
 | `source.kind` | What `source.path` points at |
 | --- | --- |
 | `etcd_snapshot` | one snapshot file from `etcdctl snapshot save` |
-| `etcd_snapshot_dir` | a directory of them; the newest file is restored |
+| `etcd_snapshot_dir` | a directory of them; `params.select` picks which one — `newest` by file time (the default), `oldest`, or `random` |
 
 Only `etcdctl snapshot save` output is supported. That format carries an
 appended integrity hash; a `db` file copied out of a live data directory
@@ -163,9 +163,43 @@ The `source.params.backup_timezone` key the other adapters use has
 nothing to act on here, and a config that sets it is refused rather than
 silently ignored.
 
-The same fact drives the directory kind: with nothing better to rank by,
-`etcd_snapshot_dir` picks the newest file by mtime, with the in-flight
-guard the other directory kinds share (see `settle.go`).
+The same fact drives the directory kind: with nothing better to order
+by, `etcd_snapshot_dir` orders candidates by mtime, with the in-flight
+guard the other directory kinds share (see `settle.go`). Every regular
+file in the directory is a candidate — a snapshot has no magic to filter
+on — so keep the directory to snapshots, or name the file outright.
+
+### Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: etcd_snapshot_dir
+  path: /backups/etcd
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one
+an incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum` and `backup.size_bytes` do, and a
+scheduled drill choosing randomly covers the whole window over time.
+
+**Read the ordering caveat above before choosing `oldest`.** File time is
+all this adapter has, so a backup copied in without its timestamps looks
+like the newest thing in the directory under `newest` — and stops looking
+like the oldest under `oldest`. The policy is exactly as strong as the
+modification times in the directory are.
+
+`select` on a kind that chooses nothing — `etcd_snapshot` — is **refused**
+rather than ignored, the same way `backup_timezone` already is.
+
 
 ## Backup identity
 

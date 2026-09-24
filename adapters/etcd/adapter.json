@@ -28,6 +28,6 @@
   ],
   "sources": {
     "etcd_snapshot": "One snapshot file from `etcdctl snapshot save`",
-    "etcd_snapshot_dir": "A directory of snapshot files; the newest file is restored (a snapshot carries no timestamp of its own)"
+    "etcd_snapshot_dir": "A directory of snapshot files; source.params.select picks which one is restored \u2014 newest by file time (the default), oldest, or random, because a snapshot carries no timestamp of its own"
   }
 }

@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "etcd"
-	adapterVersion = "0.4.0"
+	adapterVersion = "0.5.0"
 
 	// clientEndpoint is where the restored server serves inside the
 	// sandbox. No TLS and no auth: a Probavi sandbox is zero-ingress
@@ -130,7 +130,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	}
 	paths := newSandboxPaths(req.Sandbox.ScratchDir)
 
-	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path)
+	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path, req.Source.Params)
 	if perr != nil {
 		return nil, perr
 	}

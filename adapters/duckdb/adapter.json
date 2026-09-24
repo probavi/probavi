@@ -23,7 +23,7 @@
   ],
   "sources": {
     "duckdb_db": "One database file (a copy of a cleanly closed database)",
-    "duckdb_db_dir": "A directory of database files; the newest by file time is restored (the header records no wall clock)",
+    "duckdb_db_dir": "A directory of database files; source.params.select picks which one is restored \u2014 newest by file time (the default), oldest, or random, because the header records no wall clock",
     "duckdb_export": "One `EXPORT DATABASE` directory (schema.sql, load.sql and one data file per table, CSV or Parquet)"
   }
 }
