@@ -28,8 +28,8 @@
   ],
   "sources": {
     "mysqldump": "One mysqldump SQL file, plain or gzip-compressed",
-    "mysqldump_dir": "A directory of mysqldump files, plain or gzip-compressed; the one whose own trailer records the newest time is restored",
-    "mysqldump_with_users": "A directory holding one dump and an accounts-and-grants script, restored together; either may be gzip-compressed",
+    "mysqldump_dir": "A directory of mysqldump files, plain or gzip-compressed; source.params.select picks which one is restored \u2014 newest by the time each dump records in its own trailer (the default), oldest, or random",
+    "mysqldump_with_users": "A directory holding one dump and an accounts-and-grants script, restored together \u2014 the dump named by source.params.dump, or picked by source.params.select; either may be gzip-compressed",
     "xtrabackup": "An unprepared Percona XtraBackup full backup (physical restore)"
   }
 }

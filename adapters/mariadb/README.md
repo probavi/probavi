@@ -35,7 +35,7 @@ field dates the adapter, never the engine (`docs/capabilities.md` §3).
 | `source.kind` | What `source.path` points at |
 | --- | --- |
 | `mariadb_dump` | one SQL dump, plain or gzip-compressed |
-| `mariadb_dump_dir` | a directory of them; the dump whose own trailer records the newest time is restored |
+| `mariadb_dump_dir` | a directory of them; `params.select` picks which one — `newest` by the time each dump records in its own trailer (the default), `oldest`, or `random` |
 | `mariadb_backup` | an unprepared `mariadb-backup` full-backup directory (physical restore) |
 
 Dumps taken with either `mariadb-dump` or its `mysqldump` ancestor are
@@ -81,6 +81,53 @@ dump carries no sign-off and is exempt rather than failed.
 Options: `database` (default `probavi`), `user` (default `root`), and
 `charset`/`collation` to pin the restore target's defaults when the dump
 carries no `CREATE DATABASE` of its own.
+
+### Which backup in the retention window
+
+With `mariadb_dump_dir` the adapter picks the artifact, and
+`params.select` says which one. `newest` — the default, and what every
+drill written before this parameter existed does — proves last night. A
+drill that only ever does that says nothing whatever about the oldest
+backup still in the window, which is the one an incident reaches for once
+it is clear the damage predates yesterday: a rotated encryption key, bit
+rot on colder media, a format the current tooling no longer reads.
+
+```yaml
+source:
+  kind: mariadb_dump_dir
+  path: /backups/shop
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+Whichever policy is asked for, candidates are ordered by the time each
+dump records in its own `-- Dump completed on` trailer, never by file
+modification time — copying a backup in resets that, and a stale artifact
+would then look like the newest thing in the directory. Two properties
+follow, and both are worth knowing before choosing a policy.
+
+**`oldest` is not `newest` turned around.** The rule that a datable dump
+outranks an undatable one does *not* invert: a dump taken with
+`--skip-dump-date` is not "the oldest backup", it is the one nothing is
+known about, and it loses under either policy. Only the comparisons after
+that one turn around — earlier trailer, then older file, then the smaller
+name.
+
+**`random` is not reproducible, and does not need to be.** It draws
+uniformly from the dumps carrying a trailer date, which keeps a draw away
+from the stray file a backup directory collects (a `SHA256SUMS`, a lock
+file). What was restored is still recorded: `source.params` never enters
+an evidence record, but `backup.checksum`, `backup.size_bytes` and
+`backup.created_at` do, and those name the artifact. A scheduled drill
+choosing randomly covers the whole window over time.
+
+Ordering a directory of **compressed** dumps decompresses every candidate
+to reach its trailer, so every policy pays the same price — the directory
+has to be ordered before either end of it can be named. Naming the file
+outright with `mariadb_dump` skips it entirely. And `select` on a kind
+that chooses nothing — `mariadb_dump` or `mariadb_backup` — is refused
+rather than ignored, because a parameter nothing reads is a config the
+operator believes in and a drill doing something else.
 
 ## Physical restores (`mariadb_backup`)
 

@@ -33,7 +33,7 @@
   ],
   "sources": {
     "mariadb_dump": "One mariadb-dump (or mysqldump) SQL file, plain or gzip-compressed",
-    "mariadb_dump_dir": "A directory of dump files, plain or gzip-compressed; the one whose own trailer records the newest time is restored",
+    "mariadb_dump_dir": "A directory of dump files, plain or gzip-compressed; source.params.select picks which one is restored \u2014 newest by the time each dump records in its own trailer (the default), oldest, or random",
     "mariadb_backup": "An unprepared mariadb-backup full backup (physical restore)"
   }
 }

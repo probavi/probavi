@@ -45,6 +45,14 @@ always called out explicitly.
   `barman`, or a `with_globals` source that already names its `dump` —
   is refused rather than ignored.
 
+  Rolling out across the catalogue on those semantics: **`adapters/mysql`
+  0.15.0** (`mysqldump_dir`, and `mysqldump_with_users` without
+  `params.dump`) and **`adapters/mariadb` 0.5.0** (`mariadb_dump_dir`).
+  Each adapter carries its own copy of the policy, which is what the
+  protocol boundary costs and buys: no adapter is obliged to implement
+  it, and none can break another's. Twenty-seven `*_dir` kinds across
+  twenty-four adapters are still to come.
+
 - **A release now runs the binaries it publishes.** Everything else in
   this repository proves the source tree: the unit suite, the integration
   suite and the version matrix all build from the working directory, and

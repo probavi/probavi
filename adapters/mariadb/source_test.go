@@ -126,9 +126,9 @@ func TestDirectoryRankingIgnoresFileTimes(t *testing.T) {
 	writeDumpAs(t, dir, "stale.sql", "2026-08-01 03:00:00", now)
 	fresh := writeDumpAs(t, dir, "fresh.sql", "2026-08-09 03:00:00", now.Add(-24*time.Hour))
 
-	got, perr := newestBackupIn(context.Background(), dir, "")
+	got, perr := chooseBackupIn(context.Background(), dir, "", selectNewest)
 	if perr != nil {
-		t.Fatalf("newestBackupIn: %+v", perr)
+		t.Fatalf("chooseBackupIn: %+v", perr)
 	}
 	if got != fresh {
 		t.Errorf("picked %s, want %s — the copy's file time must not outrank the dump's own trailer",
@@ -144,7 +144,7 @@ func TestDirectoryRanking(t *testing.T) {
 		dated := writeDumpAs(t, dir, "a-dated.sql", "2026-08-01 03:00:00", base.Add(-time.Hour))
 		// --skip-dump-date leaves the sentence without a date behind it.
 		writeDumpAs(t, dir, "z-undated.sql", "", base)
-		got, perr := newestBackupIn(context.Background(), dir, "")
+		got, perr := chooseBackupIn(context.Background(), dir, "", selectNewest)
 		if perr != nil || got != dated {
 			t.Errorf("picked %s (%+v), want the dump that carries its own time", got, perr)
 		}
@@ -154,7 +154,7 @@ func TestDirectoryRanking(t *testing.T) {
 		dir := t.TempDir()
 		writeDumpAs(t, dir, "old.sql", "", base.Add(-time.Hour))
 		newest := writeDumpAs(t, dir, "new.sql", "", base)
-		got, perr := newestBackupIn(context.Background(), dir, "")
+		got, perr := chooseBackupIn(context.Background(), dir, "", selectNewest)
 		if perr != nil || got != newest {
 			t.Errorf("picked %s (%+v), want the newest file when nothing else can rank them", got, perr)
 		}
@@ -164,7 +164,7 @@ func TestDirectoryRanking(t *testing.T) {
 		dir := t.TempDir()
 		writeDumpAs(t, dir, "a.sql", "2026-08-09 03:00:00", base.Add(-time.Hour))
 		want := writeDumpAs(t, dir, "b.sql", "2026-08-09 03:00:00", base)
-		got, perr := newestBackupIn(context.Background(), dir, "")
+		got, perr := chooseBackupIn(context.Background(), dir, "", selectNewest)
 		if perr != nil || got != want {
 			t.Errorf("picked %s (%+v), want the newer file of two dumps recording the same clock", got, perr)
 		}
@@ -174,7 +174,7 @@ func TestDirectoryRanking(t *testing.T) {
 		dir := t.TempDir()
 		writeDumpAs(t, dir, "users.sql", "2026-08-09 03:00:00", base)
 		want := writeDumpAs(t, dir, "orders.sql", "2026-08-01 03:00:00", base)
-		got, perr := newestBackupIn(context.Background(), dir, "users.sql")
+		got, perr := chooseBackupIn(context.Background(), dir, "users.sql", selectNewest)
 		if perr != nil || got != want {
 			t.Errorf("picked %s (%+v), want the dump beside the skipped member", got, perr)
 		}
@@ -280,7 +280,7 @@ func TestDirectoryRankingSpansStorageForms(t *testing.T) {
 		writeDumpAs(t, dir, "stale.sql", "2026-08-01 03:00:00", copiedIn)
 		fresh := writeCompressedDumpAs(t, dir, "fresh.sql.gz", "2026-08-09 03:00:00",
 			copiedIn.Add(-24*time.Hour))
-		got, perr := newestBackupIn(context.Background(), dir, "")
+		got, perr := chooseBackupIn(context.Background(), dir, "", selectNewest)
 		if perr != nil || got != fresh {
 			t.Errorf("picked %s (%+v), want the compressed dump that records the newer time",
 				filepath.Base(got), perr)
@@ -291,7 +291,7 @@ func TestDirectoryRankingSpansStorageForms(t *testing.T) {
 		dir := t.TempDir()
 		writeCompressedDumpAs(t, dir, "stale.sql.gz", "2026-08-01 03:00:00", copiedIn)
 		fresh := writeDumpAs(t, dir, "fresh.sql", "2026-08-09 03:00:00", copiedIn.Add(-24*time.Hour))
-		got, perr := newestBackupIn(context.Background(), dir, "")
+		got, perr := chooseBackupIn(context.Background(), dir, "", selectNewest)
 		if perr != nil || got != fresh {
 			t.Errorf("picked %s (%+v), want the plain dump that records the newer time",
 				filepath.Base(got), perr)
@@ -306,7 +306,7 @@ func TestDirectoryRankingSpansStorageForms(t *testing.T) {
 		writeCompressedDumpAs(t, dir, "tuesday.sql.gz", "2026-08-04 03:00:00", copiedIn.Add(-time.Hour))
 		want := writeCompressedDumpAs(t, dir, "sunday.sql.gz", "2026-08-09 03:00:00",
 			copiedIn.Add(-2*time.Hour))
-		got, perr := newestBackupIn(context.Background(), dir, "")
+		got, perr := chooseBackupIn(context.Background(), dir, "", selectNewest)
 		if perr != nil || got != want {
 			t.Errorf("picked %s (%+v), want sunday.sql.gz", filepath.Base(got), perr)
 		}
