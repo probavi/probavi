@@ -361,9 +361,9 @@ func TestDirectoryRankingIgnoresFileTimes(t *testing.T) {
 	stale := writeArchiveAs(t, dir, "stale.dump", archiveHeaders[0].head, now)
 	fresh := writeArchiveAs(t, dir, "fresh.dump", archiveHeaders[3].head, now.Add(-24*time.Hour))
 
-	got, perr := newestBackupIn(dir, "")
+	got, perr := chooseBackupIn(dir, "", selectNewest)
 	if perr != nil {
-		t.Fatalf("newestBackupIn: %+v", perr)
+		t.Fatalf("chooseBackupIn: %+v", perr)
 	}
 	if got != fresh {
 		t.Errorf("picked %s, want %s — the copy's file time must not outrank the backup's own clock",
@@ -381,7 +381,7 @@ func TestDirectoryRanking(t *testing.T) {
 		dir := t.TempDir()
 		dated := writeArchiveAs(t, dir, "a-archive.dump", archiveHeaders[0].head, base.Add(-time.Hour))
 		touch(t, dir, "z-plain.sql", base) // newer file, but nothing dates it
-		got, perr := newestBackupIn(dir, "")
+		got, perr := chooseBackupIn(dir, "", selectNewest)
 		if perr != nil || got != dated {
 			t.Errorf("picked %s (%+v), want the archive that carries its own time", got, perr)
 		}
@@ -391,7 +391,7 @@ func TestDirectoryRanking(t *testing.T) {
 		dir := t.TempDir()
 		touch(t, dir, "old.sql", base.Add(-time.Hour))
 		newest := touch(t, dir, "new.sql", base)
-		got, perr := newestBackupIn(dir, "")
+		got, perr := chooseBackupIn(dir, "", selectNewest)
 		if perr != nil || got != newest {
 			t.Errorf("picked %s (%+v), want the newest file when nothing else can rank them", got, perr)
 		}
@@ -401,7 +401,7 @@ func TestDirectoryRanking(t *testing.T) {
 		dir := t.TempDir()
 		writeArchiveAs(t, dir, "a.dump", archiveHeaders[2].head, base.Add(-time.Hour))
 		want := writeArchiveAs(t, dir, "b.dump", archiveHeaders[2].head, base)
-		got, perr := newestBackupIn(dir, "")
+		got, perr := chooseBackupIn(dir, "", selectNewest)
 		if perr != nil || got != want {
 			t.Errorf("picked %s (%+v), want the newer file of two backups recording the same clock", got, perr)
 		}
@@ -411,7 +411,7 @@ func TestDirectoryRanking(t *testing.T) {
 		dir := t.TempDir()
 		writeArchiveAs(t, dir, "globals.sql", archiveHeaders[3].head, base)
 		want := writeArchiveAs(t, dir, "orders.dump", archiveHeaders[0].head, base)
-		got, perr := newestBackupIn(dir, "globals.sql")
+		got, perr := chooseBackupIn(dir, "globals.sql", selectNewest)
 		if perr != nil || got != want {
 			t.Errorf("picked %s (%+v), want the dump beside the skipped member", got, perr)
 		}
@@ -441,9 +441,9 @@ func TestDirectoryRankingIgnoresStorageShape(t *testing.T) {
 			// plainDumpBody records 21:26:45 and is a day old.
 			stale := writeArchiveAs(t, dir, "earlier.dump", archiveHeaders[0].head, base)
 			want := tt.write(dir)
-			got, perr := newestBackupIn(dir, "")
+			got, perr := chooseBackupIn(dir, "", selectNewest)
 			if perr != nil {
-				t.Fatalf("newestBackupIn: %+v", perr)
+				t.Fatalf("chooseBackupIn: %+v", perr)
 			}
 			if got != want {
 				t.Errorf("picked %s, want %s — the later backup, whatever shape it is stored in",

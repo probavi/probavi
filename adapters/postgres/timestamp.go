@@ -83,7 +83,7 @@ func dumpCreatedAt(head []byte, storage dumpStorage, loc *time.Location) *string
 // time.Time labelled UTC that is a wall clock and not an instant.
 //
 // It exists so two backups can be ranked against each other (see
-// newestBackupIn): both came off the same backup host, so whatever zone
+// chooseBackupIn): both came off the same backup host, so whatever zone
 // that host was in cancels out of the comparison, and ranking therefore
 // works whether or not the operator declared one. Reporting a creation
 // time is the other job, and that one does need the zone.
@@ -115,7 +115,7 @@ func archiveClock(head []byte) (time.Time, bool) {
 // plainDumpClock reads the time a plain-SQL dump was started, which pg_dump
 // writes only under --verbose. Its absence is the ordinary case, not a
 // defect: a dump taken without that flag simply cannot be dated, and
-// newestBackupIn ranks it accordingly rather than inventing a time.
+// chooseBackupIn orders it accordingly rather than inventing a time.
 //
 // The first plausible match wins. Only the head is available here, and for
 // the one artifact this reads that is where its own beginning is recorded.

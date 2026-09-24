@@ -10,12 +10,13 @@ enough to build an adapter.
 | Kind                  | Meaning                                              |
 |-----------------------|------------------------------------------------------|
 | `pgdump`              | One `pg_dump` file — custom-format (`-Fc`) or plain SQL (`-Fp`), stored plain or gzip-compressed. |
-| `pgdump_dir`          | A directory of dump files; the dump whose own head records the newest time is restored. |
+| `pgdump_dir`          | A directory of dump files; `params.select` picks which one — `newest` by the time each dump records about itself (the default), `oldest`, or `random`. |
 | `pgdump_with_globals` | A directory holding a `pg_dumpall --globals-only` script and one dump; the globals are loaded before the dump. Either member may be gzip-compressed. |
 | `timescaledb_dump`    | One `pg_dump` file of a TimescaleDB database; the restore is framed with the extension's own `timescaledb_pre_restore()`/`timescaledb_post_restore()` procedure. |
-| `timescaledb_dump_dir` | A directory of them, chosen like `pgdump_dir` and framed the same way. |
+| `timescaledb_dump_dir` | A directory of them, chosen the way `pgdump_dir` chooses and framed the same way. |
 | `timescaledb_dump_with_globals` | `pgdump_with_globals` for a TimescaleDB database: the cluster globals load first, then the framed restore. |
 | `pgbackrest`          | A pgBackRest repository directory (filesystem repo) — a physical restore. Declares the `pitr` capability. |
+| `barman`              | A Barman server directory — `base/`, `wals/` and `meta/`. The cluster is placed and PostgreSQL replays the archived WAL. Declares the `pitr` capability. |
 
 ## How a dump is stored (format and compression)
 
@@ -420,12 +421,14 @@ knowing:
 ## Which backup a drill restores, and when it refuses
 
 When the drill config names a **directory**, the adapter picks the
-artifact itself: the dump whose **own head records the newest time**.
-The file's modification time is not what ranks candidates — copying a
-backup in (`cp` without `-p`, an object-store download, an `rsync`
-without `-t`) resets it, and a stale artifact would then look like the
-newest thing in the directory. What a dump says about itself does not
-move when the file is copied.
+artifact itself, and `params.select` says which one: `newest` (the
+default), `oldest` or `random`. Whichever is asked for, candidates are
+ordered by the time each dump **records about itself**. The file's
+modification time is not what orders them — copying a backup in (`cp`
+without `-p`, an object-store download, an `rsync` without `-t`) resets
+it, and a stale artifact would then look like the newest thing in the
+directory. What a dump says about itself does not move when the file is
+copied.
 
 Both formats record that time in their head — a custom-format archive in
 its header, a plain-SQL dump in the `-- Started on` line — so ranking reads
@@ -438,11 +441,13 @@ Ranking needs no declared zone: two dumps being compared came off the
 same backup host, so whatever zone it was in cancels out. Declaring
 `params.backup_timezone` is only needed to *report* `backup.created_at`.
 
-A dump the adapter cannot date ranks below every dump it can. Between two
-such files the previous rule still decides: newest mtime, ties broken by
-the larger name. **Most plain-SQL dumps land here**: `pg_dump` writes the
-`-- Started on` line only under `--verbose`, so a dump taken without it
-carries no date at all, and none is invented for it.
+A dump the adapter cannot date ranks below every dump it can — under
+every policy, including `oldest`, because being undatable is not a clock
+(see below). Between two such files the previous rule still decides:
+newest mtime, ties broken by the larger name. **Most plain-SQL dumps land
+here**: `pg_dump` writes the `-- Started on` line only under `--verbose`,
+so a dump taken without it carries no date at all, and none is invented
+for it.
 
 Two more things follow, and both are stated here rather than left for an
 operator to discover.
@@ -462,6 +467,51 @@ finished files, and that is the arrangement worth having.
 
 An artifact the config names outright is never second-guessed this way:
 the operator chose that file, so the drill restores that file.
+
+### Which backup in the retention window
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one
+an incident reaches for, once it is clear the damage predates yesterday.
+A rotated encryption key, bit rot on colder media, a format the current
+tooling no longer reads: none of them are visible from the newest end.
+
+```yaml
+target:
+  source:
+    kind: pgdump_dir
+    path: /backups/orders
+    params:
+      select: oldest        # newest (default) | oldest | random
+```
+
+Three things are worth knowing before choosing one.
+
+**`oldest` is not `newest` turned around.** The rule that a datable dump
+outranks an undatable one does *not* invert: a file this adapter cannot
+date is not "the oldest backup", it is the one nothing is known about, and
+it loses under either policy. Only the comparisons after that one turn
+around — earlier recorded clock, then older file, then the smaller name.
+
+**`random` is not reproducible, and does not need to be.** It draws
+uniformly from the dumps that carry their own clock, which keeps a draw
+away from the stray file a backup directory collects (a `SHA256SUMS`, a
+lock file) and away from a shape an ordering would never have reached.
+What was restored is still recorded: `source.params` never enters an
+evidence record, but `backup.checksum`, `backup.size_bytes` and
+`backup.created_at` do, and those name the artifact. A scheduled drill
+choosing randomly covers the whole window over time, which is the honest
+way to prove a window rather than a day.
+
+**It applies where the adapter chooses**, which is `pgdump_dir`,
+`timescaledb_dump_dir`, and the two `with_globals` kinds when
+`params.dump` does not name the member outright. Anywhere else —
+`pgdump`, `timescaledb_dump`, `pgbackrest`, `barman`, or beside an
+explicit `params.dump` — it is **refused** rather than ignored, because a
+parameter nothing reads is a config the operator believes in and a drill
+doing something else. Everything below still holds whichever policy is
+set: the adapter chose the file, so it still refuses one a backup job is
+in the middle of writing.
 
 ### When the backup was taken
 
@@ -548,6 +598,7 @@ Set under `source.params` in the drill config.
 |-------------------|-----------------------|-----------------------------------------------------|
 | `globals`         | `pgdump_with_globals` | **Required.** Bare filename of the cluster-globals script inside the source directory. |
 | `dump`            | `pgdump_with_globals` | Optional. Bare filename of the dump; without it the newest-by-header non-globals file is used. |
+| `select`          | `pgdump_dir`, `timescaledb_dump_dir`, and the `with_globals` kinds without `dump` | Optional, default `newest`. Which backup in the directory the drill restores: `newest`, `oldest` or `random` — see above. Refused on the kinds that select nothing. |
 | `backup_timezone` | `pgdump*`, `timescaledb_dump*` | Optional. IANA zone name of the host that took the backup (e.g. `Europe/Budapest`). Without it `backup.created_at` is null — see above. Not needed for `pgbackrest`, whose repository records absolute timestamps. |
 
 ## Drill config options

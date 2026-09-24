@@ -13,6 +13,38 @@ always called out explicitly.
 
 ### Added
 
+- **A drill can prove the oldest backup in the retention window, not
+  only last night's** (`adapters/postgres` 0.18.0, `source.params.select`).
+  Every directory kind restored the newest member and nothing else was on
+  offer, so a drill running every night proved the newest backup every
+  night and said nothing whatever about the oldest one still in the
+  window — which is the one an incident reaches for, once it is clear the
+  damage predates yesterday. A rotated encryption key, bit rot on colder
+  media, a format the current tooling no longer reads: none of them are
+  visible from the newest end.
+
+  `select` takes `newest` (the default, and what every existing drill
+  keeps doing), `oldest` or `random`, on `pgdump_dir`,
+  `timescaledb_dump_dir` and the two `with_globals` kinds when
+  `params.dump` does not name the member outright. It is a
+  `source.params` value rather than a core config key on purpose: what
+  "newest" means is engine knowledge — a dump header here, an LSN
+  elsewhere — so selection is adapter behaviour, and params is what the
+  core hands an adapter uninterpreted. No core config key, no adapter
+  protocol version, no evidence schema change, and no adapter obliged to
+  implement it.
+
+  Two properties are worth stating. `oldest` is not `newest` turned
+  around: a dump this adapter cannot date loses under **both** policies,
+  because being undatable is not a clock. And `random` is not
+  reproducible and is not asked to be — it draws from the dumps that
+  carry their own clock, and what it restored is still in the record,
+  since `backup.checksum`, `backup.size_bytes` and `backup.created_at`
+  name the artifact while `source.params` never reaches a record at all.
+  Asking a kind that selects nothing to select — `pgdump`, `pgbackrest`,
+  `barman`, or a `with_globals` source that already names its `dump` —
+  is refused rather than ignored.
+
 - **A release now runs the binaries it publishes.** Everything else in
   this repository proves the source tree: the unit suite, the integration
   suite and the version matrix all build from the working directory, and

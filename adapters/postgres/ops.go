@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "postgres"
-	adapterVersion = "0.17.0"
+	adapterVersion = "0.18.0"
 
 	// psqlConnectionRefused is psql's exit code for a connection that could
 	// not be established — distinct from 1 (psql's own fatal error) and 3
