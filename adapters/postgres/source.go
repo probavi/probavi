@@ -38,8 +38,8 @@ type resolvedSource struct {
 // resolveSource maps a source kind to one restorable artifact.
 //
 //	pgdump              — path is a pg_dump custom-format file
-//	pgdump_dir          — path is a directory; the backup whose own header
-//	                      records the newest time is chosen
+//	pgdump_dir          — path is a directory; which member is chosen is
+//	                      params.select, newest by default (selection.go)
 //	pgdump_with_globals — path is a directory holding a pg_dumpall
 //	                      --globals-only script (params.globals) and one dump
 //	timescaledb_dump    — path is a pg_dump file of a TimescaleDB database;
@@ -56,27 +56,31 @@ func resolveSource(ctx context.Context, kind, path string, params map[string]str
 	if perr != nil {
 		return nil, perr
 	}
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "pgdump":
 		return resolveFile(path, loc)
 	case "pgdump_dir":
-		latest, perr := latestDumpIn(ctx, path)
+		chosen, perr := chosenDumpIn(ctx, path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveFile(latest, loc)
+		return resolveFile(chosen, loc)
 	case "pgdump_with_globals":
-		return resolveWithGlobals(ctx, path, params, loc)
+		return resolveWithGlobals(ctx, path, params, policy, loc)
 	case "timescaledb_dump":
 		return timescaleSource(resolveFile(path, loc))
 	case "timescaledb_dump_dir":
-		latest, perr := latestDumpIn(ctx, path)
+		chosen, perr := chosenDumpIn(ctx, path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return timescaleSource(resolveFile(latest, loc))
+		return timescaleSource(resolveFile(chosen, loc))
 	case "timescaledb_dump_with_globals":
-		return timescaleSource(resolveWithGlobals(ctx, path, params, loc))
+		return timescaleSource(resolveWithGlobals(ctx, path, params, policy, loc))
 	case "pgbackrest":
 		return resolveRepo(path, params["stanza"])
 	case "barman":
@@ -120,7 +124,8 @@ func timescaleSource(src *resolvedSource, perr *protoError) (*resolvedSource, *p
 // mirrors dirChecksum's framing (role NUL size NUL content, fixed order)
 // with the member's role in place of its relative path, so the same pair
 // always hashes the same and any change to either member changes the hash.
-func resolveWithGlobals(ctx context.Context, dir string, params map[string]string, loc *time.Location) (*resolvedSource, *protoError) {
+func resolveWithGlobals(ctx context.Context, dir string, params map[string]string,
+	policy selectPolicy, loc *time.Location) (*resolvedSource, *protoError) {
 	info, err := os.Stat(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -143,7 +148,7 @@ func resolveWithGlobals(ctx context.Context, dir string, params map[string]strin
 		return nil, perr
 	}
 
-	dumpPath, perr := chooseDump(ctx, dir, params["dump"], globalsName)
+	dumpPath, perr := chooseDump(ctx, dir, params["dump"], globalsName, policy)
 	if perr != nil {
 		return nil, perr
 	}
@@ -214,8 +219,10 @@ func memberName(value, param string) (string, *protoError) {
 
 // chooseDump resolves which dump the drill restores: the one params.dump
 // names, or — so a drill against a rotating backup directory keeps working
-// unattended — the newest file that is not the globals script.
-func chooseDump(ctx context.Context, dir, requested, globalsName string) (string, *protoError) {
+// unattended — the one params.select picks from the files beside the
+// globals script.
+func chooseDump(ctx context.Context, dir, requested, globalsName string,
+	policy selectPolicy) (string, *protoError) {
 	if requested != "" {
 		name, perr := memberName(requested, "dump")
 		if perr != nil {
@@ -227,20 +234,20 @@ func chooseDump(ctx context.Context, dir, requested, globalsName string) (string
 		}
 		return filepath.Join(dir, name), nil
 	}
-	newest, perr := newestBackupIn(dir, globalsName)
+	chosen, perr := chooseBackupIn(dir, globalsName, policy)
 	if perr != nil {
 		return "", perr
 	}
-	if newest == "" {
+	if chosen == "" {
 		return "", protoErr("source_not_found", false,
 			"backup directory %s holds no dump beside the globals script %s", dir, globalsName)
 	}
 	// The adapter chose this file, not the operator: make sure a backup job
 	// is not still writing it (see settle.go).
-	if perr := assertSettled(ctx, newest, settleWindow); perr != nil {
+	if perr := assertSettled(ctx, chosen, settleWindow); perr != nil {
 		return "", perr
 	}
-	return newest, nil
+	return chosen, nil
 }
 
 // statRegularFile stats a source member that must exist as a plain file;
@@ -387,10 +394,10 @@ func resolveFile(path string, loc *time.Location) (*resolvedSource, *protoError)
 	}, nil
 }
 
-// latestDumpIn picks the dump in dir that records the newest time about
-// itself (see newestBackupIn).
-func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
-	best, perr := newestBackupIn(dir, "")
+// chosenDumpIn picks the dump in dir that the policy asks for (see
+// chooseBackupIn and selection.go).
+func chosenDumpIn(ctx context.Context, dir string, policy selectPolicy) (string, *protoError) {
+	best, perr := chooseBackupIn(dir, "", policy)
 	if perr != nil {
 		return "", perr
 	}
@@ -405,21 +412,25 @@ func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
 	return best, nil
 }
 
-// newestBackupIn returns the backup a directory source should restore,
-// skipping the entry named except. An empty result means the directory is
-// readable but holds no candidate — the caller says what that means.
+// chooseBackupIn returns the backup a directory source should restore
+// under policy, skipping the entry named except. An empty result means the
+// directory is readable but holds no candidate — the caller says what
+// that means.
 //
-// Candidates are ranked by the time the backup records about itself, not
+// Candidates are ordered by the time the backup records about itself, not
 // by the file's modification time. A backup copied into the directory
 // afterwards — cp without -p, an object-store download, an rsync without
 // -t — carries a fresh mtime, so under the old rule a stale artifact
 // became "the newest file" and was the one the drill proved. What a
 // backup says about itself does not move when the file is copied.
 //
-// Ranking costs a bounded read per candidate whatever the artifact's size,
-// including a compressed one: what dates a dump sits in its head, so a
-// candidate stored gzipped is inflated only far enough to reach it.
-func newestBackupIn(dir, except string) (string, *protoError) {
+// Ordering costs a bounded read per candidate whatever the artifact's
+// size, including a compressed one: what dates a dump sits in its head, so
+// a candidate stored gzipped is inflated only far enough to reach it.
+// Every candidate is read for every policy, which is what makes oldest and
+// random mean the same thing as newest rather than "the first entry
+// readdir returned".
+func chooseBackupIn(dir, except string, policy selectPolicy) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -427,10 +438,7 @@ func newestBackupIn(dir, except string) (string, *protoError) {
 	case err != nil:
 		return "", protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var (
-		best     string
-		bestRank dirCandidate
-	)
+	candidates := make([]dirCandidate, 0, len(entries))
 	for _, e := range entries {
 		if !e.Type().IsRegular() || e.Name() == except {
 			continue
@@ -441,12 +449,14 @@ func newestBackupIn(dir, except string) (string, *protoError) {
 		}
 		path := filepath.Join(dir, e.Name())
 		clock, dated := candidateClock(path)
-		rank := dirCandidate{name: e.Name(), clock: clock, dated: dated, mtime: info.ModTime()}
-		if best == "" || rank.beats(bestRank) {
-			best, bestRank = path, rank
-		}
+		candidates = append(candidates, dirCandidate{
+			path: path, name: e.Name(), clock: clock, dated: dated, mtime: info.ModTime(),
+		})
 	}
-	return best, nil
+	if len(candidates) == 0 {
+		return "", nil
+	}
+	return pick(candidates, policy).path, nil
 }
 
 // candidateClock dates one entry of a directory source, or reports that it
@@ -463,20 +473,21 @@ func candidateClock(path string) (time.Time, bool) {
 }
 
 // dirCandidate is one file a directory source could restore, with the two
-// times that can rank it.
+// times that can order it.
 type dirCandidate struct {
+	path  string
 	name  string
 	clock time.Time // what the backup records about itself
 	dated bool      // whether that clock could be read at all
 	mtime time.Time
 }
 
-// beats orders two candidates. A backup that can be dated from its own
-// bytes wins over one that cannot: the drill would rather restore the
-// backup it can also say something true about. Between two dated
-// candidates the newer recorded clock wins; otherwise the rule that
-// applied before this ranking existed still decides — newer file, then
-// the lexicographically larger name, so the choice never depends on
+// beats orders two candidates for the newest policy. A backup that can be
+// dated from its own bytes wins over one that cannot: the drill would
+// rather restore the backup it can also say something true about. Between
+// two dated candidates the newer recorded clock wins; otherwise the rule
+// that applied before this ordering existed still decides — newer file,
+// then the lexicographically larger name, so the choice never depends on
 // directory iteration order.
 func (c dirCandidate) beats(other dirCandidate) bool {
 	switch {
@@ -488,6 +499,26 @@ func (c dirCandidate) beats(other dirCandidate) bool {
 		return c.mtime.After(other.mtime)
 	default:
 		return c.name > other.name
+	}
+}
+
+// precedes orders two candidates for the oldest policy — and is not the
+// negation of beats, which is the whole reason it is written out. The
+// first rule does not invert: datedness is not a clock, so a backup that
+// cannot be dated at all is not "the oldest one", it is the one this
+// adapter can say least about, and under either policy it loses to a
+// candidate carrying its own time. Only the three comparisons after it
+// turn around.
+func (c dirCandidate) precedes(other dirCandidate) bool {
+	switch {
+	case c.dated != other.dated:
+		return c.dated
+	case c.dated && !c.clock.Equal(other.clock):
+		return c.clock.Before(other.clock)
+	case !c.mtime.Equal(other.mtime):
+		return c.mtime.Before(other.mtime)
+	default:
+		return c.name < other.name
 	}
 }
 

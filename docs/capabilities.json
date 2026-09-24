@@ -905,7 +905,7 @@
       "name": "PostgreSQL",
       "status": "experimental",
       "since": "0.1.0",
-      "adapter_version": "0.17.0",
+      "adapter_version": "0.18.0",
       "engine": {
         "id": "postgresql",
         "name": "PostgreSQL"
@@ -965,12 +965,12 @@
         },
         {
           "id": "pgdump_dir",
-          "name": "A directory of pg_dump files; the one whose own head records the newest time is restored",
+          "name": "A directory of pg_dump files; source.params.select picks which one is restored — newest by the time each dump records about itself (the default), oldest, or random",
           "pitr": false
         },
         {
           "id": "pgdump_with_globals",
-          "name": "One pg_dump file plus the cluster globals (roles and grants) loaded before it; either member may be gzip-compressed",
+          "name": "One pg_dump file plus the cluster globals (roles and grants) loaded before it — the dump named by source.params.dump, or picked by source.params.select; either member may be gzip-compressed",
           "pitr": false
         },
         {
@@ -980,7 +980,7 @@
         },
         {
           "id": "timescaledb_dump_dir",
-          "name": "A directory of them; the one whose own head records the newest time is restored, framed the same way",
+          "name": "A directory of them; chosen the way pgdump_dir chooses, framed the same way",
           "pitr": false
         },
         {

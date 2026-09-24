@@ -4,8 +4,11 @@ package main_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -813,6 +816,107 @@ func TestDirectorySelectionIgnoresFileTimes(t *testing.T) {
 		t.Fatalf("row count = %q (exit %d), want %d — the drill restored the stale dump the copy made look fresh",
 			count, out.ExitCode, freshRowCount)
 	}
+}
+
+// TestDirectorySelectionProvesTheOldestBackup is the exit criterion of
+// the selection policy: a drill can prove the *oldest* backup in a
+// retention window, and the record says which one it proved.
+//
+// That is what a newest-only policy cannot do. A drill running every
+// night proves last night's backup every night, and the backup an
+// incident reaches for — once the damage turns out to predate yesterday —
+// is the one nothing has ever restored. The two generations here hold
+// different row counts, so which one the sandbox received is a
+// measurement rather than an inference, and the checksum the adapter
+// reports for the evidence record is compared against the older file's
+// own bytes.
+func TestDirectorySelectionProvesTheOldestBackup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-postgres"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	provider := docker.New(nil)
+	params := map[string]string{
+		"image": verifiedImage(t), "env.POSTGRES_HOST_AUTH_METHOD": "trust", "memory": engineMemoryLimit,
+	}
+
+	dir := t.TempDir()
+	makeTwoGenerations(t, ctx, provider, params, dir)
+
+	sbx, err := provider.Create(ctx, params)
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("postgres", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source: adapter.ProvisionSource{
+			Kind: "pgdump_dir", Path: dir, Params: map[string]string{"select": "oldest"},
+		},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	argv := make([]string, 0, len(probe.SQLRunner.Argv))
+	for _, a := range probe.SQLRunner.Argv {
+		a = strings.ReplaceAll(a, "{{user}}", res.Connection.User)
+		a = strings.ReplaceAll(a, "{{database}}", res.Connection.Database)
+		a = strings.ReplaceAll(a, "{{sql}}", "SELECT count(*) FROM orders")
+		argv = append(argv, a)
+	}
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: argv})
+	if err != nil {
+		t.Fatalf("sql_runner exec: %v", err)
+	}
+	count := strings.TrimSpace(string(out.Stdout))
+	if out.ExitCode != 0 || count != strconv.Itoa(staleRowCount) {
+		t.Fatalf("row count = %q (exit %d), want %d — the drill restored the newest backup "+
+			"while the config asked for the oldest", count, out.ExitCode, staleRowCount)
+	}
+
+	// The record has to name what was proved, because source.params never
+	// reaches it (docs/drill-config.md §7): the checksum is what tells an
+	// auditor which of the two backups this run stands for.
+	if want := fileSum(t, filepath.Join(dir, "stale.dump")); res.SourceIdentity.Checksum != want {
+		t.Errorf("backup checksum = %s, want %s — the record would name the wrong artifact",
+			res.SourceIdentity.Checksum, want)
+	}
+}
+
+// fileSum is the artifact identity the adapter reports, computed
+// independently here so the two have to agree.
+func fileSum(t *testing.T, path string) string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("close %s: %v", path, err)
+		}
+	}()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 
 // The two generations differ in row count so the restored one is

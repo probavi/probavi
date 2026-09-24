@@ -80,7 +80,7 @@ func headPrefix(b []byte) []byte {
 //
 // What both must guarantee is that a false answer is never a confident
 // one. This clock ranks the candidates in a backup directory
-// (newestBackupIn) and, with a declared zone, becomes the record's
+// (chooseBackupIn) and, with a declared zone, becomes the record's
 // backup.created_at: a clock read out of the wrong bytes would pick the
 // wrong artifact to restore and sign a date for it. So a success has to
 // mean a date a calendar produces — which is what the custom-format path's
