@@ -19,7 +19,7 @@ applied.
 | --- | --- |
 | `arangodb_dump` | one `arangodump` output directory |
 | `arangodb_dump_tar` | one tar archive (plain or gzip) of such a directory, its files at the root or under one wrapping directory |
-| `arangodb_dump_dir` | a directory of such dumps; the one whose own `dump.json` claims the newest instant is restored |
+| `arangodb_dump_dir` | a directory of such dumps; `source.params.select` picks one — newest by the instant each dump's own `dump.json` claims (the default), oldest, or random |
 
 An `arangodump` output holds `dump.json`, an `ENCRYPTION` marker, and two
 files per collection — `<name>_<hash>.structure.json` and
@@ -119,6 +119,41 @@ went missing, not an empty one.
 `ENCRYPTION` is read too. Encryption is an Enterprise feature and the
 file is written either way, so an encrypted dump is **recognised and
 refused by name** rather than failing obscurely later.
+
+### Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: arangodb_dump_dir
+  path: /backups/arangodb
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one an
+incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum`, `backup.size_bytes` and
+`backup.created_at` do, and a scheduled drill choosing randomly covers the
+whole window over time.
+
+Every policy ranks by what a candidate states about itself, above, so
+`oldest` here is exactly as strong as `newest` already was — a copy's file
+time cannot make an artifact look like either end of the window. One rule
+does not invert: a candidate that states an instant outranks one that
+states none under `oldest` too, because a candidate with no age is not an
+old one. A random draw likewise reaches only the candidates that date
+themselves, where there are any.
+
+`select` on a kind that chooses nothing — `arangodb_dump` and
+`arangodb_dump_tar` — is **refused** rather than ignored, the same way
+`backup_timezone` already is.
 
 ## The restore, and why the exit code is not the verdict
 

@@ -56,7 +56,7 @@ func tarOf(t *testing.T, root, prefix string) string {
 
 func wantRefusal(t *testing.T, kind, path, code, phrase string) {
 	t.Helper()
-	_, perr := resolveSource(kind, path)
+	_, perr := resolveSource(kind, path, nil)
 	if perr == nil {
 		t.Fatalf("resolveSource(%s, %s) succeeded, want %s", kind, path, code)
 	}
@@ -71,7 +71,7 @@ func wantRefusal(t *testing.T, kind, path, code, phrase string) {
 func TestADumpIsReadForWhatItStatesAboutItself(t *testing.T) {
 	dir := t.TempDir()
 	writeDump(t, dir, oneDump())
-	src, perr := resolveSource("arangodb_dump", dir)
+	src, perr := resolveSource("arangodb_dump", dir, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -97,7 +97,7 @@ func TestAnArchiveIsWalkedOnTheHost(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			writeDump(t, dir, oneDump())
-			src, perr := resolveSource("arangodb_dump_tar", tarOf(t, dir, prefix))
+			src, perr := resolveSource("arangodb_dump_tar", tarOf(t, dir, prefix), nil)
 			if perr != nil {
 				t.Fatalf("resolveSource: %+v", perr)
 			}
@@ -117,7 +117,7 @@ func TestAnArchiveIsWalkedOnTheHost(t *testing.T) {
 func TestAStreamThatIsNotTarShapedSaysNothing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "notatar.tar")
 	writeFile(t, path, "this is not a tar archive at all\n")
-	src, perr := resolveSource("arangodb_dump_tar", path)
+	src, perr := resolveSource("arangodb_dump_tar", path, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource refused an unreadable stream: %+v", perr)
 	}
@@ -218,7 +218,7 @@ func TestTheDirectoryKindPicksWhatTheManifestsDate(t *testing.T) {
 			t.Fatalf("chtimes: %v", err)
 		}
 	}
-	src, perr := resolveSource("arangodb_dump_dir", root)
+	src, perr := resolveSource("arangodb_dump_dir", root, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -288,7 +288,7 @@ func TestAnInstantOutsideTheRangeDoesNotDateARecord(t *testing.T) {
 			f := oneDump()
 			f.createdAt = tc.createdAt
 			writeDump(t, dir, f)
-			src, perr := resolveSource("arangodb_dump", dir)
+			src, perr := resolveSource("arangodb_dump", dir, nil)
 			if perr != nil {
 				t.Fatalf("resolveSource: %+v", perr)
 			}
@@ -323,7 +323,7 @@ func TestADirectoryTheHostCannotReadIsUnreadable(t *testing.T) {
 			t.Errorf("restore permissions: %v", err)
 		}
 	})
-	_, perr := resolveSource("arangodb_dump", dir)
+	_, perr := resolveSource("arangodb_dump", dir, nil)
 	if perr == nil || perr.Code != "source_unreadable" {
 		t.Errorf("verdict = %+v, want source_unreadable", perr)
 	}

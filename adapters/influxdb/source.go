@@ -112,20 +112,24 @@ type manifestBucket struct {
 //	                    `influx backup` directory, members at the root
 //	                    or under one wrapping directory
 //	influx_backup     — path is one `influx backup` output directory
-//	influx_backup_dir — path is a directory of them; the newest by the
-//	                    backups' own timestamp stems is restored
-func resolveSource(kind, path string) (*resolvedSource, *protoError) {
+//	influx_backup_dir — path is a directory of them; source.params.select
+//	                    picks one, newest by default (selection.go)
+func resolveSource(kind, path string, params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "influx_backup_tar":
 		return resolveTar(path)
 	case "influx_backup":
 		return resolveBackupDir(path)
 	case "influx_backup_dir":
-		latest, perr := newestBackupIn(path)
+		chosen, perr := chooseBackupIn(path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveBackupDir(latest)
+		return resolveBackupDir(chosen)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: influx_backup_tar, influx_backup, influx_backup_dir)", kind)
@@ -585,11 +589,12 @@ type backupCandidate struct {
 	ts   time.Time
 }
 
-// newestBackupIn picks the subdirectory whose own newest manifest stem
-// is the latest — the artifact dates itself, so file times never rank.
-// Subdirectories without a manifest are skipped as non-candidates and
-// counted, so an empty verdict says what was passed over.
-func newestBackupIn(dir string) (string, *protoError) {
+// chooseBackupIn picks the subdirectory the policy asks for, ordered by
+// each candidate's own newest manifest stem — the artifact dates itself,
+// so file times never rank. Subdirectories without a manifest are skipped
+// as non-candidates and counted, so an empty verdict says what was passed
+// over, and so nothing undatable ever reaches the ordering.
+func chooseBackupIn(dir string, policy selectPolicy) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -597,7 +602,7 @@ func newestBackupIn(dir string) (string, *protoError) {
 	case err != nil:
 		return "", protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var best *backupCandidate
+	candidates := make([]backupCandidate, 0, len(entries))
 	skipped := 0
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -609,13 +614,9 @@ func newestBackupIn(dir string) (string, *protoError) {
 			skipped++
 			continue
 		}
-		candidate := backupCandidate{path: sub, ts: ts}
-		if best == nil || candidate.beats(*best) {
-			c := candidate
-			best = &c
-		}
+		candidates = append(candidates, backupCandidate{path: sub, ts: ts})
 	}
-	if best == nil {
+	if len(candidates) == 0 {
 		if skipped > 0 {
 			return "", protoErr("source_not_found", false,
 				"backup directory %s holds no `influx backup` outputs (%d subdirectories without a "+
@@ -624,7 +625,7 @@ func newestBackupIn(dir string) (string, *protoError) {
 		return "", protoErr("source_not_found", false,
 			"backup directory %s contains no subdirectories", dir)
 	}
-	return best.path, nil
+	return pick(candidates, policy).path, nil
 }
 
 // newestStemIn reports the newest parsable manifest stem a directory
@@ -658,6 +659,20 @@ func (c backupCandidate) beats(o backupCandidate) bool {
 		return c.ts.After(o.ts)
 	}
 	return filepath.Base(c.path) > filepath.Base(o.path)
+}
+
+// precedes orders candidates for the oldest policy. Here it really is
+// beats turned around, and that is worth a sentence because in the
+// postgres and arangodb adapters it is not: those rank a backup carrying
+// its own recorded time above one that does not, and that rule cannot
+// invert. A subdirectory holding no timestamped manifest is not an
+// `influx backup` output at all and never became a candidate, so there is
+// nothing asymmetric left.
+func (c backupCandidate) precedes(o backupCandidate) bool {
+	if !c.ts.Equal(o.ts) {
+		return c.ts.Before(o.ts)
+	}
+	return filepath.Base(c.path) < filepath.Base(o.path)
 }
 
 // memberChecksum hashes the artifact canonically: the manifest plus

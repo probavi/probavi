@@ -159,7 +159,7 @@ func TestDirectoryScanRefusesAnArtifactInFlight(t *testing.T) {
 	newest := writeAgedIn(t, dir, "z-in-flight.rdb", 0)
 
 	stop := keepAppending(t, newest)
-	_, perr := resolveSource(context.Background(), "redis_rdb_dir", dir)
+	_, perr := resolveSource(context.Background(), "redis_rdb_dir", dir, nil)
 	stop()
 
 	if perr == nil {

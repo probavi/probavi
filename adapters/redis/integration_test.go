@@ -4,7 +4,10 @@ package main_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -587,6 +590,139 @@ redis-cli -e save >/dev/null`
 	if out, err := exec.CommandContext(ctx, "docker", "cp", seed.ID()+":/tmp/seed/dump.rdb", dest).CombinedOutput(); err != nil {
 		t.Fatalf("extract fixture: %v: %s", err, out)
 	}
+}
+
+// makeTwoRDBGenerations seeds one server twice, a couple of seconds
+// apart, and extracts both saves. The marker key differs between them, so
+// which generation a drill restored is a measurement rather than a claim,
+// and the ctime each RDB header carries differs because the format records
+// whole seconds.
+func makeTwoRDBGenerations(t *testing.T, ctx context.Context, provider *docker.Provider,
+	image, staleDest, freshDest string) {
+	t.Helper()
+	seed, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create seed sandbox: %v", err)
+	}
+	defer destroy(t, seed)
+
+	seedScript := `set -e
+mkdir -p /tmp/seed
+redis-server --daemonize yes --dir /tmp/seed --dbfilename dump.rdb --save "" --logfile /tmp/seed.log
+i=0
+until redis-cli -e ping >/dev/null 2>&1; do
+  i=$((i+1)); [ "$i" -gt 60 ] && { tail -n 5 /tmp/seed.log >&2; exit 1; }
+  sleep 1
+done
+redis-cli -e set probavi:generation stale >/dev/null
+redis-cli -e save >/dev/null
+cp /tmp/seed/dump.rdb /tmp/stale.rdb
+sleep 2
+redis-cli -e set probavi:generation fresh >/dev/null
+redis-cli -e save >/dev/null
+cp /tmp/seed/dump.rdb /tmp/fresh.rdb`
+	res, err := seed.Exec(ctx, sandbox.ExecRequest{Argv: []string{"sh", "-c", seedScript}})
+	if err != nil {
+		t.Fatalf("seed exec: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("seed fixture: exit %d: %s", res.ExitCode, res.Stderr)
+	}
+	for src, dest := range map[string]string{"/tmp/stale.rdb": staleDest, "/tmp/fresh.rdb": freshDest} {
+		if out, err := exec.CommandContext(ctx, "docker", "cp", seed.ID()+":"+src, dest).CombinedOutput(); err != nil {
+			t.Fatalf("extract fixture: %v: %s", err, out)
+		}
+	}
+}
+
+// TestDirectoryDrillProvesTheOldestArtifact is this group's end-to-end
+// proof that source.params.select reaches the drill: one directory, two
+// real RDB files, and the record proves the other end of the retention
+// window. The file times run against the headers, so only the save instant
+// each artifact records can decide.
+func TestDirectoryDrillProvesTheOldestArtifact(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := verifiedImage(t)
+	provider := docker.New(nil)
+
+	dir := t.TempDir()
+	stale := filepath.Join(dir, "a-stale.rdb")
+	fresh := filepath.Join(dir, "z-fresh.rdb")
+	makeTwoRDBGenerations(t, ctx, provider, image, stale, fresh)
+	// The decoy: the older save is the newest file on disk, and the name
+	// order runs the other way too.
+	now := time.Now()
+	if err := os.Chtimes(stale, now, now); err != nil {
+		t.Fatal(err)
+	}
+	past := now.Add(-48 * time.Hour)
+	if err := os.Chtimes(fresh, past, past); err != nil {
+		t.Fatal(err)
+	}
+
+	runner, err := adapter.New("redis", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		params map[string]string
+		want   string
+	}{
+		{"the default proves last night", nil, "fresh"},
+		{"select: oldest proves the far end", map[string]string{"select": "oldest"}, "stale"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sbx, err := provider.Create(ctx, sandboxParams(image))
+			if err != nil {
+				t.Fatalf("create drill sandbox: %v", err)
+			}
+			defer destroy(t, sbx)
+
+			res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+				Source: adapter.ProvisionSource{
+					Kind: "redis_rdb_dir", Path: dir, Params: tc.params,
+				},
+				Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+			}, sbx)
+			if err != nil {
+				t.Fatalf("provision: %v", err)
+			}
+			assertCheck(t, ctx, sbx, probe, "get probavi:generation", tc.want)
+			// The record has to name what it proved, not what the
+			// directory happened to hold.
+			want := stale
+			if tc.want == "fresh" {
+				want = fresh
+			}
+			if sum := hostSum(t, want); res.SourceIdentity.Checksum != sum {
+				t.Errorf("checksum = %s, want %s's %s", res.SourceIdentity.Checksum, tc.want, sum)
+			}
+		})
+	}
+}
+
+// hostSum is the checksum the adapter reports, computed independently.
+func hostSum(t *testing.T, path string) string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		t.Fatal(err)
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 
 func destroy(t *testing.T, sbx *docker.Sandbox) {

@@ -10,7 +10,7 @@ library only, no imports from the Probavi core.
 | Kind            | Path points at |
 |-----------------|----------------|
 | `redis_rdb`     | One RDB file — a copied `dump.rdb`, or the output of `redis-cli --rdb` |
-| `redis_rdb_dir` | A directory of RDB files; the newest **by the artifact's own save instant** is restored |
+| `redis_rdb_dir` | A directory of RDB files; `source.params.select` picks one — newest **by the artifact's own save instant** (the default), oldest, or random |
 | `redis_aof`     | A copy of the Redis 7+ append-only directory (`appendonlydir`): manifest, base, incremental segments — replayed in full |
 
 RDB is what Redis itself recommends for backups. What this adapter does
@@ -153,6 +153,44 @@ artifacts with no readable ctime fall back to file time. Files without the
 RDB magic (checksum sidecars, READMEs) are not candidates; if the chosen
 artifact turns out broken, the drill fails rather than quietly restoring
 an older neighbour.
+
+### Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: redis_rdb_dir
+  path: /backups/redis
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one an
+incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum`, `backup.size_bytes` and
+`backup.created_at` do, and a scheduled drill choosing randomly covers the
+whole window over time.
+
+Every policy ranks by what a candidate states about itself, above, so
+`oldest` here is exactly as strong as `newest` already was — a copy's file
+time cannot make an artifact look like either end of the window. One rule
+does not invert: a candidate that states an instant outranks one that
+states none under `oldest` too, because a candidate with no age is not an
+old one. A random draw likewise reaches only the candidates that date
+themselves, where there are any.
+
+`select` on a kind that chooses nothing — `redis_rdb` and `redis_aof` — is
+**refused** rather than ignored, the same way `backup_timezone` already is.
+
+The settle check does not change with the policy. The adapter chose the
+artifact under all three, so one a backup job is still writing still
+refuses the drill by name rather than quietly falling back to a neighbour.
 
 ## Engine-version pre-check
 

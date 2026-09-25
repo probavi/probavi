@@ -212,7 +212,7 @@ func TestResolveAOFReadsTheBaseHead(t *testing.T) {
 			"appendonly.aof.1.incr.aof": "*1\r\n$4\r\nPING\r\n",
 		}
 		dir := writeAOFDir(t, filepath.Join(t.TempDir(), "aof"), healthyManifest, files)
-		src, perr := resolveSource(t.Context(), "valkey_aof", dir)
+		src, perr := resolveSource(t.Context(), "valkey_aof", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -230,7 +230,7 @@ func TestResolveAOFReadsTheBaseHead(t *testing.T) {
 			"appendonly.aof.1.incr.aof": "*1\r\n$4\r\nPING\r\n",
 		}
 		dir := writeAOFDir(t, filepath.Join(t.TempDir(), "aof"), healthyManifest, files)
-		_, perr := resolveSource(t.Context(), "valkey_aof", dir)
+		_, perr := resolveSource(t.Context(), "valkey_aof", dir, nil)
 		if perr == nil || perr.Code != "unsupported_source" || !strings.Contains(perr.Message, "Redis") {
 			t.Fatalf("perr = %+v, want the dialect fence", perr)
 		}
@@ -242,7 +242,7 @@ func TestResolveAOFReadsTheBaseHead(t *testing.T) {
 			"appendonly.aof.1.incr.aof": "*1\r\n$4\r\nPING\r\n",
 		}
 		dir := writeAOFDir(t, filepath.Join(t.TempDir(), "aof"), healthyManifest, files)
-		_, perr := resolveSource(t.Context(), "valkey_aof", dir)
+		_, perr := resolveSource(t.Context(), "valkey_aof", dir, nil)
 		if perr == nil || perr.Code != "unsupported_source" || !strings.Contains(perr.Message, "format version 12") {
 			t.Fatalf("perr = %+v, want the format-floor fence", perr)
 		}
@@ -256,7 +256,7 @@ func TestResolveAOFReadsTheBaseHead(t *testing.T) {
 			"appendonly.aof.1.incr.aof": "*1\r\n$4\r\nPING\r\n",
 		}
 		dir := writeAOFDir(t, filepath.Join(t.TempDir(), "aof"), manifest, files)
-		src, perr := resolveSource(t.Context(), "valkey_aof", dir)
+		src, perr := resolveSource(t.Context(), "valkey_aof", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}

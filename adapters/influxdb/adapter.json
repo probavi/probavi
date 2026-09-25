@@ -29,6 +29,6 @@
   "sources": {
     "influx_backup_tar": "One tar archive (plain or gzip) of an `influx backup` directory, members at the root or under one wrapping directory",
     "influx_backup": "One `influx backup` output directory (manifest, KV store, SQL store, shard files); a reused target directory restores its newest backup",
-    "influx_backup_dir": "A directory of them; the newest by the backups' own timestamp stems is restored"
+    "influx_backup_dir": "A directory of them; source.params.select picks which one is restored — newest by the backups' own timestamp stems (the default), oldest, or random"
   }
 }

@@ -11,7 +11,7 @@ imports from the Probavi core.
 |---------------------|----------------|
 | `influx_backup_tar` | One tar archive (plain or gzip) of an `influx backup` directory — members at the root, or under one wrapping directory |
 | `influx_backup`     | One `influx backup` output directory: the timestamped manifest beside the KV store, the SQL store, and the shard files |
-| `influx_backup_dir` | A directory of them; the newest **by the backups' own timestamp stems** is restored |
+| `influx_backup_dir` | A directory of them; `source.params.select` picks one — newest **by the backups' own timestamp stems** (the default), oldest, or random |
 
 A reused backup target directory — `influx backup` run repeatedly into
 the same path — accumulates timestamped sets side by side; the
@@ -167,6 +167,45 @@ nobody's recovery takes — so the artifact is refused by name, host-side
 when the manifest is readable and from the recovered manifest when it
 was tarred opaque. The sandbox side is fenced too: an image whose
 `influxd version` names a non-2.x line is refused up front.
+
+### Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: influx_backup_dir
+  path: /backups/influxdb
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one an
+incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum`, `backup.size_bytes` and
+`backup.created_at` do, and a scheduled drill choosing randomly covers the
+whole window over time.
+
+Every policy ranks by the timestamp stem each backup states in its own
+manifest name, so `oldest` here is exactly as strong as `newest` already
+was — a copy's file time cannot make a backup look like either end of the
+window. This adapter needs no separate rule about candidates that state
+nothing, which the postgres and arangodb adapters do: a subdirectory
+holding no timestamped manifest is not an `influx backup` output and was
+never a candidate, which is also what keeps a random draw off one.
+
+`select` on a kind that chooses nothing — `influx_backup` and
+`influx_backup_tar` — is **refused** rather than ignored, the same way
+`backup_timezone` already is. `influx_backup` is the near miss worth
+naming: a reused target directory holds several backups and the adapter
+restores its newest, but that is the engine's own layout inside one
+artifact rather than a directory of artifacts, and the two would not mean
+the same thing.
 
 ## Backup identity
 
