@@ -67,7 +67,18 @@ always called out explicitly.
   of their own — every one of them is time before the database is usable,
   which is what the RTO trend is for — and `state.mode` reads
   `physical+binlog`, because it is a different proof from a full-only
-  restore. `adapters/mariadb` follows on the same shape.
+  restore.
+
+  **`adapters/mariadb` 0.6.0** follows on the same shape, with the source
+  kind `mariadb_backup_with_binlogs` and one real difference rather than a
+  copy: MariaDB renamed the `xtrabackup_*` metadata files at 11.0, so the
+  binlog coordinate is read under either `mariadb_backup_binlog_info` or
+  `xtrabackup_binlog_info` — the same pair this adapter already accepts
+  for the checkpoints file — and the integration suite restores on 10.11
+  and on 12.3, which is what makes that a measurement rather than an
+  assumption. Its tooling is its own throughout (`mariadb-binlog`, the
+  `mariadb` client), and the official images ship all of it, so this kind
+  needs no image built for it.
 
 - **`target.source.select` is a drill-config key, not only an adapter
   parameter.** The rollout above put the policy in `source.params`, which

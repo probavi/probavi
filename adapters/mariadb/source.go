@@ -26,7 +26,10 @@ type resolvedSource struct {
 	// marker is the pattern the member's end has to match for the replay
 	// to count as complete, or "" for a member that carries no ending to
 	// check (see complete.go).
-	marker string
+	marker string // binlogsPath is the directory of binary logs to replay after the
+	// physical restore, for the mariadb_backup_with_binlogs kind; empty
+	// for every other kind (binlog.go).
+	binlogsPath string
 }
 
 // resolveSource maps a source kind to one restorable artifact.
@@ -53,6 +56,8 @@ func resolveSource(ctx context.Context, kind, path string, params map[string]str
 			return nil, perr
 		}
 		return resolveFile(ctx, chosen, loc)
+	case "mariadb_backup_with_binlogs":
+		return resolveWithBinlogs(path, params, loc)
 	case "mariadb_backup":
 		src, perr := resolveRepo(path, loc)
 		if perr != nil {
@@ -112,6 +117,138 @@ func resolveRepo(dir string, loc *time.Location) (*resolvedSource, *protoError) 
 		sizeBytes: size,
 		createdAt: backupCreatedAt(dir, loc),
 	}, nil
+}
+
+// resolveWithBinlogs plans the two-member source of the
+// mariadb_backup_with_binlogs kind: a physical full and the binary logs
+// written after it, both inside one source directory.
+//
+// One directory rather than two independent paths because the core only
+// hands an adapter files belonging to the drill's configured backup source
+// (protocol §4.2) — a guard that exists so an adapter, which is a
+// third-party binary, cannot copy arbitrary host files into a sandbox it
+// controls. A server's live binary log directory is therefore not
+// something a drill can point at: an archive copies the logs beside the
+// full they belong to, which is the layout a run-book wants anyway.
+//
+// Both members are named explicitly in params rather than recognised by
+// layout: renaming a directory must not silently change what a drill
+// proves, and the same source directory may hold several nights' fulls.
+func resolveWithBinlogs(dir string, params map[string]string, loc *time.Location) (*resolvedSource, *protoError) {
+	info, err := os.Stat(dir)
+	switch {
+	case os.IsNotExist(err):
+		return nil, protoErr("source_not_found", false, "backup directory does not exist: %s", dir)
+	case err != nil:
+		return nil, protoErr("source_unreadable", false, "stat backup directory: %v", err)
+	case !info.IsDir():
+		return nil, protoErr("invalid_request", false,
+			"source path %s is a file; the mariadb_backup_with_binlogs kind expects a directory "+
+				"holding the backup and the binary logs", dir)
+	}
+
+	backupName, perr := memberName(params["backup"], "backup", "mariadb-backup directory")
+	if perr != nil {
+		return nil, perr
+	}
+	binlogsName, perr := memberName(params["binlogs"], "binlogs", "binary log directory")
+	if perr != nil {
+		return nil, perr
+	}
+	if backupName == binlogsName {
+		return nil, protoErr("invalid_request", false,
+			"source.params.backup and source.params.binlogs both name %s", backupName)
+	}
+
+	backupPath := filepath.Join(dir, backupName)
+	if perr := mustBeDirectory(backupPath, "backup"); perr != nil {
+		return nil, perr
+	}
+	// The same two names source.go accepts for the single-backup kind: the
+	// 11.0 rename is a fact about the release that took the backup, not
+	// about the kind that restores it.
+	if !anyExists(backupPath, "mariadb_backup_checkpoints", "xtrabackup_checkpoints") {
+		return nil, protoErr("source_corrupt", false,
+			"backup directory %s lacks mariadb_backup_checkpoints (and the pre-11 "+
+				"xtrabackup_checkpoints) — not a mariadb-backup backup", backupPath)
+	}
+	binlogsPath := filepath.Join(dir, binlogsName)
+	if perr := mustBeDirectory(binlogsPath, "binary log"); perr != nil {
+		return nil, perr
+	}
+
+	// Both members are restored, so both are in the identity: a checksum
+	// covering only the full would let a log change without the evidence
+	// record noticing, and the logs are exactly what this kind exists to
+	// prove. Each member contributes its own canonical tree digest rather
+	// than its bytes a second time — dirChecksum is already a measurement
+	// of every byte under it, and re-streaming two trees would double the
+	// read for no added guarantee. The framing is the two-member one the
+	// rest of the catalogue uses (role NUL size NUL value, fixed order).
+	backupSum, backupSize, perr := dirChecksum(backupPath)
+	if perr != nil {
+		return nil, perr
+	}
+	binlogSum, binlogSize, perr := dirChecksum(binlogsPath)
+	if perr != nil {
+		return nil, perr
+	}
+	h := sha256.New()
+	for _, m := range []struct {
+		role  string
+		size  int64
+		value string
+	}{
+		{"backup", backupSize, backupSum},
+		{"binlogs", binlogSize, binlogSum},
+	} {
+		fmt.Fprintf(h, "%s\x00%d\x00%s\x00", m.role, m.size, m.value)
+	}
+
+	// The full dates this source, through its own backup metadata. The
+	// logs reach further forward in time and the record does not claim
+	// otherwise: backup.created_at is when the backup was taken, and how
+	// far the replay carried it is what drill.pitr_target records.
+	return &resolvedSource{
+		path:        backupPath,
+		checksum:    fmt.Sprintf("sha256:%s", hex.EncodeToString(h.Sum(nil))),
+		sizeBytes:   backupSize + binlogSize,
+		createdAt:   backupCreatedAt(backupPath, loc),
+		binlogsPath: binlogsPath,
+	}, nil
+}
+
+// memberName validates a params entry naming a directory inside the source
+// directory. It is a bare name, never a path: the core's put_file guard
+// confines transfers to the configured backup source, and a plain name
+// keeps a config's reach obvious to whoever reviews it.
+func memberName(value, param, what string) (string, *protoError) {
+	if value == "" {
+		return "", protoErr("invalid_request", false,
+			"the mariadb_backup_with_binlogs kind requires source.params.%s: the name of the %s "+
+				"inside the source directory", param, what)
+	}
+	if value != filepath.Base(value) || value == "." || value == ".." {
+		return "", protoErr("invalid_request", false,
+			"source.params.%s must be a name inside the source directory, not a path: %s",
+			param, value)
+	}
+	return value, nil
+}
+
+// mustBeDirectory refuses a member that is not a directory; what names it
+// in the diagnostic.
+func mustBeDirectory(path, what string) *protoError {
+	info, err := os.Stat(path)
+	switch {
+	case os.IsNotExist(err):
+		return protoErr("source_not_found", false, "%s directory does not exist: %s", what, path)
+	case err != nil:
+		return protoErr("source_unreadable", false, "stat %s directory: %v", what, err)
+	case !info.IsDir():
+		return protoErr("invalid_request", false, "%s %s is a file, not a directory", what, path)
+	}
+	return nil
 }
 
 // dirChecksum hashes a directory tree canonically: entries sorted by

@@ -34,6 +34,7 @@
   "sources": {
     "mariadb_dump": "One mariadb-dump (or mysqldump) SQL file, plain or gzip-compressed",
     "mariadb_dump_dir": "A directory of dump files, plain or gzip-compressed; source.params.select picks which one is restored \u2014 newest by the time each dump records in its own trailer (the default), oldest, or random",
-    "mariadb_backup": "An unprepared mariadb-backup full backup (physical restore)"
+    "mariadb_backup": "An unprepared mariadb-backup full backup (physical restore)",
+    "mariadb_backup_with_binlogs": "A directory holding an unprepared mariadb-backup full and the binary logs written after it, named by source.params.backup and source.params.binlogs \u2014 the full is restored, then the logs are replayed from the position it ended on, to target.pitr or to the end of the archive"
   }
 }

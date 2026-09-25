@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "mariadb"
-	adapterVersion = "0.5.0"
+	adapterVersion = "0.6.0"
 
 	defaultUser     = "root"
 	defaultDatabase = "probavi"
@@ -41,6 +41,7 @@ func probePayload() any {
 			{"kind": "mariadb_dump", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "mariadb_dump_dir", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "mariadb_backup", "capabilities": map[string]bool{"pitr": false}},
+			{"kind": "mariadb_backup_with_binlogs", "capabilities": map[string]bool{"pitr": true}},
 		},
 		"sql_runner": map[string]any{
 			// Appending ANSI_QUOTES to the session sql_mode makes the server
@@ -73,6 +74,30 @@ type provisionRequest struct {
 	} `json:"pitr"`
 }
 
+// physicalKinds restore a data directory rather than replaying SQL: the
+// engine must be down when they start, and the adapter owns the whole
+// lifecycle from there (physical.go).
+var physicalKinds = map[string]bool{"mariadb_backup": true, "mariadb_backup_with_binlogs": true}
+
+// pitrKinds are the source kinds whose probe declares pitr. The gate below
+// and the probe above must agree; naming the set once is what holds them
+// together, and TestProbeDeclaresEveryPITRKind proves it.
+var pitrKinds = map[string]bool{"mariadb_backup_with_binlogs": true}
+
+// checkPITRKind refuses a drill that asks for point-in-time recovery from
+// a kind that cannot give it. The protocol forbids the core sending pitr
+// to a kind whose probe did not declare it (§6.2); refusing here as well
+// makes the diagnostic precise rather than trusting the other side of a
+// contract this adapter cannot see.
+func checkPITRKind(req *provisionRequest) *protoError {
+	if req.PITR == nil || pitrKinds[req.Source.Kind] {
+		return nil
+	}
+	return protoErr("invalid_request", false,
+		"pitr is only supported by the mariadb_backup_with_binlogs source kind: a logical dump is "+
+			"one instant and nothing in it can move that instant")
+}
+
 // opProvision restores the backup into the already-running sandbox: wait
 // for engine readiness (TCP, not socket — the first-boot temporary server
 // runs with --skip-networking), transfer the dump, load it with the
@@ -82,8 +107,8 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if err := json.Unmarshal(payload, req); err != nil {
 		return nil, protoErr("invalid_request", false, "malformed provision payload")
 	}
-	if req.PITR != nil {
-		return nil, protoErr("invalid_request", false, "this adapter does not support pitr")
+	if perr := checkPITRKind(req); perr != nil {
+		return nil, perr
 	}
 	tgt, perr := parseProvisionTarget(req)
 	if perr != nil {
@@ -98,7 +123,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	logger.Info("source resolved", "path", src.path, "size_bytes", src.sizeBytes,
 		"compressed", src.compressed)
 
-	if req.Source.Kind == "mariadb_backup" {
+	if physicalKinds[req.Source.Kind] {
 		return provisionPhysical(ctx, c, req, src, logger)
 	}
 

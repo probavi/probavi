@@ -95,7 +95,7 @@ the exact instant proven.
 | [H2](adapters/h2/README.md) | 2.4.240, 2.3.232 | 0.22.0 | `h2_backup`, `h2_backup_dir`, `h2_db`, `h2_db_dir` |
 | [InfluxDB](adapters/influxdb/README.md) | 2.7, 2.8, 2.9 | 0.15.0 | `influx_backup`, `influx_backup_dir`, `influx_backup_tar` |
 | [Apache IoTDB](adapters/iotdb/README.md) | 2.0.11, 1.3.7 | 0.30.0 | `iotdb_data`, `iotdb_data_tar` |
-| [MariaDB](adapters/mariadb/README.md) | 10.11, 11.4, 11.8, 12.3 | 0.7.0 | `mariadb_backup`, `mariadb_dump`, `mariadb_dump_dir` |
+| [MariaDB](adapters/mariadb/README.md) | 10.11, 11.4, 11.8, 12.3 | 0.7.0 | `mariadb_backup`, `mariadb_backup_with_binlogs`, `mariadb_dump`, `mariadb_dump_dir` |
 | [MongoDB](adapters/mongodb/README.md) | 7.0, 8.0 | 0.2.0 | `mongodump`, `mongodump_dir`, `mongodump_with_oplog`, `mongodump_with_users` |
 | [SQL Server](adapters/mssql/README.md) | 2019, 2022, 2025 | 0.2.0 | `bak`, `bak_chain`, `bak_dir`, `bak_with_logins` |
 | [MySQL](adapters/mysql/README.md) | 8.4, 9.7, percona-server 8.4.10 | 0.1.0 | `mysqldump`, `mysqldump_dir`, `mysqldump_with_users`, `xtrabackup`, `xtrabackup_with_binlogs` |
