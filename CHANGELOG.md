@@ -129,12 +129,20 @@ always called out explicitly.
   `adapters/questdb`, whose candidate is a data root rather than a file —
   and each README saying so rather than leaving it to be discovered.
 
-  One `*_dir` kind is still to come, and it is a decision rather than a
-  copy: `adapters/tdengine`'s `taosdump_dir` dates a dump from the start
-  time its own result file records and falls back to file time when it
-  cannot, putting both into one comparison — which is exactly what
-  `adapters/clickhouse` refuses to do, because they are different clocks.
-  `adapters/aerospike`'s `asbackup_dir` is not among the remainder:
+  And finally **`adapters/tdengine` 0.5.0**, which completes the rollout —
+  **35 kinds across 26 adapters** — and is the one that needed its ordering
+  corrected rather than extended. It used to substitute a directory's
+  modification time for a missing recorded instant and compare the two
+  against each other, which are different clocks: when the backup was taken
+  *there* against when the file was written *here*, the comparison
+  `adapters/clickhouse` refuses in as many words. A dump freshly copied in
+  and recording nothing could therefore outrank the genuinely newest dump.
+  The two facts are now kept apart in the shape the postgres and cassandra
+  adapters already use, so **`newest` may pick a different member than
+  before in a directory that mixes dated and undated dumps** — deliberately,
+  and toward the backup a record can say something true about.
+
+  `adapters/aerospike`'s `asbackup_dir` takes no policy and never will:
   `asbackup -d` splits a single backup across the files of one directory,
   so the directory is the artifact and there is nothing to select.
 

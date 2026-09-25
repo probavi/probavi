@@ -52,7 +52,8 @@ type resolvedSource struct {
 // resolveSource maps a source kind to one restorable artifact.
 //
 //	taosdump     — one taosdump output directory
-//	taosdump_dir — a directory of them; the newest is chosen
+//	taosdump_dir — a directory of them; source.params.select picks one,
+//	               newest by default (selection.go)
 //	taosdump_tar — one tar archive of a dump directory
 //
 // `taosdump -o DIR` writes DIR/dump_result.txt, a header-only DIR/dbs.sql
@@ -61,16 +62,21 @@ type resolvedSource struct {
 // kinds accept either level and resolve to the inner one, because
 // `taosdump -i` pointed at the outer directory exits 0 having restored
 // nothing at all (measured).
-func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *protoError) {
+func resolveSource(ctx context.Context, kind, path string,
+	params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "taosdump":
 		return resolveDump(path)
 	case "taosdump_dir":
-		latest, perr := latestDumpIn(ctx, path)
+		chosen, perr := chooseDumpIn(ctx, path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveDump(latest)
+		return resolveDump(chosen)
 	case "taosdump_tar":
 		return resolveTar(path)
 	default:
@@ -409,9 +415,11 @@ func dumpStartTime(result []byte) (*string, time.Time) {
 	return &formatted, ts
 }
 
-// latestDumpIn picks the newest dump in a directory of them, by the
-// instant each artifact records about itself rather than by file time.
-func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
+// chooseDumpIn picks the dump the policy asks for, by the instant each
+// artifact records about itself — and, only among the dumps that record
+// none, by directory time. selection.go says why the two are never
+// compared against each other.
+func chooseDumpIn(ctx context.Context, dir string, policy selectPolicy) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -419,8 +427,7 @@ func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
 	case err != nil:
 		return "", protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var newest string
-	var newestAt time.Time
+	candidates := make([]dumpCandidate, 0, len(entries))
 	for _, e := range entries {
 		if ctx.Err() != nil {
 			return "", protoErr("cancelled", true, "cancelled while choosing a backup")
@@ -428,28 +435,26 @@ func latestDumpIn(ctx context.Context, dir string) (string, *protoError) {
 		if !e.IsDir() {
 			continue
 		}
-		candidate := filepath.Join(dir, e.Name())
-		inner, perr := innerDump(candidate)
+		path := filepath.Join(dir, e.Name())
+		inner, perr := innerDump(path)
 		if perr != nil {
 			continue
 		}
-		_, at := dumpStartTime(resultFile(candidate, inner))
 		info, err := e.Info()
 		if err != nil {
 			continue
 		}
-		if at.IsZero() {
-			at = info.ModTime()
-		}
-		if newest == "" || at.After(newestAt) {
-			newest, newestAt = candidate, at
-		}
+		_, at := dumpStartTime(resultFile(path, inner))
+		candidates = append(candidates, dumpCandidate{
+			path: path, name: e.Name(),
+			dated: !at.IsZero(), clock: at, mtime: info.ModTime(),
+		})
 	}
-	if newest == "" {
+	if len(candidates) == 0 {
 		return "", protoErr("source_not_found", false,
 			"%s holds no taosdump backup (a directory with a dbs.sql that creates a database)", dir)
 	}
-	return newest, nil
+	return pick(candidates, policy).path, nil
 }
 
 // treeChecksum hashes a directory as one artifact: every regular file's

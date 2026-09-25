@@ -146,12 +146,12 @@ func TestAnArchiveSaysWhatTheDirectoryItHoldsSays(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			dump := writeDump(t, tc.opts)
-			dir, perr := resolveSource(context.Background(), "taosdump", dump)
+			dir, perr := resolveSource(context.Background(), "taosdump", dump, nil)
 			if perr != nil {
 				t.Fatalf("the directory: %+v", perr)
 			}
 			archive := archiveDump(t, dump, tc.prefix)
-			src, perr := resolveSource(context.Background(), "taosdump_tar", archive)
+			src, perr := resolveSource(context.Background(), "taosdump_tar", archive, nil)
 			if perr != nil {
 				t.Fatalf("the archive: %+v", perr)
 			}
@@ -201,12 +201,12 @@ func TestTheBytesDecideWhetherAnArchiveIsCompressed(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	want, perr := resolveSource(context.Background(), "taosdump_tar", plain)
+	want, perr := resolveSource(context.Background(), "taosdump_tar", plain, nil)
 	if perr != nil {
 		t.Fatalf("the plain archive: %+v", perr)
 	}
 	for _, archive := range []string{misnamed, compressed} {
-		src, perr := resolveSource(context.Background(), "taosdump_tar", archive)
+		src, perr := resolveSource(context.Background(), "taosdump_tar", archive, nil)
 		if perr != nil {
 			t.Fatalf("%s: %+v", archive, perr)
 		}
@@ -234,7 +234,7 @@ func TestTheFirstOfEachFileInAnArchiveIsTheOneRead(t *testing.T) {
 		tarEntry{name: "dump/taosdump.1/old/dump_result.txt", body: resultFor("2020-01-01 00:00:00", "999")},
 		tarEntry{name: "dump/taosdump.1/old/dbs.sql", body: schemaFor("second")},
 	)
-	src, perr := resolveSource(context.Background(), "taosdump_tar", archive)
+	src, perr := resolveSource(context.Background(), "taosdump_tar", archive, nil)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
@@ -335,7 +335,7 @@ func TestAnArchiveIsRefusedForWhatItIsNot(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, perr := resolveSource(context.Background(), "taosdump_tar", tc.path)
+			_, perr := resolveSource(context.Background(), "taosdump_tar", tc.path, nil)
 			if perr == nil || perr.Code != tc.code || !strings.Contains(perr.Message, tc.message) {
 				t.Errorf("got %+v, want %s mentioning %q", perr, tc.code, tc.message)
 			}
@@ -402,7 +402,7 @@ func TestTheNewestDumpIsTheOneThatRecordsItself(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	src, perr := resolveSource(context.Background(), "taosdump_dir", parent)
+	src, perr := resolveSource(context.Background(), "taosdump_dir", parent, nil)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
@@ -411,17 +411,42 @@ func TestTheNewestDumpIsTheOneThatRecordsItself(t *testing.T) {
 	}
 }
 
-func TestADumpThatRecordsNoInstantIsDatedByItsDirectory(t *testing.T) {
+// TestADatedDumpOutranksAnUndatedOne replaces a test that pinned the
+// opposite, and the change is deliberate. The ranking used to substitute a
+// directory's modification time for a missing recorded instant and compare
+// the two against each other — different clocks, which is the comparison
+// the clickhouse adapter refuses in as many words — so a dump freshly
+// copied in and recording nothing outranked the genuinely newer dump that
+// does record its instant. Directory time now decides only among the dumps
+// that record nothing (selection.go).
+func TestADatedDumpOutranksAnUndatedOne(t *testing.T) {
 	now := time.Now()
 	parent := t.TempDir()
 	placeDump(t, parent, "a", dumpOptions{database: "yesterday", nested: true, startedAgo: 24 * time.Hour}, now)
 	placeDump(t, parent, "b", dumpOptions{database: "undated", nested: true}, now.Add(-time.Hour))
-	src, perr := resolveSource(context.Background(), "taosdump_dir", parent)
+	src, perr := resolveSource(context.Background(), "taosdump_dir", parent, nil)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
-	if src.database != "undated" {
-		t.Errorf("chose %s, want the undated dump whose directory is newer than the other's record", src.database)
+	if src.database != "yesterday" {
+		t.Errorf("chose %s, want the dump that records its own instant", src.database)
+	}
+}
+
+// TestUndatedDumpsFallBackToDirectoryTime: where nothing records an
+// instant, the only fact left is the one the filesystem kept — and it is
+// used there and nowhere else.
+func TestUndatedDumpsFallBackToDirectoryTime(t *testing.T) {
+	now := time.Now()
+	parent := t.TempDir()
+	placeDump(t, parent, "a", dumpOptions{database: "older", nested: true}, now.Add(-24*time.Hour))
+	placeDump(t, parent, "b", dumpOptions{database: "newer", nested: true}, now.Add(-time.Hour))
+	src, perr := resolveSource(context.Background(), "taosdump_dir", parent, nil)
+	if perr != nil {
+		t.Fatalf("resolve: %+v", perr)
+	}
+	if src.database != "newer" {
+		t.Errorf("chose %s, want the undated dump with the newer directory time", src.database)
 	}
 }
 
@@ -446,7 +471,7 @@ func TestADirectoryOfDumpsIsRefusedForWhatItIsNot(t *testing.T) {
 		"a drill cancelled while choosing": {cancelled, filepath.Dir(file), "cancelled", "choosing a backup"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, perr := resolveSource(tc.ctx, "taosdump_dir", tc.path)
+			_, perr := resolveSource(tc.ctx, "taosdump_dir", tc.path, nil)
 			if perr == nil || perr.Code != tc.code || !strings.Contains(perr.Message, tc.message) {
 				t.Errorf("got %+v, want %s mentioning %q", perr, tc.code, tc.message)
 			}

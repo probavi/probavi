@@ -286,6 +286,85 @@ func sumVoltage() int {
 }
 
 // makeDump seeds a server and takes a real taosdump backup of it.
+// TestDirectoryDrillProvesTheOldestDump is the end-to-end proof that
+// source.params.select reaches the drill, on the one adapter where this
+// slice also changed the ordering. Two real taosdump runs land in one
+// directory with their file times set *against* the instants they record,
+// so only what each dump says about itself can decide — and the record's
+// created_at, which is exactly that instant, says which end was proved.
+func TestDirectoryDrillProvesTheOldestDump(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	provider := docker.New(nil)
+
+	base := t.TempDir()
+	// The two runs are seconds apart, which is all taosdump's own clock
+	// needs: it records whole seconds.
+	older := filepath.Join(base, "a-older")
+	if err := os.Rename(makeDump(t, ctx, provider), older); err != nil {
+		t.Fatal(err)
+	}
+	newer := filepath.Join(base, "z-newer")
+	if err := os.Rename(makeDump(t, ctx, provider), newer); err != nil {
+		t.Fatal(err)
+	}
+	// The decoy: the older dump is the freshest thing on disk, and the
+	// name order runs the other way too. Neither may decide.
+	now := time.Now()
+	if err := os.Chtimes(older, now, now); err != nil {
+		t.Fatal(err)
+	}
+	past := now.Add(-48 * time.Hour)
+	if err := os.Chtimes(newer, past, past); err != nil {
+		t.Fatal(err)
+	}
+
+	runner, err := adapter.New("tdengine", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	proved := map[string]string{}
+	for _, tc := range []struct {
+		name   string
+		params map[string]string
+	}{
+		{"default", nil},
+		{"oldest", map[string]string{"select": "oldest"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sbx := freshSandbox(t, ctx, provider)
+			res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+				Source: adapter.ProvisionSource{
+					Kind: "taosdump_dir", Path: base, Params: tc.params,
+				},
+				Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+			}, sbx)
+			if err != nil {
+				t.Fatalf("provision: %v", err)
+			}
+			if res.SourceIdentity.CreatedAt == nil {
+				t.Fatal("created_at is nil — taosdump records when it started")
+			}
+			proved[tc.name] = *res.SourceIdentity.CreatedAt
+			// And the restore really happened, from that artifact.
+			if got := runCheck(t, ctx, sbx, "SELECT count(*) FROM drill.meters"); got != strconv.Itoa(documents) {
+				t.Errorf("row count = %q, want %d", got, documents)
+			}
+		})
+	}
+
+	if proved["default"] == "" || proved["oldest"] == "" {
+		t.Fatal("one of the drills reported no instant")
+	}
+	if proved["default"] <= proved["oldest"] {
+		t.Errorf("the default proved %s and select: oldest proved %s — the two ends of the "+
+			"window came out the same way round, or the same artifact was restored twice",
+			proved["default"], proved["oldest"])
+	}
+}
+
 func makeDump(t *testing.T, ctx context.Context, provider *docker.Provider) string {
 	t.Helper()
 	seed := freshSandbox(t, ctx, provider)

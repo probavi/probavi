@@ -11,7 +11,7 @@ import (
 
 const (
 	adapterName    = "tdengine"
-	adapterVersion = "0.4.0"
+	adapterVersion = "0.5.0"
 	// defaultPort is where taosAdapter serves HTTP inside the sandbox.
 	// Nothing is published: checks run in-sandbox through the runner.
 	defaultPort = 6041
@@ -59,6 +59,9 @@ type provisionRequest struct {
 	Source struct {
 		Kind string `json:"kind"`
 		Path string `json:"path"`
+		// Params is handed to the adapter uninterpreted (§6.2); this one
+		// reads source.params.select (selection.go).
+		Params map[string]string `json:"params"`
 	} `json:"source"`
 	Sandbox struct {
 		ScratchDir string `json:"scratch_dir"`
@@ -80,7 +83,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 			"this adapter declares no point-in-time recovery capability: a taosdump backup is one "+
 				"logical export, and the artifact carries nothing to recover forward from")
 	}
-	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path)
+	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path, req.Source.Params)
 	if perr != nil {
 		return nil, perr
 	}
