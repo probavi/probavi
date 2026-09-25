@@ -145,17 +145,35 @@ guessing.
 ## Checks
 
 TDengine speaks SQL, and `table_exists`, `row_count` and `freshness` work.
-The core composes them with SQL-standard quoted identifiers — `SELECT
-count(*) FROM "power"."meters"` — which TDengine refuses (error 9728,
-`syntax error`); the runner translates that into the engine's backtick form,
-so the drill config names a table the ordinary way. A `sql` check is one
-statement, run through the engine's HTTP endpoint inside the sandbox, and
-reaches the engine exactly as written — write those with bare or
-backtick-quoted names, as TDengine's own documentation does.
+TDengine takes bare or backtick-quoted names and refuses the SQL-standard
+form outright — `SELECT count(*) FROM "power"."meters"` is error 9728,
+`syntax error`. **This adapter declares the quoting it takes** (adapter
+protocol §6.1.1, `probavi-adapter/1`), so the core composes backticks
+itself and the drill config names a table the ordinary way.
 
-`freshness` takes one more step. It reads `SELECT max(<column>) FROM
-<table>`, and TDengine's `max()` refuses a TIMESTAMP argument (error 10242,
-`Invalid parameter data type : max`). The runner asks the engine's catalogue
+That declaration replaced a rewrite, and the rewrite is worth remembering
+because of what it cost. The runner used to match the whole statement
+against the grammar the core generates and then swap every double quote
+for a backtick. It had to match the whole statement: TDengine also accepts
+`"a"` as a *string literal*, so a positional rewrite would have turned a
+check of the operator's own into a different query — a different number,
+into a signed record. An adapter recognising its own core's SQL in order
+to correct it is the shape `probavi-adapter/1` exists to remove, and
+nothing here rewrites a statement any more.
+
+A `sql` check is one statement, run through the engine's HTTP endpoint
+inside the sandbox, and reaches the engine **byte for byte as written** —
+which the rewrite had quietly made untrue for statements that happened to
+match. Write those with bare or backtick-quoted names, as TDengine's own
+documentation does.
+
+`freshness` takes one more step, and it is the one step a declaration
+cannot take. It reads `SELECT max(<column>) FROM <table>`, and TDengine's
+`max()` refuses a TIMESTAMP argument (error 10242, `Invalid parameter data
+type : max`) — with backticks exactly as with quotes, so declaring the
+quoting did not help here. The fix depends on what the column *is*, which
+only the engine knows at run time, so this stays in the runner. The runner
+asks the engine's catalogue
 what the column is, and for a TIMESTAMP column takes the maximum of its
 integer form and casts the answer back — the same instant, to the digit, in
 databases of every precision. It is the maximum, not `last()`: `last()` reads

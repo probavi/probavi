@@ -199,54 +199,57 @@ curl -sf -u ` + credentials + ` -d "SELECT count(*) FROM information_schema.ins_
 // inside the raw string literal below, which is delimited by one.
 const backtick = "`"
 
-// runnerScript absorbs the check dialect declaratively.
+// runnerScript unwraps the engine's JSON answer, and does the one thing
+// no declaration can.
 //
-// TDengine speaks SQL, and the core composes its generating built-ins with
-// SQL-standard quoted identifiers (drill-config §3.5) — `SELECT count(*)
-// FROM "rig"."events"`. TDengine takes bare or backtick-quoted names and
-// refuses that one outright: error 9728, `syntax error near ""rig"."events""`
-// (measured on 3.3.6.13). So table_exists and row_count failed on every
-// drill while the README promised they worked (issue #276). Absorbing that
-// here is what §6.1 is for; the mysql and mariadb adapters absorb the same
-// gap with a session sql_mode, which TDengine has no equivalent of — its 92
-// configuration variables carry nothing about quoting.
+// It used to do more. The core composed its generating built-ins with
+// SQL-standard quoted identifiers — `SELECT count(*) FROM "rig"."events"`
+// — which TDengine refuses outright: error 9728, `syntax error near
+// ""rig"."events""` (measured on 3.3.6.13). So table_exists and row_count
+// failed on every drill while the README promised they worked (issue
+// #276), and this script rewrote the quotes. **That rewriting is gone.**
+// The adapter declares `identifier` instead (§6.1.1) and the core composes
+// backticks itself.
 //
-// The translation is guarded by the whole statement, not by position. A
-// looser rule is not safe here: TDengine also accepts "a" as a string
-// literal (measured), so a check of the operator's own could carry a
-// double-quoted string that a positional rewrite would turn into an
-// identifier — a different query, answering a different number, into a
-// signed record. When the statement matches the grammar the core generates
-// end to end, every quote in it is an identifier quote and the rewrite is
-// exact; when it does not, the statement reaches the engine byte for byte
-// as it was written.
+// What went with it is worth naming, because it was the expensive part.
+// The rewrite could not be positional: TDengine also accepts "a" as a
+// string literal (measured), so a check of the operator's own carrying a
+// double-quoted string would have been turned into an identifier — a
+// different query, answering a different number, into a signed record. The
+// guard was therefore a regular expression matching the *whole* statement
+// against the grammar the core generates, which is an adapter recognising
+// its own core's SQL in order to correct it. Declaring the dialect deletes
+// the correction and the guard together, and with them that risk: nothing
+// here rewrites a statement any more, so a user's `sql` check now reaches
+// the engine byte for byte, which is what the README always promised.
 //
-// freshness needs more than the quotes. TDengine's max() refuses a
-// TIMESTAMP argument — error 10242, `Invalid parameter data type : max` —
-// with backticks exactly as with quotes, so the built-in failed on every
-// drill after #276 as it had before (issue #293). The engine's own newest-
-// value function is not the answer: last() reads the column in the row with
-// the newest primary timestamp, which for any other TIMESTAMP column is not
-// its maximum — measured, a second column holding 2026-09-16 12:00 and
-// 2026-09-15 00:00 answered max 12:00 and last 00:00, and a freshness check
-// reading the second would sign a different age than the one it names.
-// max() over the column's integer form does keep the meaning, and casting
-// the answer back gives the engine's own timestamp rendering, which the
-// core parses: measured exact to the digit in databases of all three
-// precisions (ms, us, ns).
+// freshness still needs this script, and the reason is the one thing a
+// static declaration cannot express. TDengine's max() refuses a TIMESTAMP
+// argument — error 10242, `Invalid parameter data type : max` — with
+// backticks exactly as with quotes (issue #293). The engine's own
+// newest-value function is not the answer: last() reads the column in the
+// row with the newest primary timestamp, which for any other TIMESTAMP
+// column is not its maximum — measured, a second column holding
+// 2026-09-16 12:00 and 2026-09-15 00:00 answered max 12:00 and last 00:00,
+// and a freshness check reading the second would sign a different age than
+// the one it names. max() over the column's integer form does keep the
+// meaning, and casting the answer back gives the engine's own timestamp
+// rendering, which the core parses: measured exact to the digit in
+// databases of all three precisions (ms, us, ns).
 //
 // That cast is only right for a TIMESTAMP column, so the runner asks the
-// engine what the column is before using it. Cast unconditionally, a
+// engine what the column is before using it — and that lookup is why a
+// declared statement could not replace this one. Cast unconditionally, a
 // freshness check over an integer column would turn its number into an
 // instant and could pass, where every other engine reports output the core
 // cannot read as a time. The lookup needs the database the table lives in,
 // which only a qualified name carries; an unqualified one is refused by the
 // endpoint anyway (error 9750, `Database not specified`). Anything the
-// lookup does not confirm — a tag rather than a column, a name the catalogue
-// stores differently, a lookup that fails — leaves the statement as the
-// quote translation made it, and the engine's refusal stands. The three
-// names are written into the lookup's string literals only because the
-// pattern that captured them admits letters, digits and underscores and
+// lookup does not confirm — a tag rather than a column, a name the
+// catalogue stores differently, a lookup that fails — leaves the statement
+// exactly as the core composed it, and the engine's refusal stands. The
+// three names are written into the lookup's string literals only because
+// the pattern that captured them admits letters, digits and underscores and
 // nothing else.
 //
 // $1 is the statement. The endpoint answers JSON: a scalar query comes back
@@ -255,16 +258,10 @@ const backtick = "`"
 // — the core records that a check failed and with what exit code, never the
 // engine's diagnostic text.
 const runnerScript = `set -u
-ident='"[A-Za-z_][A-Za-z0-9_]*"'
-table="$ident(\.$ident)?"
-generated="^SELECT count\(\*\) FROM $table( WHERE 1=0)?$|^SELECT max\($ident\) FROM $table$"
 name='[A-Za-z_][A-Za-z0-9_]*'
-newest="^SELECT max\(\"($name)\"\) FROM \"($name)\"\.\"($name)\"$"
 bt='` + backtick + `'
+newest="^SELECT max\($bt($name)$bt\) FROM $bt($name)$bt\.$bt($name)$bt$"
 stmt=$1
-if printf '%s' "$stmt" | grep -Eq "$generated"; then
-  stmt=$(printf '%s' "$stmt" | tr '"' "$bt")
-fi
 if [[ $1 =~ $newest ]]; then
   col=${BASH_REMATCH[1]} db=${BASH_REMATCH[2]} tbl=${BASH_REMATCH[3]}
   type=$(curl -sf -u ` + credentials + ` --data-binary "SELECT col_type FROM information_schema.ins_columns WHERE db_name = '$db' AND table_name = '$tbl' AND col_name = '$col'" "` +

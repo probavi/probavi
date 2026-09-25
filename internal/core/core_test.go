@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/probavi/probavi/internal/adapter"
+	"github.com/probavi/probavi/internal/checks"
 	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/evidence"
 	"github.com/probavi/probavi/internal/sandbox"
@@ -1094,7 +1095,7 @@ func TestAnUndeclaredSelectCapabilityIsNotARefusal(t *testing.T) {
 // TestDialectFromCarriesWhatTheAdapterDeclared, and nothing when it
 // declared nothing — the zero Dialect is v0's behaviour.
 func TestDialectFromCarriesWhatTheAdapterDeclared(t *testing.T) {
-	bare := dialectFrom(testProbe())
+	bare := checks.DialectFrom(testProbe())
 	if bare.Separator != "" || bare.Statements != nil {
 		t.Errorf("dialect = %+v, want the zero value for an adapter that declared nothing", bare)
 	}
@@ -1102,7 +1103,7 @@ func TestDialectFromCarriesWhatTheAdapterDeclared(t *testing.T) {
 	probe := testProbe()
 	probe.Identifier = &adapter.Identifier{Open: "`", Close: "`", Separator: "."}
 	probe.Checks = map[string]adapter.CheckStatement{"row_count": {Statement: "SELECT COUNT(*) FROM {{table}}"}}
-	d := dialectFrom(probe)
+	d := checks.DialectFrom(probe)
 	if d.Open != "`" || d.Close != "`" || d.Separator != "." {
 		t.Errorf("dialect quoting = %q %q %q, want the declaration", d.Open, d.Close, d.Separator)
 	}

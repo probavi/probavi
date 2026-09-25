@@ -13,6 +13,38 @@ always called out explicitly.
 
 ### Added
 
+- **The first adapter declares `probavi-adapter/1`** (`adapters/tdengine`
+  0.6.0), and what it declares deletes code rather than adding it.
+
+  TDengine takes bare or backtick-quoted names and refuses the
+  SQL-standard form outright — `SELECT count(*) FROM "power"."meters"` is
+  error 9728, `syntax error`. The adapter now declares that quoting, so
+  the core composes backticks itself, and **the statement rewriting this
+  adapter used to do is gone.**
+
+  The rewrite is worth remembering for what it cost. It could not be
+  positional, because TDengine also accepts `"a"` as a *string literal*:
+  a check of the operator's own carrying a double-quoted string would
+  have become a different query, answering a different number, into a
+  signed record. So the guard was a regular expression matching the whole
+  statement against the grammar the core generates — an adapter
+  recognising its own core's SQL in order to correct it. Declaring the
+  dialect removed the correction and the guard together, and with them
+  that risk. A `sql` check of your own now reaches the engine **byte for
+  byte**, which the README had always promised and the rewrite had
+  quietly made untrue for statements that happened to match.
+
+  `freshness` still runs through the adapter's script, and the reason is
+  the boundary of what a declaration can do: TDengine's `max()` refuses a
+  TIMESTAMP argument with backticks exactly as with quotes, and the fix
+  depends on what the column *is*, which only the engine knows at run
+  time. A static statement cannot ask.
+
+  Nothing else in the catalogue moved. The other adapters speak the floor
+  and are driven exactly as before — `docs/capabilities.json` now shows
+  one adapter speaking two versions and the rest speaking one, which is
+  what per-adapter migration looks like.
+
 - **The adapter protocol moves to `probavi-adapter/1`** — three optional
   `probe` declarations, and no message, verb, error code or required
   field changed. **Every existing adapter keeps working unchanged**: the

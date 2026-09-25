@@ -11,7 +11,7 @@ import (
 
 const (
 	adapterName    = "tdengine"
-	adapterVersion = "0.5.0"
+	adapterVersion = "0.6.0"
 	// defaultPort is where taosAdapter serves HTTP inside the sandbox.
 	// Nothing is published: checks run in-sandbox through the runner.
 	defaultPort = 6041
@@ -30,7 +30,7 @@ func probePayload() any {
 	return map[string]any{
 		"name":              adapterName,
 		"adapter_version":   adapterVersion,
-		"protocol_versions": []string{protocolVersion},
+		"protocol_versions": protocolVersions,
 		"engine":            map[string]string{"name": "tdengine"},
 		// The directory kind is declared first because it is what the
 		// tool produces and what a drill usually names; the conformance
@@ -41,12 +41,19 @@ func probePayload() any {
 			{"kind": "taosdump_dir", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "taosdump_tar", "capabilities": map[string]bool{"pitr": false}},
 		},
+		// TDengine takes bare or backtick-quoted names and refuses the
+		// SQL-standard form outright (§6.1.1). Declaring it is what ended
+		// the statement rewriting this adapter used to do: the core now
+		// composes what the engine takes, and nothing here has to
+		// recognise a statement in order to correct it.
+		"identifier": map[string]string{"open": backtick, "close": backtick, "separator": "."},
 		"sql_runner": map[string]any{
 			// TDengine speaks SQL over its HTTP endpoint, so a check is an
 			// ordinary statement and the core's generating built-ins apply
-			// unchanged. The dialect work — unwrapping the JSON answer and
-			// its quoting — is absorbed by the script, so the core never
-			// learns an engine concept.
+			// unchanged. What the script still absorbs is unwrapping the
+			// JSON answer, and the one thing no static statement can do:
+			// freshness needs the column's type, which only the engine's
+			// catalogue knows (see runnerScript).
 			"argv": []string{"bash", "-c", runnerScript, "bash", "{{sql}}"},
 			"env":  map[string]string{},
 		},
