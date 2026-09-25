@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "mysql"
-	adapterVersion = "0.15.0"
+	adapterVersion = "0.16.0"
 
 	defaultUser     = "root"
 	defaultDatabase = "probavi"
@@ -42,6 +42,7 @@ func probePayload() any {
 			{"kind": "mysqldump_dir", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "mysqldump_with_users", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "xtrabackup", "capabilities": map[string]bool{"pitr": false}},
+			{"kind": "xtrabackup_with_binlogs", "capabilities": map[string]bool{"pitr": true}},
 		},
 		"sql_runner": map[string]any{
 			// Appending ANSI_QUOTES to the session sql_mode makes the server
@@ -74,6 +75,30 @@ type provisionRequest struct {
 	} `json:"pitr"`
 }
 
+// pitrKinds are the source kinds whose probe declares pitr. The gate in
+// opProvision and the probe above must agree; naming the set once is what
+// holds them together, and TestProbeDeclaresEveryPITRKind proves it.
+var pitrKinds = map[string]bool{"xtrabackup_with_binlogs": true}
+
+// physicalKinds restore a data directory rather than replaying SQL: the
+// engine must be down when they start, and the adapter owns the whole
+// lifecycle from there (physical.go).
+var physicalKinds = map[string]bool{"xtrabackup": true, "xtrabackup_with_binlogs": true}
+
+// checkPITRKind refuses a drill that asks for point-in-time recovery from
+// a kind that cannot give it. The protocol forbids the core sending pitr
+// to a kind whose probe did not declare it (§6.2); refusing here as well
+// makes the diagnostic precise rather than trusting the other side of a
+// contract this adapter cannot see.
+func checkPITRKind(req *provisionRequest) *protoError {
+	if req.PITR == nil || pitrKinds[req.Source.Kind] {
+		return nil
+	}
+	return protoErr("invalid_request", false,
+		"pitr is only supported by the xtrabackup_with_binlogs source kind: a logical dump is "+
+			"one instant and nothing in it can move that instant")
+}
+
 // opProvision restores the backup into the already-running sandbox: wait
 // for engine readiness (TCP, not socket — the first-boot temporary server
 // runs with --skip-networking), transfer the dump, load it with the mysql
@@ -83,8 +108,8 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if err := json.Unmarshal(payload, req); err != nil {
 		return nil, protoErr("invalid_request", false, "malformed provision payload")
 	}
-	if req.PITR != nil {
-		return nil, protoErr("invalid_request", false, "this adapter does not support pitr")
+	if perr := checkPITRKind(req); perr != nil {
+		return nil, perr
 	}
 	tgt, perr := parseProvisionTarget(req)
 	if perr != nil {
@@ -99,7 +124,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	logger.Info("source resolved", "path", src.path, "size_bytes", src.sizeBytes,
 		"compressed", src.compressed)
 
-	if req.Source.Kind == "xtrabackup" {
+	if physicalKinds[req.Source.Kind] {
 		return provisionPhysical(ctx, c, req, src, logger)
 	}
 

@@ -13,6 +13,62 @@ always called out explicitly.
 
 ### Added
 
+- **A drill can prove a recovery to a point in time, not only to the
+  backup** (`adapters/mysql` 0.16.0, source kind `xtrabackup_with_binlogs`).
+  A full backup proves one moment. Everything written after it — the hours
+  an incident actually spans — was outside the drill, and a recovery
+  run-book that ends at the full is not the run-book anyone follows at 3am.
+
+  ```yaml
+  target:
+    source:
+      kind: xtrabackup_with_binlogs
+      path: /backups/mysql/2026-09-25
+      params:
+        backup: full
+        binlogs: binlogs
+    pitr:
+      target_age: 6h
+  ```
+
+  The full is restored as before, the server is started, and then the
+  binary logs are replayed onto it — in that order, because `mysqlbinlog`
+  produces SQL and a server has to be up to accept it, which is also the
+  order an operator follows.
+
+  **Both members live in one source directory.** The core hands an adapter
+  only files belonging to the drill's configured source (adapter protocol
+  §4.2), so a server's live binary log directory is not something a drill
+  can point at; an archive copies the logs beside the full they follow.
+  Both are named explicitly in `params`, so renaming a directory cannot
+  silently change what a drill proves.
+
+  **Where the replay starts is the backup's own answer**:
+  `xtrabackup --backup` writes `xtrabackup_binlog_info` naming the log file
+  and position the server had reached, so there is no overlap to re-apply
+  and no gap to guess at. A backup that carries none was taken from a
+  server with the binary log switched off, and is refused with that said.
+
+  **Two refusals rather than a best effort.** A missing first log means the
+  chain has no beginning. A gap in the middle is worse: the replay would
+  succeed, stop early, and leave a signed record claiming a recovery that
+  skipped whatever the missing log held. Both fail the drill by name.
+
+  Two honesty points, both in the README. Binary log event timestamps are
+  **second-granular** while a drill's target is an absolute instant in
+  milliseconds, so the point actually reached can be earlier and coarser
+  than the point requested — `drill.pitr_target` records the instant
+  *requested* and never claims otherwise. And the replay runs under
+  `TZ=UTC` with the target converted to UTC, because `--stop-datetime` is
+  read in the client's local zone: left to the image's zone, the same drill
+  config would stop at a different point on a differently configured host.
+
+  The replay's seconds count toward `restore_seconds` rather than a phase
+  of their own — every one of them is time before the database is usable,
+  which is what the RTO trend is for — and `state.mode` reads
+  `physical+binlog`, because it is a different proof from a full-only
+  restore. `adapters/mariadb` follows on the same shape.
+
 - **`target.source.select` is a drill-config key, not only an adapter
   parameter.** The rollout above put the policy in `source.params`, which
   the core hands an adapter uninterpreted — the reversible order, chosen so

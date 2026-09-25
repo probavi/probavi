@@ -23,6 +23,10 @@ type resolvedSource struct {
 	// usersPath is the accounts-and-grants script to replay before the
 	// dump, for the mysqldump_with_users kind; empty for every other kind.
 	usersPath string
+	// binlogsPath is the directory of binary logs to replay after the
+	// physical restore, for the xtrabackup_with_binlogs kind; empty for
+	// every other kind (binlog.go).
+	binlogsPath string
 	// compressed and usersCompressed report whether each SQL member is
 	// stored gzip-compressed, sniffed from its own bytes (see compress.go).
 	// The two members are sniffed separately: a backup pipeline may well
@@ -64,6 +68,8 @@ func resolveSource(ctx context.Context, kind, path string, params map[string]str
 		return resolveFile(ctx, chosen, loc)
 	case "mysqldump_with_users":
 		return resolveWithUsers(ctx, path, params, policy, loc)
+	case "xtrabackup_with_binlogs":
+		return resolveWithBinlogs(path, params, loc)
 	case "xtrabackup":
 		src, perr := resolveRepo(path, loc)
 		if perr != nil {
@@ -119,7 +125,7 @@ func resolveWithUsers(ctx context.Context, dir string, params map[string]string,
 				"holding the users script and the dump", dir)
 	}
 
-	usersName, perr := memberName(params["users"], "users")
+	usersName, perr := memberName("mysqldump_with_users", params["users"], "users", "users script")
 	if perr != nil {
 		return nil, perr
 	}
@@ -183,11 +189,11 @@ func resolveWithUsers(ctx context.Context, dir string, params map[string]string,
 // directory. It is a bare filename, never a path: the core's put_file
 // guard confines transfers to the configured backup source, and a plain
 // name keeps a config's reach obvious to whoever reviews it.
-func memberName(value, param string) (string, *protoError) {
+func memberName(kind, value, param, what string) (string, *protoError) {
 	if value == "" {
 		return "", protoErr("invalid_request", false,
-			"the mysqldump_with_users kind requires source.params.%s: the name of the %s file "+
-				"inside the source directory", param, param)
+			"the %s kind requires source.params.%s: the name of the %s "+
+				"inside the source directory", kind, param, what)
 	}
 	if value != filepath.Base(value) || value == "." || value == ".." {
 		return "", protoErr("invalid_request", false,
@@ -204,7 +210,7 @@ func memberName(value, param string) (string, *protoError) {
 func chooseDump(ctx context.Context, dir, requested, usersName string,
 	policy selectPolicy) (string, *protoError) {
 	if requested != "" {
-		name, perr := memberName(requested, "dump")
+		name, perr := memberName("mysqldump_with_users", requested, "dump", "dump file")
 		if perr != nil {
 			return "", perr
 		}
@@ -271,6 +277,118 @@ func resolveRepo(dir string, loc *time.Location) (*resolvedSource, *protoError) 
 		sizeBytes: size,
 		createdAt: backupCreatedAt(dir, loc),
 	}, nil
+}
+
+// resolveWithBinlogs plans the two-member source of the
+// xtrabackup_with_binlogs kind: a physical full and the binary logs
+// written after it, both inside one source directory.
+//
+// One directory rather than two independent paths because the core only
+// hands an adapter files belonging to the drill's configured backup source
+// (protocol §4.2) — a guard that exists so an adapter, which is a
+// third-party binary, cannot copy arbitrary host files into a sandbox it
+// controls. A server's live binary log directory is therefore not
+// something a drill can point at: an archive copies the logs beside the
+// full it belongs to, which is the layout a run-book wants anyway.
+//
+// Both members are named explicitly in params rather than recognised by
+// layout: renaming a directory must not silently change what a drill
+// proves, and the same source directory may hold several nights' fulls.
+func resolveWithBinlogs(dir string, params map[string]string, loc *time.Location) (*resolvedSource, *protoError) {
+	info, err := os.Stat(dir)
+	switch {
+	case os.IsNotExist(err):
+		return nil, protoErr("source_not_found", false, "backup directory does not exist: %s", dir)
+	case err != nil:
+		return nil, protoErr("source_unreadable", false, "stat backup directory: %v", err)
+	case !info.IsDir():
+		return nil, protoErr("invalid_request", false,
+			"source path %s is a file; the xtrabackup_with_binlogs kind expects a directory "+
+				"holding the backup and the binary logs", dir)
+	}
+
+	backupName, perr := memberName("xtrabackup_with_binlogs", params["backup"], "backup",
+		"xtrabackup backup directory")
+	if perr != nil {
+		return nil, perr
+	}
+	binlogsName, perr := memberName("xtrabackup_with_binlogs", params["binlogs"], "binlogs",
+		"binary log directory")
+	if perr != nil {
+		return nil, perr
+	}
+	if backupName == binlogsName {
+		return nil, protoErr("invalid_request", false,
+			"source.params.backup and source.params.binlogs both name %s", backupName)
+	}
+
+	backupPath := filepath.Join(dir, backupName)
+	if perr := mustBeDirectory(backupPath, "backup"); perr != nil {
+		return nil, perr
+	}
+	if _, err := os.Stat(filepath.Join(backupPath, "xtrabackup_checkpoints")); err != nil {
+		return nil, protoErr("source_corrupt", false,
+			"backup directory %s lacks xtrabackup_checkpoints — not an xtrabackup backup", backupPath)
+	}
+	binlogsPath := filepath.Join(dir, binlogsName)
+	if perr := mustBeDirectory(binlogsPath, "binary log"); perr != nil {
+		return nil, perr
+	}
+
+	// Both members are restored, so both are in the identity: a checksum
+	// covering only the full would let a log change without the evidence
+	// record noticing, and the logs are exactly what this kind exists to
+	// prove. Each member contributes its own canonical tree digest rather
+	// than its bytes a second time — dirChecksum is already a measurement
+	// of every byte under it, and re-streaming two trees would double the
+	// read for no added guarantee. The framing is the two-member one the
+	// rest of the catalogue uses (role NUL size NUL value, fixed order).
+	backupSum, backupSize, perr := dirChecksum(backupPath)
+	if perr != nil {
+		return nil, perr
+	}
+	binlogSum, binlogSize, perr := dirChecksum(binlogsPath)
+	if perr != nil {
+		return nil, perr
+	}
+	h := sha256.New()
+	for _, m := range []struct {
+		role  string
+		size  int64
+		value string
+	}{
+		{"backup", backupSize, backupSum},
+		{"binlogs", binlogSize, binlogSum},
+	} {
+		fmt.Fprintf(h, "%s\x00%d\x00%s\x00", m.role, m.size, m.value)
+	}
+
+	// The full dates this source, through its own xtrabackup_info. The
+	// logs reach further forward in time and the record does not claim
+	// otherwise: backup.created_at is when the backup was taken, and how
+	// far the replay carried it is what drill.pitr_target records.
+	return &resolvedSource{
+		path:        backupPath,
+		checksum:    fmt.Sprintf("sha256:%s", hex.EncodeToString(h.Sum(nil))),
+		sizeBytes:   backupSize + binlogSize,
+		createdAt:   backupCreatedAt(backupPath, loc),
+		binlogsPath: binlogsPath,
+	}, nil
+}
+
+// mustBeDirectory refuses a member that is not a directory; what names it
+// in the diagnostic.
+func mustBeDirectory(path, what string) *protoError {
+	info, err := os.Stat(path)
+	switch {
+	case os.IsNotExist(err):
+		return protoErr("source_not_found", false, "%s directory does not exist: %s", what, path)
+	case err != nil:
+		return protoErr("source_unreadable", false, "stat %s directory: %v", what, err)
+	case !info.IsDir():
+		return protoErr("invalid_request", false, "%s %s is a file, not a directory", what, path)
+	}
+	return nil
 }
 
 // dirChecksum hashes a directory tree canonically: entries sorted by
