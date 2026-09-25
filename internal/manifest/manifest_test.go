@@ -520,3 +520,25 @@ func TestAPipeInATreeContributesNothing(t *testing.T) {
 		t.Errorf("a FIFO was counted in the tree's size: %v", fault)
 	}
 }
+
+// TestZeroIsAnExpectationNotAnAbsence: expected_size_bytes is refused
+// when negative and honoured when zero. A backup job that produced an
+// empty file states 0, and the drill's job is to carry that to the
+// adapter, which is the component that knows an empty artifact is not a
+// backup — not to refuse the manifest for saying so.
+func TestZeroIsAnExpectationNotAnAbsence(t *testing.T) {
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "nightly.dump")
+	writeFile(t, empty, "")
+
+	if fault := manifest.Check(empty, manifestFor(t, dir, "", sizePtr(0))); fault != nil {
+		t.Errorf("a manifest expecting 0 bytes was refused: %v", fault)
+	}
+
+	nonEmpty := filepath.Join(dir, "other.dump")
+	writeFile(t, nonEmpty, "bytes")
+	fault := manifest.Check(nonEmpty, manifestFor(t, dir, "", sizePtr(0)))
+	if fault == nil || fault.Code != evidence.CodeSourceCorrupt {
+		t.Fatalf("fault = %v, want %s — 0 is an expectation like any other", fault, evidence.CodeSourceCorrupt)
+	}
+}
