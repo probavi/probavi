@@ -408,7 +408,13 @@ func queryCount(t *testing.T, ctx context.Context, sbx *docker.Sandbox,
 func makeBinlogFixture(t *testing.T, ctx context.Context, provider *docker.Provider, dest string) string {
 	t.Helper()
 	params := sandboxParams(t)
-	params["command"] = "mariadbd --server-id=1 --log-bin=/tmp/binlogs/binlog"
+	// The log basename sits directly in /tmp: the server will not create a
+	// directory for it, and the entrypoint starts before anything in this
+	// test could make one — a server that cannot open its binary log does
+	// not start at all, which reads as a readiness timeout rather than as
+	// the configuration mistake it is. The logs are gathered into their
+	// own directory further down, once the server is up.
+	params["command"] = "mariadbd --server-id=1 --log-bin=/tmp/binlog"
 	seed, err := provider.Create(ctx, params)
 	if err != nil {
 		t.Fatalf("create seed sandbox: %v", err)
@@ -436,6 +442,11 @@ SELECT ROUND(RAND()*100, 2) FROM seq;`, n)
 		"sleep 2; mariadb -h 127.0.0.1 -u root -N -B -e 'SELECT UTC_TIMESTAMP()' > /tmp/target; sleep 2")
 	mustExec(t, ctx, seed, "mariadb", "-h", "127.0.0.1", "-u", "root", "-e", batch(50))
 	mustExec(t, ctx, seed, "mariadb", "-h", "127.0.0.1", "-u", "root", "-e", "FLUSH BINARY LOGS")
+
+	// Gather the series into the directory an archive would keep it in.
+	// The index file comes with it, exactly as it would in a real copy —
+	// the adapter is expected to pass over it.
+	mustExec(t, ctx, seed, "sh", "-c", "mkdir -p /tmp/binlogs && cp /tmp/binlog.* /tmp/binlogs/")
 
 	for remote, local := range map[string]string{
 		"/tmp/backup":  filepath.Join(dest, "full"),

@@ -221,10 +221,16 @@ is refused with that said rather than worked around.
 **That file has two names.** MariaDB renamed the `xtrabackup_*` metadata
 files at 11.0 — the same rename this adapter already handles for
 `mariadb_backup_checkpoints` beside the pre-11 `xtrabackup_checkpoints` —
-so a drill reads `mariadb_backup_binlog_info` or `xtrabackup_binlog_info`,
-whichever the release that took the backup wrote. The integration suite
-restores on 10.11 and on 12.3, which is what makes that a measurement
-rather than an assumption.
+so a drill reads whichever name the release that took the backup wrote:
+
+| Release | The file |
+|---|---|
+| 10.11 | `xtrabackup_binlog_info` |
+| 12.3 | `mariadb_backup_binlog_info` |
+
+Both measured, both carrying the same `file` TAB `position` line, and the
+integration suite restores on every verified release so the pair cannot
+quietly stop covering one.
 
 **Where it stops.** At `target.pitr` if the drill asks for one, and at the
 end of the archive if it does not — "how far can we actually recover" is a

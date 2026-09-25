@@ -34,11 +34,15 @@ import (
 // a different guarantee needing a different proof, and mixing the two
 // would leave a record that does not say which one it rested on.
 
-// binlogInfoNames are the coordinate file's two names. MariaDB renamed
-// the xtrabackup_* metadata files at 11.0 — source.go already accepts
+// binlogInfoNames are the coordinate file's two names. MariaDB renamed the
+// xtrabackup_* metadata files at 11.0 — source.go already accepts
 // mariadb_backup_checkpoints beside the pre-11 xtrabackup_checkpoints for
 // exactly this reason — so a drill reads whichever one the release that
 // took the backup wrote, newest name first.
+//
+// Measured, not inferred: 10.11 writes xtrabackup_binlog_info and 12.3
+// writes mariadb_backup_binlog_info, both with the same "file TAB
+// position" line.
 var binlogInfoNames = []string{"mariadb_backup_binlog_info", "xtrabackup_binlog_info"}
 
 // binlogNamePattern is how a server names a log in the series: a base name

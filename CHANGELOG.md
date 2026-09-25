@@ -74,11 +74,12 @@ always called out explicitly.
   copy: MariaDB renamed the `xtrabackup_*` metadata files at 11.0, so the
   binlog coordinate is read under either `mariadb_backup_binlog_info` or
   `xtrabackup_binlog_info` — the same pair this adapter already accepts
-  for the checkpoints file — and the integration suite restores on 10.11
-  and on 12.3, which is what makes that a measurement rather than an
-  assumption. Its tooling is its own throughout (`mariadb-binlog`, the
-  `mariadb` client), and the official images ship all of it, so this kind
-  needs no image built for it.
+  for the checkpoints file. Measured: 10.11 writes
+  `xtrabackup_binlog_info` and 12.3 writes
+  `mariadb_backup_binlog_info`, both carrying the same `file` TAB
+  `position` line. Its tooling is its own throughout (`mariadb-binlog`,
+  the `mariadb` client), and the official images ship all of it, so this
+  kind needs no image built for it.
 
 - **`target.source.select` is a drill-config key, not only an adapter
   parameter.** The rollout above put the policy in `source.params`, which
