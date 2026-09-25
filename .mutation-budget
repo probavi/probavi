@@ -22,3 +22,10 @@
 internal/evidence 12
 internal/adapter  15
 spec/evidence      1
+# internal/manifest decides whether a drill is refused, and its failure
+# mode is silent acceptance: a comparison inverted here passes every
+# corrupt artifact, while coverage stays green because the line still
+# ran. Measured 2026-09-25 at 60 mutants, 57 caught. The three survivors
+# are one shape — the zero returned beside a fault, which every caller
+# discards after checking the fault.
+internal/manifest  3
