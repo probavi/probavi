@@ -682,6 +682,220 @@ gosu postgres pg_ctl -D "$PGDATA" -w stop`
 	return strings.TrimSpace(string(target))
 }
 
+// TestWalgPITREndToEnd is the wal-g half of the point-in-time promise the
+// pgbackrest kind kept alone: the same shape of proof, through the other
+// tool operators run. One repository, two drills — recovery to the end of
+// the archive sees both batches, recovery to the captured instant sees
+// only the first — so which moment was reached is a row count rather than
+// a claim.
+func TestWalgPITREndToEnd(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	image := buildWalgImage(t, ctx)
+
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-postgres"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	hostRepo := filepath.Join(t.TempDir(), "walg")
+	target := makeWalgRepo(t, ctx, image, hostRepo)
+
+	provider := docker.New(nil)
+	runner, err := adapter.New("postgres", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		pitr *adapter.PITR
+		want string
+	}{
+		{"to the end of the archive", nil, "700"},
+		{"to the captured instant", &adapter.PITR{TargetTime: target}, "500"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sbx, err := provider.Create(ctx, map[string]string{
+				"image": image, "command": "sleep infinity", "memory": engineMemoryLimit})
+			if err != nil {
+				t.Fatalf("create idle sandbox: %v", err)
+			}
+			defer destroy(t, sbx)
+
+			res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+				Source:  adapter.ProvisionSource{Kind: "walg", Path: hostRepo},
+				Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+				PITR:    tc.pitr,
+			}, sbx)
+			if err != nil {
+				// A failed start says "could not start server" and nothing
+				// about why; the server's own log is where the reason is,
+				// and a test that throws it away makes the next failure as
+				// slow to read as this one was.
+				t.Fatalf("provision: %v\n--- restored server log ---\n%s", err, sandboxLog(ctx, sbx))
+			}
+			if res.SourceIdentity.CreatedAt == nil {
+				t.Error("created_at is nil — a wal-g sentinel states when the backup finished")
+			}
+
+			out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{
+				"psql", "-h", "127.0.0.1", "-U", "postgres", "-d", "postgres", "-tA", "-c",
+				"SELECT count(*) FROM orders"}})
+			if err != nil {
+				t.Fatalf("count query: %v", err)
+			}
+			if count := strings.TrimSpace(string(out.Stdout)); out.ExitCode != 0 || count != tc.want {
+				t.Fatalf("row count = %q (exit %d, stderr %s), want %s",
+					count, out.ExitCode, out.Stderr, tc.want)
+			}
+
+			// Writable proves recovery promoted rather than pausing: a
+			// paused standby would refuse this INSERT, and a drill would
+			// have hung there until its deadline.
+			out, err = sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{
+				"psql", "-h", "127.0.0.1", "-U", "postgres", "-d", "postgres",
+				"-v", "ON_ERROR_STOP=1", "-c", "INSERT INTO orders (total) VALUES (1.00)"}})
+			if err != nil {
+				t.Fatalf("write probe: %v", err)
+			}
+			if out.ExitCode != 0 {
+				t.Fatalf("restored instance is not writable (exit %d, stderr %s) — recovery did not promote",
+					out.ExitCode, out.Stderr)
+			}
+
+			if _, err := runner.Teardown(ctx, res.State, "completed", sbx); err != nil {
+				t.Fatalf("teardown: %v", err)
+			}
+		})
+	}
+}
+
+// sandboxLog reads the restored server's log out of a sandbox, for a
+// failure message that explains itself.
+func sandboxLog(ctx context.Context, sbx *docker.Sandbox) string {
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{
+		Argv: []string{"sh", "-c", "tail -n 40 /tmp/probavi-pg.log 2>&1 || echo '(no server log)'"},
+	})
+	if err != nil {
+		return "(could not read the server log: " + err.Error() + ")"
+	}
+	return string(out.Stdout) + string(out.Stderr)
+}
+
+// walgRelease pins the binary this image carries, with the digest its own
+// publisher states beside it.
+//
+// wal-g ships in no distribution, which is the whole reason this kind
+// waited while `barman` went first: an image carries it because someone
+// put it there. A pinned tag alone would still let the bytes change under
+// a re-tag, so the digest is checked in the build — the same reasoning the
+// repository applies to its own dependencies, applied to a binary.
+const (
+	walgVersion = "v3.0.9"
+	walgAsset   = "wal-g-pg-20.04-amd64.tar.gz"
+	walgSHA256  = "51ec330530f98fc3eb4f008fa539d291a2cac51e7076b256472862e45ceff0bd"
+)
+
+// buildWalgImage builds (once, cached afterwards) an engine image with
+// wal-g in it.
+//
+// The fetch happens in its own stage on a current Debian base, and only
+// the binary is copied into the engine image. That is not tidiness: the
+// variant images are built on bases whose own apt suites can outlive their
+// distribution's support — measured here, postgis/postgis:17-3.5 is Debian
+// 11 and `apt-get install ca-certificates curl` exits 100 against it — and
+// an image is not the right place to discover that a release from 2026 is
+// being installed from a suite that stopped being refreshed. Nothing about
+// wal-g or the engine had changed; the clock had.
+//
+// The tag carries the base image, because one runner builds several of
+// them and a shared tag would hand a job the layer another base produced.
+func buildWalgImage(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	base := verifiedImage(t)
+	tag := "probavi-it-walg:" + strings.NewReplacer("/", "-", ":", "-", ".", "-").Replace(base)
+	dir := t.TempDir()
+	dockerfile := fmt.Sprintf(`FROM debian:12-slim AS fetch
+RUN set -eux; \
+    apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && \
+    curl -fsSL -o /tmp/walg.tar.gz \
+      https://github.com/wal-g/wal-g/releases/download/%s/%s && \
+    echo "%s  /tmp/walg.tar.gz" | sha256sum -c - && \
+    tar -xzf /tmp/walg.tar.gz -C /usr/local/bin && \
+    mv /usr/local/bin/wal-g-pg-20.04-amd64 /usr/local/bin/wal-g && \
+    chmod +x /usr/local/bin/wal-g
+
+FROM %s
+COPY --from=fetch /usr/local/bin/wal-g /usr/local/bin/wal-g
+`, walgVersion, walgAsset, walgSHA256, base)
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o600); err != nil {
+		t.Fatalf("write dockerfile: %v", err)
+	}
+	if out, err := exec.CommandContext(ctx, "docker", "build", "-q", "-t", tag, dir).CombinedOutput(); err != nil {
+		t.Fatalf("build test image: %v: %s", err, out)
+	}
+	// Measured rather than guessed from the base's name: the release is a
+	// glibc build, so an image on musl takes the COPY and then cannot run
+	// what it received. The variant's own claim is its extension's logical
+	// restore; this kind keeps its coverage from the plain postgres jobs.
+	if out, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none",
+		tag, "wal-g", "--version").CombinedOutput(); err != nil {
+		t.Skipf("wal-g does not run in an image based on %s (%s); the walg flow is exercised "+
+			"by the plain postgres matrix jobs", base, strings.TrimSpace(string(out)))
+	}
+	return tag
+}
+
+// makeWalgRepo seeds a real cluster archiving into a wal-g filesystem
+// prefix, takes a base backup of the first 500 orders, captures a target
+// instant, commits 200 more whose WAL reaches the archive only, and copies
+// the prefix to the host. It returns the captured target (RFC 3339):
+// recovery to it must see exactly 500 rows, recovery to the end of the
+// archive 700.
+func makeWalgRepo(t *testing.T, ctx context.Context, image, dest string) string {
+	t.Helper()
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d",
+		"--label", docker.LabelSandbox+"=1", "--label", "com.probavi.pid="+strconv.Itoa(os.Getpid()),
+		"--network", "none", image, "sleep", "infinity").Output()
+	if err != nil {
+		t.Fatalf("start seed container: %v", err)
+	}
+	id := strings.TrimSpace(string(out))
+	defer exec.Command("docker", "rm", "-f", "-v", id).Run() //nolint:errcheck // best-effort cleanup
+
+	// The sleeps bracket the captured instant so the two batches' commit
+	// timestamps land strictly on opposite sides of it.
+	seedScript := `set -e
+mkdir -p /tmp/walg "$PGDATA"
+chown -R postgres:postgres /tmp/walg "$PGDATA"
+gosu postgres initdb -D "$PGDATA"
+printf "archive_mode=on\narchive_command='WALG_FILE_PREFIX=/tmp/walg wal-g wal-push %%p'\n" >> "$PGDATA"/postgresql.conf
+gosu postgres pg_ctl -D "$PGDATA" -w -l /tmp/pg.log start
+gosu postgres psql -v ON_ERROR_STOP=1 -c "CREATE TABLE orders (id bigserial PRIMARY KEY, total numeric(10,2)); INSERT INTO orders (total) SELECT (random()*100)::numeric(10,2) FROM generate_series(1,500);"
+gosu postgres env WALG_FILE_PREFIX=/tmp/walg wal-g backup-push "$PGDATA"
+sleep 1
+gosu postgres psql -tA -c "SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')" > /tmp/pitr-target
+sleep 1
+gosu postgres psql -v ON_ERROR_STOP=1 -c "INSERT INTO orders (total) SELECT (random()*100)::numeric(10,2) FROM generate_series(1,200);"
+gosu postgres psql -v ON_ERROR_STOP=1 -c "SELECT pg_switch_wal();" > /dev/null
+gosu postgres pg_ctl -D "$PGDATA" -w stop`
+	if out, err := exec.CommandContext(ctx, "docker", "exec", id, "sh", "-c", seedScript).CombinedOutput(); err != nil {
+		t.Fatalf("seed wal-g repository: %v: %s", err, out)
+	}
+	target, err := exec.CommandContext(ctx, "docker", "exec", id, "cat", "/tmp/pitr-target").Output()
+	if err != nil {
+		t.Fatalf("read pitr target: %v", err)
+	}
+	if out, err := exec.CommandContext(ctx, "docker", "cp", id+":/tmp/walg", dest).CombinedOutput(); err != nil {
+		t.Fatalf("extract repository: %v: %s", err, out)
+	}
+	return strings.TrimSpace(string(target))
+}
+
 func makeFixture(t *testing.T, ctx context.Context, provider *docker.Provider, params map[string]string, dest string) {
 	t.Helper()
 	seed, err := provider.Create(ctx, params)

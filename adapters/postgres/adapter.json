@@ -57,6 +57,7 @@
     "pgdump_with_globals": "One pg_dump file plus the cluster globals (roles and grants) loaded before it \u2014 the dump named by source.params.dump, or picked by source.params.select; either member may be gzip-compressed",
     "pgbackrest": "A pgBackRest filesystem repository (physical restore)",
     "barman": "A Barman server directory \u2014 base/, wals/ and meta/ \u2014 restored by placing the cluster and letting PostgreSQL replay the archived WAL",
+    "walg": "A wal-g filesystem repository — the directory WALG_FILE_PREFIX names, holding basebackups_005 and wal_005 — restored by fetching a base backup and replaying the WAL archive; point-in-time recovery supported, and only the filesystem backend, because a drill's sandbox has no network",
     "timescaledb_dump": "One pg_dump file of a TimescaleDB database; the restore is framed with timescaledb_pre_restore()/timescaledb_post_restore()",
     "timescaledb_dump_dir": "A directory of them; chosen the way pgdump_dir chooses, framed the same way",
     "timescaledb_dump_with_globals": "A directory holding a pg_dumpall --globals-only script and one TimescaleDB dump; the globals load first, then the framed restore"
