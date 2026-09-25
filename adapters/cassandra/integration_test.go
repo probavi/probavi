@@ -285,6 +285,11 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 			Exec:   sbx,
 			Runner: checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
 			Target: checks.Target{User: res.Connection.User, Database: res.Connection.Database},
+			// The same conversion the core does, from the same function.
+			// Without it the core composes the `WHERE 1=0` probe CQL has
+			// no predicate for, and issue #277 is back — so this line is
+			// what proves the declaration is load-bearing.
+			Dialect: checks.DialectFrom(probe),
 		}
 		min1, tooMany := int64(1), int64(501)
 		results, err := checks.Run(ctx, []config.Check{
