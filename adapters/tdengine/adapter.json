@@ -24,7 +24,7 @@
   ],
   "sources": {
     "taosdump": "One `taosdump` output directory, named at either level",
-    "taosdump_dir": "A directory of them; the newest by the dumps' own recorded instant is restored",
+    "taosdump_dir": "A directory of them; source.params.select picks which one is restored — newest by the instant each dump's own dump_result.txt records (the default), oldest, or random; a dump recording no instant ranks below every one that does, and only those fall back to directory time",
     "taosdump_tar": "One tar archive of a taosdump output directory, plain or gzip — the compression read from the bytes, never the name"
   }
 }

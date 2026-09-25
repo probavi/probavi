@@ -1324,7 +1324,7 @@
       "name": "TDengine",
       "status": "experimental",
       "since": "0.28.0",
-      "adapter_version": "0.4.0",
+      "adapter_version": "0.5.0",
       "engine": {
         "id": "tdengine",
         "name": "TDengine"
@@ -1350,7 +1350,7 @@
         },
         {
           "id": "taosdump_dir",
-          "name": "A directory of them; the newest by the dumps' own recorded instant is restored",
+          "name": "A directory of them; source.params.select picks which one is restored — newest by the instant each dump's own dump_result.txt records (the default), oldest, or random; a dump recording no instant ranks below every one that does, and only those fall back to directory time",
           "pitr": false
         },
         {

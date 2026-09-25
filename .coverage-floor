@@ -12,7 +12,7 @@
 #
 # Each floor sits just under what the area measures today: the ratchet starts
 # where the code is, and only ever moves up.
-adapters 88.6
+adapters 89.0
 cmd      92.5
 internal 96.2
 # internal/tools/mutate is the mutation harness: it edits sources in

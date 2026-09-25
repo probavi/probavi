@@ -28,7 +28,7 @@ used below, so a dump written without it simply says less about itself.
 | Kind | Artifact |
 | --- | --- |
 | `taosdump` | One `taosdump` output directory, named at either level |
-| `taosdump_dir` | A directory of them; the newest by the dumps' own recorded instant |
+| `taosdump_dir` | A directory of them; `source.params.select` picks one — newest by the instant each dump's own `dump_result.txt` records (the default), oldest, or random |
 | `taosdump_tar` | One tar archive of such a directory, plain or gzip |
 
 "Either level" is not a convenience. **`taosdump -i` pointed at the
@@ -49,6 +49,51 @@ name. A gzip archive is decompressed for that pass, and the sandbox's own
 bzip2, xz or zstd archive is refused as an unsupported source rather than
 read as a damaged tar: an intact backup in a format the adapter does not
 read is not a corrupt one.
+
+## Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: taosdump_dir
+  path: /backups/tdengine
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one an
+incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum`, `backup.size_bytes` and
+`backup.created_at` do, and a scheduled drill choosing randomly covers the
+whole window over time.
+
+**Two clocks, never compared against each other.** What a dump records
+about itself — the start time in its own `dump_result.txt` — is one fact;
+the modification time of the directory it was copied into is another, and
+they answer different questions: when the backup was taken *there* against
+when the file was written *here*. So a dump that records its instant
+outranks one that does not, whichever end of the window is asked for; the
+recorded instant decides among the dumps that have one; directory time
+decides only among the dumps that do not; and a tie breaks on the name, in
+the direction the policy runs. A random draw likewise reaches only the
+dumps that date themselves, where there are any.
+
+That is a change from earlier releases, which substituted a directory's
+modification time for a missing recorded instant and compared the two
+against each other — so a dump freshly copied in and recording nothing
+could outrank the genuinely newest dump. **`newest` may therefore pick a
+different member than before in a directory that mixes dated and undated
+dumps**, and it picks the one a record can say something true about.
+
+`select` on `taosdump` or `taosdump_tar`, which restore what `source.path`
+names, is **refused** rather than ignored.
+
 
 ## The exit code is not the verdict
 
