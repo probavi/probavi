@@ -11,7 +11,7 @@ import (
 
 const (
 	adapterName    = "weaviate"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 
 	// engineBinary is started directly. The image's entrypoint is pinned
 	// to this same binary — and the binary ignores unknown positional
@@ -64,9 +64,17 @@ const (
 // wget exits non-zero on any non-2xx answer and names the status line on
 // stderr, so the status is the verdict — and because Weaviate answers
 // GraphQL errors as HTTP 200 with an "errors" array (measured), a body
-// carrying one fails the check too. The body is reduced to the one number
-// Weaviate states where it states one ("count" from Aggregate), passed
-// through otherwise.
+// carrying one fails the check too. The body is reduced to the one value
+// Weaviate states where it states one — "count" from an Aggregate, or
+// "maximum" from an aggregated date property — and passed through
+// otherwise.
+//
+// Reducing "maximum" is what lets freshness be declared (§6.1.1). It is
+// the same work this script already did for "count": undecorating the
+// engine's output into the row the runner contract requires, which is the
+// runner's documented job. It is not the other thing — recognising a
+// statement in order to rewrite it — which is what probavi-adapter/1
+// exists to remove and which this script has never done.
 const checkScript = `set -u
 class=$1; text=$2
 out=$(mktemp); errf=$(mktemp)
@@ -101,6 +109,7 @@ if grep -q '"errors":' "$out"; then
   exit 1
 fi
 n=$(grep -o '"count":[0-9][0-9]*' "$out" | head -1 | sed 's/.*://')
+if [ -z "$n" ]; then n=$(grep -o '"maximum":"[^"]*"' "$out" | head -1 | sed 's/.*:"//; s/"$//'); fi
 if [ -n "$n" ]; then printf '%s\n' "$n"; else cat "$out"; echo; fi`
 
 // probePayload reports identity and capabilities (§6.1).
@@ -114,12 +123,40 @@ func probePayload() any {
 	return map[string]any{
 		"name":              adapterName,
 		"adapter_version":   adapterVersion,
-		"protocol_versions": []string{protocolVersion},
+		"protocol_versions": protocolVersions,
 		"engine":            map[string]string{"name": "weaviate"},
 		"sources": []map[string]any{
 			{"kind": "weaviate_backup_tar", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "weaviate_backup", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "weaviate_backup_dir", "capabilities": map[string]bool{"pitr": false}},
+		},
+		// Weaviate names a class bare in GraphQL, so the core must not
+		// wrap it in the SQL-standard quotes it applies by default
+		// (§6.1.1). Empty open and close are a declaration, not an
+		// omission: this engine takes no quoting at all.
+		"identifier": map[string]string{"open": "", "close": "", "separator": "."},
+		// The generating built-ins, as GraphQL. They did not apply to this
+		// adapter at all before: the core composed SQL and Weaviate has
+		// none, so an operator wrote GraphQL for questions every other
+		// adapter answers with a built-in. table names a class.
+		//
+		// Measured on 1.39.2. table_exists and row_count are the same
+		// Aggregate query, because the engine answers both from it: a
+		// class that exists yields a count, and one that does not yields a
+		// GraphQL error the fence above turns into a non-zero exit, which
+		// is exactly what the core reads for each of them. freshness
+		// aggregates the property's maximum, which Weaviate renders as an
+		// RFC 3339 instant the core already parses.
+		"checks": map[string]any{
+			"table_exists": map[string]string{
+				"statement": "{ Aggregate { {{table}} { meta { count } } } }",
+			},
+			"row_count": map[string]string{
+				"statement": "{ Aggregate { {{table}} { meta { count } } } }",
+			},
+			"freshness": map[string]string{
+				"statement": "{ Aggregate { {{table}} { {{column}} { maximum } } } }",
+			},
 		},
 		"sql_runner": map[string]any{
 			"argv": []string{"sh", "-c", checkScript, "sh", "{{database}}", "{{sql}}"},

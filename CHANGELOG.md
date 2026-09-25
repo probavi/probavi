@@ -13,6 +13,38 @@ always called out explicitly.
 
 ### Added
 
+- **The generating built-in checks now work against Weaviate**
+  (`adapters/weaviate` 0.3.0), declared as GraphQL. They did not apply to
+  this adapter at all before: the core composed SQL and Weaviate has
+  none. `table` names a **class**.
+
+  `table_exists` and `row_count` are the same `Aggregate` query, because
+  the engine answers both from it — a class that exists yields a count,
+  and one that does not yields a GraphQL error the adapter's existing
+  fence turns into a failed check. `freshness` aggregates the property's
+  `maximum`, which Weaviate renders as an RFC 3339 instant the core
+  already reads.
+
+  The adapter declares **no quoting at all**, which is a declaration
+  rather than an omission: a class is named bare in GraphQL, so the core
+  must not wrap it in the SQL-standard quotes it applies by default.
+
+  One line of the adapter's check script changed with it — the engine's
+  answer is now reduced to `"maximum"` as well as `"count"`. That is the
+  same work the script already did: undecorating output into the row the
+  runner contract requires, which is the runner's job. It is not the
+  other thing, recognising a statement in order to rewrite it, which is
+  what `probavi-adapter/1` exists to remove and which this script has
+  never done.
+
+### Fixed
+
+- The ArangoDB adapter's README claimed its built-ins were "more than the
+  MongoDB adapter can offer, where they do not apply at all". MongoDB's
+  built-ins have applied since it declared them, so the sentence had
+  become untrue about a sibling adapter. It now says what is still true:
+  ArangoDB needed no declaration for any of the three.
+
 - **`row_count` and `freshness` now work against Neo4j**
   (`adapters/neo4j` 0.3.0), declared as Cypher. They did not apply to this
   adapter at all before: the core composed SQL and Neo4j has none, so an

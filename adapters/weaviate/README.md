@@ -118,9 +118,35 @@ to the one number Weaviate states where it states one (`"count"` from
 contains an `"errors":` key would trip that fence; ask such a question
 through a filtered `Aggregate` count instead.
 
-The core's generating built-in checks (`row_count`, `max_value`) compose
-SQL and therefore do not apply; write checks as GraphQL, the way the
-examples above do.
+**The generating built-ins work here now** — `table_exists`, `row_count`
+and `freshness` — and until this adapter declared them they did not apply
+at all, because the core composed SQL and Weaviate has none. Each is
+declared as GraphQL (adapter protocol §6.1.1, `probavi-adapter/1`), and
+`table` names a **class**:
+
+```yaml
+checks:
+  - builtin: row_count
+    table: Order
+    min: 1
+  - builtin: freshness
+    table: Order
+    column: ts
+    max_age: 24h
+```
+
+`table_exists` and `row_count` are the same `Aggregate` query, because the
+engine answers both from it: a class that exists yields a count, and one
+that does not yields a GraphQL error the fence above turns into a failed
+check. `freshness` aggregates the property's `maximum`, which Weaviate
+renders as an RFC 3339 instant the core already reads.
+
+The adapter also declares **no quoting at all**, which is a declaration
+rather than an omission: a class is named bare in GraphQL, so the core
+must not wrap it in the SQL-standard quotes it applies by default.
+
+Raw GraphQL and path checks still work exactly as before, and remain the
+way to ask anything the built-ins do not cover.
 
 ## What a drill can prove here, and what it cannot
 

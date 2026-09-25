@@ -181,8 +181,9 @@ exit code and this adapter's own words.
 ## Checks: AQL, with the built-ins working
 
 Checks are AQL. The declared runner absorbs the dialect so that **the
-core's three generating built-ins apply unchanged** — which is more than
-the MongoDB adapter can offer, where they do not apply at all:
+core's three generating built-ins apply unchanged** — without declaring
+a statement for any of them, which several engines in this catalogue have
+since had to do:
 
 | what the core composes | what the engine is asked |
 | --- | --- |

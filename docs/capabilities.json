@@ -1492,12 +1492,13 @@
       "name": "Weaviate",
       "status": "experimental",
       "since": "0.25.0",
-      "adapter_version": "0.2.0",
+      "adapter_version": "0.3.0",
       "engine": {
         "id": "weaviate",
         "name": "Weaviate"
       },
       "protocol_versions": [
+        "probavi-adapter/1",
         "probavi-adapter/0"
       ],
       "verified": [
