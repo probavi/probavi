@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -325,6 +326,179 @@ mysqladmin --socket=/var/run/mysqld/mysqld.sock -u root shutdown`
 	if out, err := exec.CommandContext(ctx, "docker", "cp", id+":/tmp/backup", dest).CombinedOutput(); err != nil {
 		t.Fatalf("extract backup: %v: %s", err, out)
 	}
+}
+
+// TestXtraBackupWithBinlogsEndToEnd is the point-in-time path on a real
+// server: a full, then two batches of rows separated in time, and two
+// drills against the same source directory. The default replays to the end
+// of the archive and sees both batches; the one with a target stops
+// between them and sees only the first. The row counts differ, so which
+// instant was reached is a measurement rather than a claim.
+func TestXtraBackupWithBinlogsEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+
+	image := buildXtraBackupImage(t, ctx)
+
+	binDir := t.TempDir()
+	if out, err := exec.CommandContext(ctx, "go", "build", "-o",
+		filepath.Join(binDir, "probavi-adapter-mysql"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build adapter: %v: %s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	source := t.TempDir()
+	target := makeBinlogFixture(t, ctx, image, source)
+
+	provider := docker.New(nil)
+	runner, err := adapter.New("mysql", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		pitr  *adapter.PITR
+		want  string
+		state string
+	}{
+		{"the whole archive", nil, "650", "physical+binlog"},
+		{"stopped at the target", &adapter.PITR{TargetTime: target}, "600", "physical+binlog"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sbx, err := provider.Create(ctx, map[string]string{
+				"image": image, "command": "sleep infinity", "memory": engineMemoryLimit})
+			if err != nil {
+				t.Fatalf("create idle sandbox: %v", err)
+			}
+			defer destroy(t, sbx)
+
+			res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+				Source: adapter.ProvisionSource{
+					Kind: "xtrabackup_with_binlogs", Path: source,
+					Params: map[string]string{"backup": "full", "binlogs": "binlogs"},
+				},
+				Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+				PITR:    tc.pitr,
+			}, sbx)
+			if err != nil {
+				t.Fatalf("provision: %v", err)
+			}
+			var state struct {
+				Mode string `json:"mode"`
+			}
+			if err := json.Unmarshal(res.State, &state); err != nil {
+				t.Fatalf("state: %v", err)
+			}
+			if state.Mode != tc.state {
+				t.Errorf("state.mode = %q, want %q", state.Mode, tc.state)
+			}
+			if res.Timings.RestoreSeconds <= 0 {
+				t.Errorf("restore_seconds = %v, want the restore and the replay measured",
+					res.Timings.RestoreSeconds)
+			}
+			if got := queryCount(t, ctx, sbx, probe, res); got != tc.want {
+				t.Errorf("row count = %s, want %s — the replay did not stop where the drill asked",
+					got, tc.want)
+			}
+			if _, err := runner.Teardown(ctx, res.State, "completed", sbx); err != nil {
+				t.Fatalf("teardown: %v", err)
+			}
+		})
+	}
+}
+
+// queryCount runs the row count through the probe-declared sql_runner,
+// exactly how internal/checks runs a check.
+func queryCount(t *testing.T, ctx context.Context, sbx *docker.Sandbox,
+	probe *adapter.ProbeResult, res *adapter.ProvisionResult) string {
+	t.Helper()
+	argv := make([]string, 0, len(probe.SQLRunner.Argv))
+	for _, a := range probe.SQLRunner.Argv {
+		a = strings.ReplaceAll(a, "{{user}}", res.Connection.User)
+		a = strings.ReplaceAll(a, "{{database}}", res.Connection.Database)
+		a = strings.ReplaceAll(a, "{{sql}}", `SELECT count(*) FROM "shop"."orders"`)
+		argv = append(argv, a)
+	}
+	out, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: argv})
+	if err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if out.ExitCode != 0 {
+		t.Fatalf("count query exit %d: %s", out.ExitCode, out.Stderr)
+	}
+	return strings.TrimSpace(string(out.Stdout))
+}
+
+// makeBinlogFixture seeds a server with the binary log on, takes a full
+// backup, then writes two batches of rows with a recorded instant between
+// them. It copies the full and the logs into one source directory and
+// returns that instant as an RFC 3339 target.
+//
+// The batches are separated by whole seconds on purpose: binary log event
+// timestamps are second-granular, so a target inside the same second as a
+// write would make the test's expectation a coin toss rather than a
+// measurement. The README states the same limitation for operators.
+func makeBinlogFixture(t *testing.T, ctx context.Context, image, dest string) string {
+	t.Helper()
+	out, err := exec.CommandContext(ctx, "docker", "run", "-d",
+		"--label", docker.LabelSandbox+"=1", "--label", "com.probavi.pid="+strconv.Itoa(os.Getpid()),
+		"--network", "none", image, "sleep", "infinity").Output()
+	if err != nil {
+		t.Fatalf("start seed container: %v", err)
+	}
+	id := strings.TrimSpace(string(out))
+	defer exec.Command("docker", "rm", "-f", "-v", id).Run() //nolint:errcheck // best-effort cleanup
+
+	// The logs live outside the data directory, which is what an archive
+	// does and what keeps --copy-back from meeting them.
+	seedScript := `set -e
+mkdir -p /binlogs && chown mysql:mysql /binlogs
+chown -R mysql:mysql /var/lib/mysql /var/run/mysqld
+gosu mysql mysqld --initialize-insecure --datadir=/var/lib/mysql
+gosu mysql mysqld --daemonize --server-id=1 --log-bin=/binlogs/binlog   --pid-file=/tmp/seed.pid --log-error=/tmp/seed.err
+S=/var/run/mysqld/mysqld.sock
+q() { mysql --socket=$S -u root "$@"; }
+q -e "CREATE DATABASE shop; CREATE TABLE shop.orders (id BIGINT AUTO_INCREMENT PRIMARY KEY, total DECIMAL(10,2) NOT NULL); INSERT INTO shop.orders (total) WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 500) SELECT ROUND(RAND()*100,2) FROM seq;"
+xtrabackup --backup --user=root --socket=$S --target-dir=/tmp/backup
+# Batch A: 100 rows the replay must always reach.
+q -e "INSERT INTO shop.orders (total) WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 100) SELECT ROUND(RAND()*100,2) FROM seq;"
+sleep 2
+q -N -B -e "SELECT UTC_TIMESTAMP()" > /tmp/target
+sleep 2
+# Batch B: 50 rows only the untargeted replay may reach.
+q -e "INSERT INTO shop.orders (total) WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n < 50) SELECT ROUND(RAND()*100,2) FROM seq;"
+q -e "FLUSH BINARY LOGS"
+mysqladmin --socket=$S -u root shutdown`
+	if out, err := exec.CommandContext(ctx, "docker", "exec", id, "bash", "-c", seedScript).CombinedOutput(); err != nil {
+		t.Fatalf("seed binlog fixture: %v: %s", err, out)
+	}
+
+	for remote, local := range map[string]string{
+		"/tmp/backup": filepath.Join(dest, "full"),
+		"/binlogs":    filepath.Join(dest, "binlogs"),
+	} {
+		if out, err := exec.CommandContext(ctx, "docker", "cp", id+":"+remote, local).CombinedOutput(); err != nil {
+			t.Fatalf("extract %s: %v: %s", remote, err, out)
+		}
+	}
+
+	raw, err := exec.CommandContext(ctx, "docker", "exec", id, "cat", "/tmp/target").Output()
+	if err != nil {
+		t.Fatalf("read the recorded instant: %v", err)
+	}
+	// "2026-09-25 14:30:00" as the server saw it, in UTC, to the absolute
+	// instant the protocol carries.
+	stamp := strings.TrimSpace(string(raw))
+	target := strings.Replace(stamp, " ", "T", 1) + "Z"
+	if _, err := time.Parse(time.RFC3339, target); err != nil {
+		t.Fatalf("the seed recorded %q, which is not an instant: %v", stamp, err)
+	}
+	return target
 }
 
 // makeFixture seeds the default database with 500 rows and extracts a real

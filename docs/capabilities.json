@@ -748,7 +748,7 @@
       "name": "MySQL",
       "status": "experimental",
       "since": "0.1.0",
-      "adapter_version": "0.15.0",
+      "adapter_version": "0.16.0",
       "engine": {
         "id": "mysql",
         "name": "MySQL"
@@ -790,9 +790,14 @@
           "id": "xtrabackup",
           "name": "An unprepared Percona XtraBackup full backup (physical restore)",
           "pitr": false
+        },
+        {
+          "id": "xtrabackup_with_binlogs",
+          "name": "A directory holding an unprepared XtraBackup full and the binary logs written after it, named by source.params.backup and source.params.binlogs — the full is restored, then the logs are replayed from the position it ended on, to target.pitr or to the end of the archive",
+          "pitr": true
         }
       ],
-      "pitr": false,
+      "pitr": true,
       "conformance_verified": true,
       "docs": "adapters/mysql/README.md"
     },

@@ -13,6 +13,7 @@ from the protocol document alone.
 | `mysqldump_dir` | A directory of dump files, plain or gzip-compressed; `params.select` picks which one — `newest` by the time each dump records in its own trailer (the default), `oldest`, or `random`. |
 | `mysqldump_with_users` | A directory holding an accounts-and-grants script (`params.users`) and one dump — either may be gzip-compressed; the accounts are replayed first, and the drill fails while the restored principal chain is broken. |
 | `xtrabackup`    | A Percona XtraBackup full-backup directory (unprepared, as `xtrabackup --backup` leaves it) — a physical restore. |
+| `xtrabackup_with_binlogs` | A directory holding such a backup (`params.backup`) and the binary logs written after it (`params.binlogs`) — the full is restored, then the logs are replayed. The only kind here that supports **point-in-time recovery**. |
 
 ## Sandbox image and authentication
 
@@ -498,6 +499,86 @@ the earlier of the two is chosen.
   dates the dump member: an accounts script carries no timestamp of its
   own, so the pair's freshness rests on the member that can be dated.
 
+## The xtrabackup_with_binlogs kind (point-in-time recovery)
+
+A full backup proves one moment. Everything written after it — the hours
+an incident actually spans — is outside the drill unless the logs that
+recorded it are replayed too, and a recovery run-book that ends at the
+full is not the run-book anyone follows at 3am.
+
+```yaml
+target:
+  source:
+    kind: xtrabackup_with_binlogs
+    path: /backups/mysql/2026-09-25   # holds both members
+    params:
+      backup: full                    # the xtrabackup --target-dir output
+      binlogs: binlogs                # the logs written after it
+  pitr:
+    target_age: 6h                    # or target_time, an absolute instant
+```
+
+**Why one directory and two names.** The core hands an adapter only files
+belonging to the drill's configured source (adapter protocol §4.2), which
+exists so an adapter — a third-party binary — cannot copy arbitrary host
+files into a sandbox it controls. A server's live binary log directory is
+therefore not something a drill can point at: an archive copies the logs
+beside the full they follow, which is the layout a run-book wants anyway.
+Both members are named explicitly rather than recognised by layout, so
+renaming a directory cannot silently change what a drill proves.
+
+**Where the replay starts.** From the backup itself. `xtrabackup --backup`
+writes `xtrabackup_binlog_info` naming the log file and position the server
+had reached, so the replay begins exactly where the full stops — no
+overlap to re-apply, no gap to guess at. A backup without that file was
+taken from a server with the binary log switched off, and is refused with
+that said rather than worked around.
+
+**Where it stops.** At `target.pitr` if the drill asks for one, and at the
+end of the archive if it does not — "how far can we actually recover" is a
+question worth drilling on its own.
+
+**Two refusals rather than a best effort.** A directory missing the log the
+backup named cannot be replayed at all. A gap in the middle is worse: the
+replay would succeed, stop early, and leave a signed record claiming a
+recovery that skipped whatever the missing log held. Both fail the drill
+and name the file.
+
+### The precision this can and cannot give you
+
+**Binary log event timestamps are second-granular**, while a drill's target
+is an absolute instant in milliseconds. `--stop-datetime` stops at the
+first event *at or after* the target, so the point actually reached can be
+earlier and coarser than the point requested. The evidence schema is
+already right about this — `drill.pitr_target` records the instant
+**requested**, never a claim about the instant reached — but a reader who
+is not told will assume otherwise.
+
+The replay runs under `TZ=UTC` and the target is converted to UTC, because
+`--stop-datetime` is read in the *client's* local zone. Left to the image's
+zone, the same drill config would stop at a different point on a
+differently configured host, and a recovery point that depends on the
+machine it was proved on is not evidence.
+
+The replay is **positional, not GTID-based**. `xtrabackup_binlog_info` may
+carry a GTID set as a third field and this adapter ignores it: a
+GTID-based replay asks the server to skip what it already has, which is a
+different guarantee needing a different proof, and mixing the two would
+leave a record that does not say which one it rested on.
+
+### What the record says
+
+The replay's seconds count toward `restore_seconds`, not a phase of their
+own: every one of them is time an operator would spend before the database
+is usable, which is what the RTO trend is for. `backup.created_at` remains
+when the **full** was taken — the logs reach further forward and the record
+does not pretend otherwise; how far is what `drill.pitr_target` records.
+`state.mode` reads `physical+binlog` rather than `physical`, because it is
+a different proof from a full-only restore.
+
+The sandbox image needs `mysqlbinlog` beside `mysqld`, `xtrabackup` and
+`gosu` — the official client tooling ships it.
+
 ## Source params
 
 Set under `source.params` in the drill config.
@@ -507,6 +588,8 @@ Set under `source.params` in the drill config.
 | `users`           | `mysqldump_with_users` | **Required.** Bare filename of the accounts-and-grants script inside the source directory. |
 | `dump`            | `mysqldump_with_users` | Optional. Bare filename of the dump; without it `select` picks from the non-users files. |
 | `select`          | `mysqldump_dir`, and `mysqldump_with_users` without `dump` | Optional, default `newest`. Which backup in the directory the drill restores: `newest`, `oldest` or `random` — see below. Refused on the kinds that select nothing. |
+| `backup`          | `xtrabackup_with_binlogs` | **Required.** Bare name of the XtraBackup backup directory inside the source directory. |
+| `binlogs`         | `xtrabackup_with_binlogs` | **Required.** Bare name of the directory holding the binary logs written after that backup. |
 | `backup_timezone` | all                    | Optional. IANA zone name of the host that took the backup (e.g. `Europe/Budapest`). Without it `backup.created_at` is null — see above. |
 
 ## Drill config options

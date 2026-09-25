@@ -82,6 +82,11 @@ func provisionPhysical(ctx context.Context, c *core, req *provisionRequest, src 
 	}
 	logger.Info("engine recovered and ready", "seconds", readySeconds)
 
+	replaySeconds, perr := replayBinlogs(ctx, c, req, src, backupInSandbox, logger)
+	if perr != nil {
+		return nil, perr
+	}
+
 	return map[string]any{
 		"connection": map[string]any{
 			"scheme": "mysql", "host": "127.0.0.1", "port": defaultPort,
@@ -93,12 +98,78 @@ func provisionPhysical(ctx context.Context, c *core, req *provisionRequest, src 
 		"timings": map[string]any{
 			"engine_ready_seconds": readySeconds,
 			"transfer_seconds":     put.DurationSeconds,
-			"restore_seconds":      restore.DurationSeconds,
+			// The replay is recovery, not discovery: every second of it is
+			// time an operator would spend before the database is usable,
+			// so it counts toward restore_seconds and the RTO trend rather
+			// than disappearing into a phase of its own.
+			"restore_seconds": restore.DurationSeconds + replaySeconds,
 		},
 		"state": map[string]any{
-			"database": physicalDatabase, "user": defaultUser, "mode": "physical",
+			"database": physicalDatabase, "user": defaultUser, "mode": mode(src),
 		},
 	}, nil
+}
+
+// mode is what the record's state says this restore was. The binlog replay
+// is a different proof from a full-only restore — it reaches a later
+// instant — so it says so rather than sharing one word with the kind that
+// stops at the backup.
+func mode(src *resolvedSource) string {
+	if src.binlogsPath != "" {
+		return "physical+binlog"
+	}
+	return "physical"
+}
+
+// replayBinlogs carries the restored server forward from the instant the
+// full backup ended to the target the drill asked for, or to the end of
+// the archive when it asked for none (binlog.go). Returns the measured
+// seconds; zero for a kind that has no logs.
+//
+// The order matters and is not arbitrary: the logs go in *after* the
+// server is serving, because mysqlbinlog produces SQL and a server has to
+// be up to accept it. That is the same order an operator follows, which is
+// the point — a drill that proved a recovery no run-book describes would
+// prove the wrong thing.
+func replayBinlogs(ctx context.Context, c *core, req *provisionRequest, src *resolvedSource,
+	backupInSandbox string, logger *slog.Logger) (float64, *protoError) {
+	if src.binlogsPath == "" {
+		return 0, nil
+	}
+	start, perr := readBinlogStart(src.path)
+	if perr != nil {
+		return 0, perr
+	}
+	files, perr := binlogFilesFrom(src.binlogsPath, start)
+	if perr != nil {
+		return 0, perr
+	}
+	stop, perr := binlogStopDatetime(req)
+	if perr != nil {
+		return 0, perr
+	}
+
+	// The logs travel as their own directory beside the backup, so the
+	// replay reads them where they land rather than from the host.
+	logsInSandbox := backupInSandbox + "-binlogs"
+	if _, perr := c.putFile(ctx, putFileArgs{
+		SourcePath: src.binlogsPath, DestPath: logsInSandbox, Mode: "0755",
+	}); perr != nil {
+		return 0, perr
+	}
+
+	replay, stderr, perr := execChecked(ctx, c,
+		binlogReplayArgv(logsInSandbox, start, stop, files)...)
+	if perr != nil {
+		return 0, perr
+	}
+	if replay.ExitCode != 0 {
+		return 0, protoErr("restore_failed", false,
+			"binary log replay failed (%s): %s", binlogSummary(files, stop), firstLine(stderr))
+	}
+	logger.Info("binary logs replayed", "from", start.file, "position", start.position,
+		"chain", binlogSummary(files, stop), "seconds", replay.DurationSeconds)
+	return replay.DurationSeconds, nil
 }
 
 // checkIdleSandbox verifies the preconditions of a physical restore: no

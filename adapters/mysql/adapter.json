@@ -30,6 +30,7 @@
     "mysqldump": "One mysqldump SQL file, plain or gzip-compressed",
     "mysqldump_dir": "A directory of mysqldump files, plain or gzip-compressed; source.params.select picks which one is restored \u2014 newest by the time each dump records in its own trailer (the default), oldest, or random",
     "mysqldump_with_users": "A directory holding one dump and an accounts-and-grants script, restored together \u2014 the dump named by source.params.dump, or picked by source.params.select; either may be gzip-compressed",
-    "xtrabackup": "An unprepared Percona XtraBackup full backup (physical restore)"
+    "xtrabackup": "An unprepared Percona XtraBackup full backup (physical restore)",
+    "xtrabackup_with_binlogs": "A directory holding an unprepared XtraBackup full and the binary logs written after it, named by source.params.backup and source.params.binlogs \u2014 the full is restored, then the logs are replayed from the position it ended on, to target.pitr or to the end of the archive"
   }
 }
