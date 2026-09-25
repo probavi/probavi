@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://probavi.dev/schemas/manifest/manifest.json",
+  "title": "probavi-manifest/1 — a backup tool's statement about what it wrote",
+  "description": "One JSON file written beside a backup at backup time and named by target.source.manifest. The core reads it before the sandbox is created and refuses the drill when the artifact disagrees. Normative document: ../../backup-manifest.md. Note that expected_checksum is computed under the rule in that document's §3 and is NOT the adapter-defined backup.checksum an evidence record carries: the two answer different questions and are not comparable (§4).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "probavi-manifest/1",
+      "description": "Pins the shape. Required; an absent or unknown value is a configuration error, not a manifest to guess at."
+    },
+    "expected_checksum": {
+      "$ref": "#/$defs/sha256Ref",
+      "description": "The artifact's digest under backup-manifest.md §3: SHA-256 over a regular file's bytes, or the canonical tree hash for a directory. Not the adapter's backup.checksum."
+    },
+    "expected_size_bytes": {
+      "$ref": "#/$defs/int53",
+      "description": "A regular file's size, or the sum of every regular file's size in a directory."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the backup job says it produced the artifact. Informational: it is the backup tool's claim, and never populates the record's backup.created_at, which is the adapter's measurement of the artifact itself."
+    },
+    "engine_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Informational. Version compatibility is enforced by the adapter, from the artifact, not from this file."
+    }
+  },
+  "required": ["schema"],
+  "anyOf": [
+    { "required": ["expected_checksum"] },
+    { "required": ["expected_size_bytes"] }
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "sha256Ref": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "int53": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    }
+  }
+}

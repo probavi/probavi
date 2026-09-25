@@ -11,6 +11,10 @@ JSON Schema (draft 2020-12) files for Probavi's frozen contracts:
   covering every published schema version (`probavi-evidence/0` and `/1`).
 - `notification/payload.json` — the webhook notification body
   (`probavi-notification/1`) receivers parse.
+- `manifest/manifest.json` — a backup manifest (`probavi-manifest/1`), the
+  file a backup job writes beside its output and a drill checks the
+  artifact against before the sandbox is created. Its normative document
+  is `../backup-manifest.md`.
 - `capabilities/capabilities.json` — the generated capabilities manifest
   (`probavi-capabilities/1`), which states what Probavi can do in this
   repository. Its normative document is `../capabilities.md`; the
