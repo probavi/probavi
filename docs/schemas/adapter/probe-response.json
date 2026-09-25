@@ -31,7 +31,13 @@
           "kind": { "type": "string", "minLength": 1 },
           "capabilities": {
             "type": "object",
-            "properties": { "pitr": { "type": "boolean" } },
+            "properties": {
+              "pitr": { "type": "boolean" },
+              "select": {
+                "type": "boolean",
+                "description": "v1 (\u00a76.1.2). Whether the kind chooses one backup out of a directory and honours source.select. Absent means not declared, which is not the same as false."
+              }
+            },
             "required": ["pitr"],
             "additionalProperties": false
           }
@@ -62,6 +68,30 @@
       "type": "array",
       "items": { "enum": ["exec", "put_file"] },
       "uniqueItems": true
+    },
+    "identifier": {
+      "type": "object",
+      "description": "v1 (\u00a76.1.1). How this engine spells a qualified name. Absent means the SQL-standard default the core has always applied: \" \" and a dot.",
+      "properties": {
+        "open": { "type": "string", "maxLength": 2 },
+        "close": { "type": "string", "maxLength": 2 },
+        "separator": { "type": "string", "minLength": 1, "maxLength": 1 }
+      },
+      "required": ["open", "close", "separator"],
+      "additionalProperties": false
+    },
+    "checks": {
+      "type": "object",
+      "description": "v1 (\u00a76.1.1). The statement for a named built-in check kind, in whatever language this engine's sql_runner takes. Keys are built-in check kinds the core publishes; an undeclared kind is composed by the core as in v0.",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "statement": { "type": "string", "minLength": 1 }
+        },
+        "required": ["statement"],
+        "additionalProperties": false
+      }
     }
   },
   "required": ["name", "adapter_version", "protocol_versions", "engine", "sources", "sql_runner", "verbs_required"],
