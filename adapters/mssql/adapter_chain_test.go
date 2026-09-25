@@ -299,7 +299,7 @@ func TestProvisionChainMemberFailure(t *testing.T) {
 }
 
 func TestChainNamesReadsInRestoreOrder(t *testing.T) {
-	chain, perr := buildChain(realDirectory())
+	chain, perr := buildChain(realDirectory(), selectNewest)
 	if perr != nil {
 		t.Fatalf("buildChain: %+v", perr)
 	}

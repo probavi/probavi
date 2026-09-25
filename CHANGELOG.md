@@ -78,7 +78,25 @@ always called out explicitly.
   directory holding no completed backup is still refused under every
   policy.
 
-  Sixteen `*_dir` kinds across fourteen adapters are still to come.
+  Then **`adapters/mssql` 0.9.0**, alone, because it is the one adapter
+  that had to answer the question twice. `bak_dir` and `bak_with_logins`
+  choose an *artifact*, and only the engine can say what a file holds — so
+  the ranking happens in the sandbox over what `RESTORE HEADERONLY`
+  reported for every candidate, and the datedness rule survives inversion
+  there exactly as it does in `adapters/postgres`. `bak_chain` chooses a
+  *chain*, and the policy picks which full backup it is anchored on,
+  ordered by the checkpoint log sequence number the engine itself assigns;
+  everything after the anchor follows from that full's own checkpoint, so
+  an older full brings its own differentials and its own logs and the
+  chain ends where the next full begins. That makes `select: oldest` on a
+  chain directory the strongest form this feature takes anywhere in the
+  catalogue: it proves the far end of the retention window still replays
+  forward, which is the recovery an incident actually performs. There is
+  no datedness rule to preserve on a chain — a full whose checkpoint
+  cannot be read is refused rather than ranked, under every policy — so
+  `oldest` there really is `newest` turned around.
+
+  Fifteen `*_dir` kinds across thirteen adapters are still to come.
 
 - **A release now runs the binaries it publishes.** Everything else in
   this repository proves the source tree: the unit suite, the integration

@@ -61,13 +61,21 @@ func lsn(value string) (*big.Int, bool) {
 	return n, true
 }
 
-// buildChain assembles the restore order for one database: the newest
-// full, the newest differential that builds on it, and then the log
-// backups that carry the redo point forward from there. A gap in the log
-// sequence is an error, not a place to stop quietly — stopping would
+// buildChain assembles the restore order for one database: the full the
+// policy asks for, the newest differential that builds on it, and then the
+// log backups that carry the redo point forward from there. A gap in the
+// log sequence is an error, not a place to stop quietly — stopping would
 // leave the record claiming a chain restore that silently ended early.
-func buildChain(nodes []chainNode) ([]chainNode, *protoError) {
-	full, perr := newestFull(nodes)
+//
+// Only the anchor is the policy's to choose. Everything after it follows
+// from that full's own checkpoint: a differential or log carries the
+// checkpoint of the full it builds on (buildsOn), so an older full brings
+// its own differentials and its own logs, and the chain ends where the
+// next full begins. That is exactly the recovery an operator would
+// perform from the far end of the retention window, which is what makes
+// oldest worth having here.
+func buildChain(nodes []chainNode, policy selectPolicy) ([]chainNode, *protoError) {
+	full, perr := chooseFull(nodes, policy)
 	if perr != nil {
 		return nil, perr
 	}
@@ -90,32 +98,50 @@ func buildChain(nodes []chainNode) ([]chainNode, *protoError) {
 	return append(chain, logs...), nil
 }
 
-// newestFull picks the full backup the chain starts from: the one with
-// the greatest checkpoint, which is the engine's own ordering and does
-// not depend on file times or clocks.
+// chooseFull picks the full backup the chain starts from, ordered by
+// checkpoint — the engine's own ordering, which does not depend on file
+// times or clocks.
 //
 // A full whose checkpoint cannot be read is refused rather than passed
 // over: skipping it would report "no full backup" while naming one, and a
 // header this adapter cannot read is exactly what a drill should surface.
-func newestFull(nodes []chainNode) (chainNode, *protoError) {
-	var best chainNode
-	var bestLSN *big.Int
+// That refusal is also why the ordering here really is symmetric, unlike
+// the one in backupset.go: nothing undatable survives to be compared, so
+// oldest is newest turned around and there is no first rule to preserve.
+// The refusal itself is not a policy's to skip — every full is read under
+// all three, a random draw included.
+func chooseFull(nodes []chainNode, policy selectPolicy) (chainNode, *protoError) {
+	fulls := make([]chainNode, 0, len(nodes))
 	for _, n := range nodes {
 		if n.set.backupType != backupTypeFull {
 			continue
 		}
-		value, ok := lsn(n.set.checkpoint)
-		if !ok {
+		if _, ok := lsn(n.set.checkpoint); !ok {
 			return chainNode{}, protoErr("source_corrupt", false,
 				"the full backup %s has no readable checkpoint, so nothing can be chained onto it", n.name())
 		}
-		if bestLSN == nil || value.Cmp(bestLSN) > 0 {
-			best, bestLSN = n, value
-		}
+		fulls = append(fulls, n)
 	}
-	if bestLSN == nil {
+	if len(fulls) == 0 {
 		return chainNode{}, protoErr("source_not_found", false,
 			"no full backup to start a chain from: %s", describeNodes(nodes))
+	}
+	if policy == selectRandom {
+		return fulls[randomIndex(len(fulls))], nil
+	}
+	// Cmp answers exactly -1, 0 or 1, so the policy is the answer the
+	// comparison has to give for a candidate to take the lead.
+	want := 1
+	if policy == selectOldest {
+		want = -1
+	}
+	best := fulls[0]
+	bestLSN, _ := lsn(best.set.checkpoint)
+	for _, n := range fulls[1:] {
+		value, _ := lsn(n.set.checkpoint)
+		if value.Cmp(bestLSN) == want {
+			best, bestLSN = n, value
+		}
 	}
 	return best, nil
 }

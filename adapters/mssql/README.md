@@ -10,9 +10,9 @@ in-repo adapters, it is written from the protocol document alone.
 | Kind      | Meaning                                                       |
 |-----------|---------------------------------------------------------------|
 | `bak`     | One native `BACKUP DATABASE ... TO DISK` file.                |
-| `bak_dir` | A directory of backup files; the **full** backup whose header records the newest completion time is restored (see below). |
-| `bak_with_logins` | A directory holding a server-logins T-SQL script (`params.logins`) and one `.bak`; the logins are replayed first, and the drill fails if any restored SQL user is left without a matching server login. |
-| `bak_chain` | A directory of backups replayed as a **chain**: the newest full, its newest differential, and the log backups that follow — the state the backup set can actually recover to. |
+| `bak_dir` | A directory of backup files; `source.params.select` picks one — newest by the completion time each **full** backup's own header records (the default), oldest, or random (see below). |
+| `bak_with_logins` | A directory holding a server-logins T-SQL script (`params.logins`) and one `.bak` — named by `params.bak` or picked by `params.select`; the logins are replayed first, and the drill fails if any restored SQL user is left without a matching server login. |
+| `bak_chain` | A directory of backups replayed as a **chain**: the full `source.params.select` picks, its newest differential, and the log backups that follow — the state that backup set can actually recover to. |
 
 ## Sandbox image: start it idle
 
@@ -80,6 +80,58 @@ at the first full backup it found. Probing is how the drill *finds* the
 backup; only the transfer that feeds the restore is counted as recovery
 time.
 
+### Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: bak_dir
+  path: /backups/mssql
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one an
+incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum`, `backup.size_bytes` and
+`backup.created_at` do, and a scheduled drill choosing randomly covers the
+whole window over time.
+
+Every policy ranks by what the header records, above, so `oldest` here is
+exactly as strong as `newest` already was — a copy's file time cannot make
+an artifact look like either end of the window. One rule does not invert:
+media the engine could date outranks media it could not, under `oldest`
+too, because a backup with no recorded completion time is not an old one.
+A random draw likewise reaches only the media the record could name a
+completion time for, where there is any. Where nothing carries a date the
+scan order decides, and `oldest` reads that order from the other end —
+oldest file first, ties broken by the smaller name.
+
+`select` on `bak`, which restores what `source.path` names, is **refused**
+rather than ignored — as is `select` beside a `params.bak` that already
+names the member outright.
+
+**On `bak_chain` the policy picks the chain's anchor**, not a lone
+artifact: which full backup the chain starts from, ordered by the
+checkpoint log sequence number the engine itself assigns. Everything after
+it follows from that full's own checkpoint, so an older full brings its own
+differentials and its own logs and the chain ends where the next full
+begins — exactly the recovery an operator performs from the far end of the
+retention window. Unlike the directory ranking there is no datedness rule
+to preserve here: a full whose checkpoint cannot be read is refused rather
+than passed over, under every policy, so `oldest` really is `newest` turned
+around.
+
+The settle check does not change with the policy either. The adapter chose
+the artifact under all three, so one a backup job is still writing still
+fails the drill by name rather than quietly falling back to a neighbour.
+
 Two consequences worth knowing:
 
 - **A drill restores the newest full backup, not the latest state.** The
@@ -143,8 +195,9 @@ were measured rather than assumed:
   previous ended, so the chain is followed by carrying a redo point
   forward rather than by sorting on file times.
 
-The order is: the newest full, its newest differential (if any), then the
-logs from there. Every member restores `WITH NORECOVERY` and the last one
+The order is: the full `params.select` picks (the newest by checkpoint
+unless the config says otherwise), its newest differential (if any), then
+the logs from there. Every member restores `WITH NORECOVERY` and the last one
 `WITH RECOVERY`, so the database becomes usable exactly once, at the end.
 Intermediate logs the differential already covers are not replayed.
 
@@ -221,7 +274,7 @@ source:
   path: /backups/shop              # a directory holding both members
   params:
     logins: logins.sql             # bare filename inside the directory
-    bak: shop-2026-08-08.bak       # optional: without it, the newest full backup in the directory
+    bak: shop-2026-08-08.bak       # optional: without it, params.select decides
 ```
 
 The members are named explicitly (no filename-pattern guessing), and one
@@ -395,7 +448,8 @@ Set under `source.params` in the drill config.
 |-------------------|-------------------|---------------------------------------------------------|
 | `database_name`   | `bak_chain`       | Required only when the directory holds backups of more than one database; names the one to restore. |
 | `logins`          | `bak_with_logins` | **Required.** Bare filename of the server-logins script inside the source directory. |
-| `bak`             | `bak_with_logins` | Optional. Bare filename of the backup; without it the directory is scanned for the newest full backup. |
+| `bak`             | `bak_with_logins` | Optional. Bare filename of the backup; without it the directory is scanned and `select` decides. Naming both `bak` and `select` is refused. |
+| `select`          | `bak_dir`, `bak_chain`, `bak_with_logins` | Optional. `newest` (default), `oldest` or `random` — which member of the retention window the drill proves. See above. |
 | `backup_timezone` | all               | Optional. IANA zone name of the host that took the backup (e.g. `Europe/Budapest`). Without it `backup.created_at` is null — see above. |
 
 ## Drill config options

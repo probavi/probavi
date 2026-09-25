@@ -43,20 +43,32 @@ type sourcePlan struct {
 	// loc is the zone the operator declared the backup host was in; nil
 	// when none was declared, in which case no creation time is reported.
 	loc *time.Location
+	// policy is which member of the directory the drill asked for
+	// (selection.go); selectNewest where the config declared nothing, and
+	// meaningless when fixed names the artifact outright.
+	policy selectPolicy
 }
 
 // resolveSource maps a source kind to a plan for finding one restorable
 // artifact.
 //
 //	bak             — path is a native BACKUP DATABASE file
-//	bak_dir         — path is a directory of backup files
+//	bak_dir         — path is a directory of backup files;
+//	                  source.params.select picks one, newest by default
+//	                  (selection.go)
 //	bak_with_logins — path is a directory holding a server-logins T-SQL
-//	                  script (params.logins) and one or more .bak files
+//	                  script (params.logins) and one or more .bak files;
+//	                  params.bak names the backup, or select picks it
 //	bak_chain       — path is a directory of backups replayed as a chain:
-//	                  the newest full, its newest differential, and the
-//	                  log backups that follow (see chain.go)
+//	                  the full source.params.select picks, its newest
+//	                  differential, and the log backups that follow
+//	                  (see chain.go)
 func resolveSource(kind, path string, params map[string]string) (*sourcePlan, *protoError) {
 	loc, perr := backupLocation(params)
+	if perr != nil {
+		return nil, perr
+	}
+	policy, perr := backupSelection(kind, params)
 	if perr != nil {
 		return nil, perr
 	}
@@ -71,7 +83,7 @@ func resolveSource(kind, path string, params map[string]string) (*sourcePlan, *p
 		if perr != nil {
 			return nil, perr
 		}
-		return &sourcePlan{candidates: candidates, skipped: skipped, dir: path, loc: loc}, nil
+		return &sourcePlan{candidates: candidates, skipped: skipped, dir: path, loc: loc, policy: policy}, nil
 	case "bak_chain":
 		candidates, skipped, perr := candidatesIn(path, "")
 		if perr != nil {
@@ -82,9 +94,10 @@ func resolveSource(kind, path string, params map[string]string) (*sourcePlan, *p
 			return nil, protoErr("invalid_request", false,
 				"source.params.database_name %s must contain only letters, digits, underscores, and hyphens", name)
 		}
-		return &sourcePlan{candidates: candidates, skipped: skipped, dir: path, loc: loc, databaseName: name}, nil
+		return &sourcePlan{candidates: candidates, skipped: skipped, dir: path, loc: loc,
+			databaseName: name, policy: policy}, nil
 	case "bak_with_logins":
-		return planWithLogins(path, params, loc)
+		return planWithLogins(path, params, loc, policy)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: bak, bak_dir, bak_with_logins, bak_chain)", kind)
@@ -103,7 +116,8 @@ func resolveSource(kind, path string, params map[string]string) (*sourcePlan, *p
 // change what a drill proves. The backup member may be named too; without
 // it the directory is scanned like bak_dir, so a drill against a rotating
 // directory keeps working unattended.
-func planWithLogins(dir string, params map[string]string, loc *time.Location) (*sourcePlan, *protoError) {
+func planWithLogins(dir string, params map[string]string, loc *time.Location,
+	policy selectPolicy) (*sourcePlan, *protoError) {
 	info, err := os.Stat(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -125,7 +139,7 @@ func planWithLogins(dir string, params map[string]string, loc *time.Location) (*
 		return nil, perr
 	}
 
-	plan := &sourcePlan{dir: dir, loginsPath: loginsPath, loc: loc}
+	plan := &sourcePlan{dir: dir, loginsPath: loginsPath, loc: loc, policy: policy}
 	if requested := params["bak"]; requested != "" {
 		name, perr := memberName(requested, "bak")
 		if perr != nil {

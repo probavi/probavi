@@ -49,7 +49,7 @@ func selectChain(ctx context.Context, c *core, plan *sourcePlan, probePath strin
 	if perr != nil {
 		return nil, perr
 	}
-	chain, perr := buildChain(nodesFor(nodes, database))
+	chain, perr := buildChain(nodesFor(nodes, database), plan.policy)
 	if perr != nil {
 		return nil, perr
 	}

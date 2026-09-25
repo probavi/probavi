@@ -28,8 +28,8 @@
   ],
   "sources": {
     "bak": "One native SQL Server .bak backup file",
-    "bak_dir": "A directory of backup files; the full backup whose header records the newest completion time is restored",
-    "bak_with_logins": "A directory holding one .bak and a server-logins T-SQL script, restored together",
-    "bak_chain": "A directory of backups replayed as a chain: the newest full, its newest differential, and the log backups that follow"
+    "bak_dir": "A directory of backup files; source.params.select picks which one is restored — newest by the completion time each backup's own header records (the default), oldest, or random",
+    "bak_with_logins": "A directory holding one .bak and a server-logins T-SQL script, restored together — the backup named by source.params.bak, or picked by source.params.select",
+    "bak_chain": "A directory of backups replayed as a chain: the full source.params.select picks — newest by checkpoint (the default), oldest, or random — its newest differential, and the log backups that follow"
   }
 }
