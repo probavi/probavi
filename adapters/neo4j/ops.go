@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "neo4j"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 
 	// defaultDatabase is the database a Neo4j server serves unless its
 	// image configures another one, and the only one Community Edition
@@ -67,11 +67,48 @@ func probePayload() any {
 	return map[string]any{
 		"name":              adapterName,
 		"adapter_version":   adapterVersion,
-		"protocol_versions": []string{protocolVersion},
+		"protocol_versions": protocolVersions,
 		"engine":            map[string]string{"name": "neo4j"},
 		"sources": []map[string]any{
 			{"kind": "neo4j_dump", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "neo4j_dump_dir", "capabilities": map[string]bool{"pitr": false}},
+		},
+		// Cypher quotes an identifier with backticks, not the SQL-standard
+		// double quote the core applies by default (§6.1.1).
+		"identifier": map[string]string{"open": "`", "close": "`", "separator": "."},
+		// Two of the three generating built-ins, in Cypher. They did not
+		// apply to this adapter at all before: the core composed SQL and
+		// Neo4j has none, so an operator wrote raw Cypher for questions
+		// every other adapter answers with a built-in.
+		//
+		// Measured on 5.26. row_count counts the nodes carrying a label;
+		// freshness takes max() of a property, which is that property's
+		// maximum rather than the value on the newest node. Neo4j renders
+		// a datetime as ISO 8601 and omits components that are zero, so an
+		// instant on a whole minute prints without seconds — the core's
+		// timestamp list reads both, which is where a rendering belongs.
+		//
+		// table_exists is deliberately **not** declared, and the reason is
+		// the engine rather than the effort. Cypher has no construct for
+		// raising a condition: a label that is absent makes MATCH return
+		// zero rows, not an error, and the only expression that does fail
+		// is integer division by zero — which would put "/ by zero" in
+		// front of an operator who asked whether a label exists. Nor is
+		// one needed here: a label exists only while some node carries it,
+		// so "is this label present" and "did this data restore" are the
+		// same question, and `row_count` with a minimum answers it and
+		// says by how much.
+		//
+		// A label is not qualified. A qualified name would be substituted
+		// as `a`.`b` and fail as a syntax error, which is the right
+		// outcome — the database a check runs against is options.database.
+		"checks": map[string]any{
+			"row_count": map[string]string{
+				"statement": "MATCH (n:{{table}}) RETURN count(n)",
+			},
+			"freshness": map[string]string{
+				"statement": "MATCH (n:{{table}}) RETURN max(n.{{column}})",
+			},
 		},
 		"sql_runner": map[string]any{
 			// Neo4j has no SQL: the check text the core passes through
