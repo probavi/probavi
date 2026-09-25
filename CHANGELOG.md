@@ -13,6 +13,43 @@ always called out explicitly.
 
 ### Added
 
+- **The generating built-in checks now work against MongoDB**
+  (`adapters/mongodb` 0.7.0) — `table_exists`, `row_count` and
+  `freshness`, which did not apply to this adapter **at all** until now.
+  The core composed SQL and MongoDB has none, so an operator could only
+  write raw mongosh expressions and the three built-ins every other
+  adapter offers were simply absent here.
+
+  ```yaml
+  checks:
+    - builtin: row_count
+      table: orders
+      min: 1
+    - builtin: freshness
+      table: orders
+      column: ts
+      max_age: 24h
+  ```
+
+  The adapter declares each one as a mongosh expression
+  (`probavi-adapter/1` §6.1.1, which is explicit that a declared
+  statement need not be SQL). **What the adapter chooses is how to ask;
+  what the answer means stays the core's** — so a record from a MongoDB
+  drill says the same thing as a record from any other engine, and this
+  is the first adapter to show that on an engine with no SQL at all.
+
+  Three things, each measured against MongoDB 7.0. `table_exists`
+  **raises** rather than returns, because Mongo answers a query against a
+  missing collection with null instead of an error. `freshness` sorts by
+  the field and takes the first, which is that field's **maximum** — not
+  the value in the newest document, which is a different instant; the
+  fixture's timestamps run backwards against insertion order so a check
+  would catch the difference. And the two ways `freshness` can be asked
+  wrongly — an empty collection, a field that is not a date — both raise
+  and exit non-zero, so a number is never turned into an instant.
+
+  Raw `sql` expressions still work exactly as before.
+
 - **The second adapter declares `probavi-adapter/1`** (`adapters/cassandra`
   0.6.0), and it is the first to declare a *statement* rather than
   quoting.

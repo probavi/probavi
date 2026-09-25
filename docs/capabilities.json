@@ -661,12 +661,13 @@
       "name": "MongoDB",
       "status": "experimental",
       "since": "0.2.0",
-      "adapter_version": "0.6.0",
+      "adapter_version": "0.7.0",
       "engine": {
         "id": "mongodb",
         "name": "MongoDB"
       },
       "protocol_versions": [
+        "probavi-adapter/1",
         "probavi-adapter/0"
       ],
       "verified": [

@@ -16,6 +16,8 @@ import (
 
 	"github.com/probavi/probavi/internal/adapter"
 	"github.com/probavi/probavi/internal/capabilities"
+	"github.com/probavi/probavi/internal/checks"
+	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/sandbox"
 	"github.com/probavi/probavi/internal/sandbox/docker"
 )
@@ -139,6 +141,52 @@ func driveDrill(t *testing.T, ctx context.Context, provider *docker.Provider, fi
 		t.Fatalf("document count = %q (exit %d, stderr %s), want 500 — the restore did not carry the data",
 			count, out.ExitCode, out.Stderr)
 	}
+
+	// The generating built-ins, run the way the core runs them — through
+	// internal/checks, carrying the declarations this adapter makes. They
+	// did not apply to MongoDB at all before it declared them: the core
+	// composed SQL for an engine that has none, so the whole set was
+	// simply absent here. Without the Dialect line the core would compose
+	// that SQL again, which is what makes it the assertion.
+	t.Run("the generating built-ins work", func(t *testing.T) {
+		deps := checks.Deps{
+			Exec:    sbx,
+			Runner:  checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
+			Target:  checks.Target{User: res.Connection.User, Database: res.Connection.Database},
+			Dialect: checks.DialectFrom(probe),
+		}
+		min1, tooMany := int64(1), int64(1001)
+		results, err := checks.Run(ctx, []config.Check{
+			{Builtin: config.CheckTableExists, Table: "orders"},
+			{Builtin: config.CheckTableExists, Table: "nosuch"},
+			{Builtin: config.CheckRowCount, Table: "orders", Min: &min1},
+			{Builtin: config.CheckRowCount, Table: "orders", Min: &tooMany},
+			// The fixture's newest ts is fixed in time, so the window has
+			// to be generous rather than relative to now.
+			{Builtin: config.CheckFreshness, Table: "orders", Column: "ts",
+				MaxAge: config.Duration(24 * 365 * 100 * time.Hour)},
+			{Builtin: config.CheckFreshness, Table: "orders", Column: "ts",
+				MaxAge: config.Duration(time.Millisecond)},
+		}, deps)
+		if err != nil {
+			t.Fatalf("checks.Run: %v", err)
+		}
+		// Each pair is the same question asked so it must pass and so it
+		// must fail: a check that cannot fail proves nothing.
+		want := []bool{true, false, true, false, true, false}
+		for i, w := range want {
+			if results[i].OK != w {
+				t.Errorf("check %d (%s) = %v (%s), want %v",
+					i, results[i].Name, results[i].OK, results[i].Detail, w)
+			}
+		}
+		if !strings.Contains(results[2].Detail, "500") {
+			t.Errorf("row_count detail = %q, want the count read and compared", results[2].Detail)
+		}
+		if results[4].Detail == "" {
+			t.Errorf("freshness detail = %q, want the instant read and compared", results[4].Detail)
+		}
+	})
 
 	teardown, err := runner.Teardown(ctx, res.State, "completed", sbx)
 	if err != nil {
@@ -369,8 +417,17 @@ func makeFixtures(t *testing.T, ctx context.Context, provider *docker.Provider, 
 	defer destroy(t, seed)
 
 	awaitReady(t, ctx, seed)
+	// ts runs backwards against _id, so the newest ts is in the *first*
+	// document rather than the last: a freshness statement that read the
+	// newest document's value instead of the field's maximum would answer
+	// a different instant, and the built-in check below would say so.
 	seedJS := `const docs = [];
-for (let i = 1; i <= 500; i++) docs.push({_id: i, total: Math.round(Math.random()*10000)/100});
+const base = new Date("2026-09-20T00:00:00Z");
+for (let i = 1; i <= 500; i++) docs.push({
+  _id: i,
+  total: Math.round(Math.random()*10000)/100,
+  ts: new Date(base.getTime() - i*60000),
+});
 db.orders.insertMany(docs);`
 	mustExec(t, ctx, seed, "mongosh", "--quiet", "--norc", "--host", "127.0.0.1", "probavi", "--eval", seedJS)
 	mustExec(t, ctx, seed, "mongodump", "--host", "127.0.0.1", "--db", "probavi",
