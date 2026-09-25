@@ -48,7 +48,7 @@ func datedAt(t *testing.T, path string, when time.Time) string {
 // Java's properties writer escapes the colons in it.
 func TestABackupNamesItsCollectionAndItsStartTime(t *testing.T) {
 	artifact := writeBackup(t, nil)
-	src, perr := resolveSource(context.Background(), "solr_backup", artifact)
+	src, perr := resolveSource(context.Background(), "solr_backup", artifact, nil)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
@@ -146,7 +146,7 @@ func TestAnArtifactThatIsNotOneBackupIsRefused(t *testing.T) {
 		"a collection directory holding no file": {noFiles, "source_not_found", "contains no files"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, perr := resolveSource(context.Background(), "solr_backup", tc.path)
+			_, perr := resolveSource(context.Background(), "solr_backup", tc.path, nil)
 			if perr == nil || perr.Code != tc.code || !strings.Contains(perr.Message, tc.message) {
 				t.Errorf("got %+v, want %s mentioning %q", perr, tc.code, tc.message)
 			}
@@ -191,7 +191,7 @@ func TestBytesTheHostCannotReadAreUnreadable(t *testing.T) {
 			t.Errorf("restore the mode: %v", err)
 		}
 	})
-	_, perr := resolveSource(context.Background(), "solr_backup", artifact)
+	_, perr := resolveSource(context.Background(), "solr_backup", artifact, nil)
 	if perr == nil || perr.Code != "source_unreadable" || !strings.Contains(perr.Message, "open ") {
 		t.Errorf("got %+v, want source_unreadable naming the file", perr)
 	}
@@ -216,7 +216,7 @@ func TestTheNewestBackupInADirectoryIsChosen(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(parent, "zz-notes.txt"), []byte("not a backup"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	src, perr := resolveSource(context.Background(), "solr_backup_dir", parent)
+	src, perr := resolveSource(context.Background(), "solr_backup_dir", parent, nil)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
@@ -225,7 +225,7 @@ func TestTheNewestBackupInADirectoryIsChosen(t *testing.T) {
 	}
 
 	tie := place("wednesday", now.Add(-48*time.Hour))
-	if src, perr = resolveSource(context.Background(), "solr_backup_dir", parent); perr != nil || src.path != tie {
+	if src, perr = resolveSource(context.Background(), "solr_backup_dir", parent, nil); perr != nil || src.path != tie {
 		t.Errorf("chose %+v (%+v), want the later name %s of two backups of one age", src, perr, tie)
 	}
 }
@@ -272,7 +272,7 @@ func TestDirectoryAndArchiveRefusalsNameWhatWasWrong(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, perr := resolveSource(context.Background(), tc.kind, tc.path)
+			_, perr := resolveSource(context.Background(), tc.kind, tc.path, nil)
 			if perr == nil || perr.Code != tc.code || !strings.Contains(perr.Message, tc.message) {
 				t.Errorf("got %+v, want %s mentioning %q", perr, tc.code, tc.message)
 			}
@@ -292,7 +292,7 @@ func TestAnArchiveIsIdentifiedByItsOwnBytes(t *testing.T) {
 	if err := os.WriteFile(archive, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	src, perr := resolveSource(context.Background(), "solr_backup_tar", archive)
+	src, perr := resolveSource(context.Background(), "solr_backup_tar", archive, nil)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}

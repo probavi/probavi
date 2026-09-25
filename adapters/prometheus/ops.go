@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "prometheus"
-	adapterVersion = "0.5.0"
+	adapterVersion = "0.6.0"
 
 	// workDirName is created under the provider's scratch directory — the
 	// one directory the provider guarantees writable (the official images
@@ -166,7 +166,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		scratch = "/tmp"
 	}
 
-	src, perr := resolveSource(req.Source.Kind, req.Source.Path)
+	src, perr := resolveSource(req.Source.Kind, req.Source.Path, req.Source.Params)
 	if perr != nil {
 		return nil, perr
 	}

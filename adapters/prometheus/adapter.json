@@ -19,6 +19,6 @@
   "sources": {
     "prometheus_snapshot_tar": "One tar archive (plain or gzip) of a snapshot, blocks at the root or under one wrapping directory",
     "prometheus_snapshot": "One snapshot directory from `POST /api/v1/admin/tsdb/snapshot`",
-    "prometheus_snapshot_dir": "A directory of snapshot directories; the one whose own blocks claim the newest instant is restored"
+    "prometheus_snapshot_dir": "A directory of snapshot directories; source.params.select picks which one is restored — newest by the instant each snapshot's own blocks claim (the default), oldest, or random"
   }
 }

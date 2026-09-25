@@ -27,7 +27,7 @@ polled until the engine's own verdict arrives.
 | --- | --- |
 | `weaviate_backup_tar` | One tar archive (plain or gzip) of a filesystem-backend backup directory, its tree at the root or under one wrapping directory |
 | `weaviate_backup` | One backup directory, as `POST /v1/backups/filesystem` wrote it (`backup_config.json` at the root) |
-| `weaviate_backup_dir` | A directory of them; the one whose **own metadata** claims the newest completion is restored — never file times, which do not survive a copy |
+| `weaviate_backup_dir` | A directory of them; `source.params.select` picks one by what each backup's **own metadata** claims — newest completion (the default), oldest, or random; never file times, which do not survive a copy |
 
 PITR is not supported and a drill that requests it is refused up front:
 a Weaviate backup is one instant, and nothing in the artifact can move it.
@@ -154,6 +154,51 @@ proven by `TestTheRestoredObjectCountDoesNotShrink` rather than assumed,
 and the class's own declared cleanup interval is left exactly as the
 operator wrote it — suspend, never rewrite, and here not even suspend.
 
+## Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: weaviate_backup_dir
+  path: /backups/weaviate
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one an
+incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum`, `backup.size_bytes` and
+`backup.created_at` do, and a scheduled drill choosing randomly covers the
+whole window over time.
+
+Every policy ranks by the completion instant each backup states about
+itself, so `oldest` here is exactly as strong as `newest` — unlike the
+adapters whose artifacts state nothing and can only order by file time.
+There is no separate rule about candidates that state nothing: a backup
+without a `SUCCESS` status and a completion instant is not eligible under
+any policy, which is also what keeps a random draw off a half-written one.
+
+**`newest` refuses a newer failed or in-progress attempt; `oldest` and
+`random` do not.** Under `newest` the refusal is the point: proving an
+older backup while the directory holds a newer attempt would let the
+record imply something the operator does not have. Under the other two the
+operator has named which end of the window the drill is about and the
+record names the artifact it proved, so there is no such implication to
+guard — and keeping the refusal would let one failed backup job make the
+far end of the retention window undrillable, which is the only thing
+`oldest` exists to reach. A directory holding no completed backup at all
+is still refused under every policy.
+
+`select` on a kind that chooses nothing — `weaviate_backup` and
+`weaviate_backup_tar` — is **refused** rather than ignored, the same way
+`backup_timezone` already is.
+
 ## Drill config options
 
 | Option | Meaning |
@@ -167,10 +212,12 @@ operator wrote it — suspend, never rewrite, and here not even suspend.
   included (measured 2026-09-03). The manifest still records only what CI
   restores from: a class using features one of those versions lacks is a
   different question from the one measured.
-- **A directory of backups refuses a newer failed or in-progress
-  attempt by name** rather than silently proving an older backup: the
-  record must not imply the newest when the newest is not yet, or never
-  became, an artifact.
+- **Under the default `newest` policy, a directory of backups refuses a
+  newer failed or in-progress attempt by name** rather than silently
+  proving an older backup: the record must not imply the newest when the
+  newest is not yet, or never became, an artifact. `select: oldest` and
+  `select: random` name their own end of the window, so they do not carry
+  that implication and do not apply the refusal — see above.
 - **The engine starts fast** — one to seven seconds to ready on the
   measured fixtures — and the restore itself took ~2.5 s for the small
   fixture; the timings in the evidence record are per-phase measurements

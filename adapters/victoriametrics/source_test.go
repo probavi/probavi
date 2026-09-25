@@ -61,7 +61,7 @@ func onePartition() map[string][]string {
 
 func TestResolveBackupDir(t *testing.T) {
 	dir := writeBackup(t, filepath.Join(t.TempDir(), "backup"), "2026-08-18T18:23:25Z", onePartition())
-	src, perr := resolveSource("victoriametrics_backup", dir)
+	src, perr := resolveSource("victoriametrics_backup", dir, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -147,7 +147,7 @@ func TestResolveBackupDirRefusals(t *testing.T) {
 			dir := writeBackup(t, filepath.Join(t.TempDir(), "backup"),
 				"2026-08-18T18:23:25Z", onePartition())
 			tc.mutate(t, dir)
-			_, perr := resolveSource("victoriametrics_backup", dir)
+			_, perr := resolveSource("victoriametrics_backup", dir, nil)
 			if perr == nil {
 				t.Fatal("artifact accepted, want a refusal")
 			}
@@ -179,7 +179,7 @@ func TestResolveSourceEdges(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, perr := resolveSource(tc.kind, tc.path)
+			_, perr := resolveSource(tc.kind, tc.path, nil)
 			if perr == nil || perr.Code != tc.wantCode {
 				t.Errorf("refusal = %+v, want %s", perr, tc.wantCode)
 			}
@@ -187,15 +187,15 @@ func TestResolveSourceEdges(t *testing.T) {
 	}
 }
 
-// TestNewestBackupIn pins the ranking: the backup that can date itself
+// TestChooseBackupIn pins the ranking: the backup that can date itself
 // wins, and it wins by what it says rather than by when it was copied.
-func TestNewestBackupIn(t *testing.T) {
+func TestChooseBackupIn(t *testing.T) {
 	root := t.TempDir()
 	writeBackup(t, filepath.Join(root, "a-oldest"), "2026-08-01T00:00:00Z", onePartition())
 	writeBackup(t, filepath.Join(root, "b-newest"), "2026-08-18T18:23:25Z", onePartition())
 	writeBackup(t, filepath.Join(root, "c-undated"), "", onePartition())
 
-	src, perr := resolveSource("victoriametrics_backup_dir", root)
+	src, perr := resolveSource("victoriametrics_backup_dir", root, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -204,21 +204,21 @@ func TestNewestBackupIn(t *testing.T) {
 	}
 
 	empty := t.TempDir()
-	if _, perr := resolveSource("victoriametrics_backup_dir", empty); perr == nil ||
+	if _, perr := resolveSource("victoriametrics_backup_dir", empty, nil); perr == nil ||
 		perr.Code != "source_not_found" {
 		t.Errorf("refusal = %+v, want source_not_found for a directory holding no backups", perr)
 	}
 }
 
-// TestNewestBackupInRefusesTheBrokenWinner proves the ranking does not
+// TestChooseBackupInRefusesTheBrokenWinner proves the ranking does not
 // launder a bad artifact: the winner still faces every fence.
-func TestNewestBackupInRefusesTheBrokenWinner(t *testing.T) {
+func TestChooseBackupInRefusesTheBrokenWinner(t *testing.T) {
 	root := t.TempDir()
 	writeBackup(t, filepath.Join(root, "healthy"), "2026-08-01T00:00:00Z", onePartition())
 	winner := writeBackup(t, filepath.Join(root, "winner"), "2026-08-18T18:23:25Z", onePartition())
 	writeAt(t, filepath.Join(winner, "flock.lock"), "")
 
-	_, perr := resolveSource("victoriametrics_backup_dir", root)
+	_, perr := resolveSource("victoriametrics_backup_dir", root, nil)
 	if perr == nil || perr.Code != "unsupported_source" {
 		t.Fatalf("refusal = %+v, want the live-copy refusal", perr)
 	}
@@ -303,7 +303,7 @@ func TestResolveTar(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			archive := buildTar(t, filepath.Join(t.TempDir(), "b.tar"), backup, tc.wrap, tc.gzipped)
-			src, perr := resolveSource("victoriametrics_backup_tar", archive)
+			src, perr := resolveSource("victoriametrics_backup_tar", archive, nil)
 			if perr != nil {
 				t.Fatalf("resolveSource: %+v", perr)
 			}
@@ -323,7 +323,7 @@ func TestResolveTarRefusals(t *testing.T) {
 		live := writeBackup(t, filepath.Join(t.TempDir(), "live"), "2026-08-18T18:23:25Z", onePartition())
 		writeAt(t, filepath.Join(live, "flock.lock"), "")
 		archive := buildTar(t, filepath.Join(t.TempDir(), "live.tar"), live, "", false)
-		_, perr := resolveSource("victoriametrics_backup_tar", archive)
+		_, perr := resolveSource("victoriametrics_backup_tar", archive, nil)
 		if perr == nil || perr.Code != "unsupported_source" ||
 			!strings.Contains(perr.Message, "flock.lock") {
 			t.Errorf("refusal = %+v, want the live-copy refusal naming the lock", perr)
@@ -334,7 +334,7 @@ func TestResolveTarRefusals(t *testing.T) {
 		other := t.TempDir()
 		writeAt(t, filepath.Join(other, "notes.txt"), "hello")
 		archive := buildTar(t, filepath.Join(t.TempDir(), "other.tar"), other, "", false)
-		_, perr := resolveSource("victoriametrics_backup_tar", archive)
+		_, perr := resolveSource("victoriametrics_backup_tar", archive, nil)
 		if perr == nil || perr.Code != "source_corrupt" {
 			t.Errorf("refusal = %+v, want source_corrupt", perr)
 		}
@@ -347,7 +347,7 @@ func TestResolveTarRefusals(t *testing.T) {
 			t.Fatal(err)
 		}
 		archive := buildTar(t, filepath.Join(t.TempDir(), "partial.tar"), backup, "", false)
-		_, perr := resolveSource("victoriametrics_backup_tar", archive)
+		_, perr := resolveSource("victoriametrics_backup_tar", archive, nil)
 		if perr == nil || perr.Code != "source_corrupt" ||
 			!strings.Contains(perr.Message, completeMarker) {
 			t.Errorf("refusal = %+v, want the incomplete-backup refusal", perr)
@@ -359,7 +359,7 @@ func TestResolveTarRefusals(t *testing.T) {
 	t.Run("an archive the host cannot walk", func(t *testing.T) {
 		opaque := filepath.Join(t.TempDir(), "opaque.tar")
 		writeAt(t, opaque, "\x1f\x8bnot really a gzip stream")
-		src, perr := resolveSource("victoriametrics_backup_tar", opaque)
+		src, perr := resolveSource("victoriametrics_backup_tar", opaque, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}

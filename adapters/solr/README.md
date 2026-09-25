@@ -12,7 +12,7 @@ Probavi core.
 | --- | --- |
 | `solr_backup_tar` | A tar archive of one backup directory |
 | `solr_backup` | One Collections API backup directory (`action=BACKUP`) |
-| `solr_backup_dir` | A directory of backup directories; the newest is restored |
+| `solr_backup_dir` | A directory of backup directories; `source.params.select` picks one — newest by directory time (the default), oldest, or random |
 
 A backup directory is what `action=BACKUP&name=<name>` leaves behind: one
 subdirectory per collection, each holding `backup_N.properties`,
@@ -146,6 +146,47 @@ same one: the highest `N`, compared as a number rather than as a name.
 Because the engine's own timestamp is already absolute,
 `source.params.backup_timezone` has nothing to correct and is refused
 rather than silently ignored.
+
+### Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: solr_backup_dir
+  path: /backups/solr
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one an
+incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum`, `backup.size_bytes` and
+`backup.created_at` do, and a scheduled drill choosing randomly covers the
+whole window over time.
+
+**This adapter orders candidates by directory time**, not by anything a
+backup states about itself: the `startTime` above belongs to one
+collection inside one backup directory and dates the artifact, it does not
+rank the directory. That is weaker than the cassandra and prometheus
+adapters' ordering, and worth knowing before choosing `oldest`: a backup
+copied in without its timestamps looks like the newest thing in the
+directory under `newest` — and stops looking like the oldest under
+`oldest`. The policy is exactly as strong as the modification times in the
+directory are.
+
+The settle check does not change with the policy. The adapter chose the
+backup under all three, so one a backup job is still writing still refuses
+the drill by name rather than quietly falling back to a neighbour.
+
+`select` on a kind that chooses nothing — `solr_backup` and
+`solr_backup_tar` — is **refused** rather than ignored, the same way
+`backup_timezone` already is.
 
 ## Backup identity
 

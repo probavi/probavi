@@ -11,7 +11,7 @@ import (
 
 const (
 	adapterName    = "weaviate"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.2.0"
 
 	// engineBinary is started directly. The image's entrypoint is pinned
 	// to this same binary — and the binary ignores unknown positional
@@ -168,7 +168,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		scratch = "/tmp"
 	}
 
-	src, perr := resolveSource(req.Source.Kind, req.Source.Path)
+	src, perr := resolveSource(req.Source.Kind, req.Source.Path, req.Source.Params)
 	if perr != nil {
 		return nil, perr
 	}

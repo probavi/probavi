@@ -18,7 +18,7 @@ adapter's job is to make neither of those reportable as green.
 | --- | --- |
 | `cassandra_snapshot_tar` | one tar archive (plain or gzip) of a collected snapshot — keyspaces at the root, or under one wrapping directory |
 | `cassandra_snapshot` | one collected snapshot tree: `<keyspace>/<table>/` holding each table's `snapshots/<tag>/` contents |
-| `cassandra_snapshot_dir` | a directory of such trees; the one whose own manifests claim the newest instant is restored |
+| `cassandra_snapshot_dir` | a directory of such trees; `source.params.select` picks one — newest by the instant each tree's own manifests claim (the default), oldest, or random |
 
 **Collecting a snapshot.** `nodetool snapshot -t <tag> <keyspace>` writes
 each table's snapshot under
@@ -196,6 +196,42 @@ timezone question, and `source.params.backup_timezone` is refused rather
 than silently ignored. The `cassandra_snapshot_dir` kind ranks
 candidates by this same claim, so a stale tree copied yesterday never
 outranks the genuinely newest one.
+
+### Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: cassandra_snapshot_dir
+  path: /backups/cassandra
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one an
+incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum`, `backup.size_bytes` and
+`backup.created_at` do, and a scheduled drill choosing randomly covers the
+whole window over time.
+
+Every policy ranks by what a candidate states about itself, above, so
+`oldest` here is exactly as strong as `newest` — unlike the adapters whose
+artifacts state nothing and can only order by file time. One rule does not
+invert: a candidate that states an instant outranks one that states none
+under `oldest` too, because a candidate with no age is not an old one. A
+random draw likewise reaches only the candidates that date themselves,
+where there are any, which keeps it off the scratch directory a backup
+directory collects.
+
+`select` on a kind that chooses nothing — `cassandra_snapshot` and
+`cassandra_snapshot_tar` — is **refused** rather than ignored, the same
+way `backup_timezone` already is.
 
 ## Backup identity
 

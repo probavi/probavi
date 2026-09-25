@@ -9,7 +9,7 @@ import (
 )
 
 func TestResolveSourceUnknownKind(t *testing.T) {
-	_, perr := resolveSource("cassandra_backup", "/nowhere")
+	_, perr := resolveSource("cassandra_backup", "/nowhere", nil)
 	if perr == nil || perr.Code != "unsupported_source" {
 		t.Fatalf("perr = %+v, want unsupported_source", perr)
 	}
@@ -24,7 +24,7 @@ func TestResolveTar(t *testing.T) {
 	t.Run("a walkable archive resolves with its own census", func(t *testing.T) {
 		root := writeTree(t, t.TempDir(), "probavi.orders", "probavi.meta")
 		path := treeToTar(t, root, filepath.Join(t.TempDir(), "snap.tar.gz"), "snapname", true)
-		src, perr := resolveSource("cassandra_snapshot_tar", path)
+		src, perr := resolveSource("cassandra_snapshot_tar", path, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -41,7 +41,7 @@ func TestResolveTar(t *testing.T) {
 		if err := os.WriteFile(path, []byte(strings.Repeat("x", 4096)), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		src, perr := resolveSource("cassandra_snapshot_tar", path)
+		src, perr := resolveSource("cassandra_snapshot_tar", path, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -79,7 +79,7 @@ func TestResolveTarRefusals(t *testing.T) {
 	for _, tc := range refusals {
 		t.Run(tc.name, func(t *testing.T) {
 			path := tc.prepare(t, t.TempDir())
-			_, perr := resolveSource("cassandra_snapshot_tar", path)
+			_, perr := resolveSource("cassandra_snapshot_tar", path, nil)
 			if perr == nil || perr.Code != tc.wantCode {
 				t.Fatalf("perr = %+v, want %s", perr, tc.wantCode)
 			}
@@ -93,7 +93,7 @@ func TestResolveTarRefusals(t *testing.T) {
 func TestResolveTree(t *testing.T) {
 	t.Run("a healthy tree resolves with a tree checksum", func(t *testing.T) {
 		root := writeTree(t, t.TempDir(), "probavi.orders")
-		src, perr := resolveSource("cassandra_snapshot", root)
+		src, perr := resolveSource("cassandra_snapshot", root, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -105,7 +105,7 @@ func TestResolveTree(t *testing.T) {
 
 	t.Run("the tree checksum sees content changes", func(t *testing.T) {
 		root := writeTree(t, t.TempDir(), "probavi.orders")
-		before, perr := resolveSource("cassandra_snapshot", root)
+		before, perr := resolveSource("cassandra_snapshot", root, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -115,7 +115,7 @@ func TestResolveTree(t *testing.T) {
 			[]byte("changed"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		after, perr := resolveSource("cassandra_snapshot", root)
+		after, perr := resolveSource("cassandra_snapshot", root, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -129,7 +129,7 @@ func TestResolveTree(t *testing.T) {
 		if err := os.WriteFile(path, []byte("tar bytes"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		_, perr := resolveSource("cassandra_snapshot", path)
+		_, perr := resolveSource("cassandra_snapshot", path, nil)
 		if perr == nil || perr.Code != "invalid_request" ||
 			!strings.Contains(perr.Message, "cassandra_snapshot_tar") {
 			t.Fatalf("perr = %+v, want invalid_request naming the tar kind", perr)
@@ -137,7 +137,7 @@ func TestResolveTree(t *testing.T) {
 	})
 }
 
-func TestNewestTreeIn(t *testing.T) {
+func TestChooseTreeIn(t *testing.T) {
 	older := "2026-08-10T00:00:00.000Z"
 	t.Run("the tree claiming the newest instant wins over a fresher mtime", func(t *testing.T) {
 		base := t.TempDir()
@@ -149,7 +149,7 @@ func TestNewestTreeIn(t *testing.T) {
 		if err := os.Chtimes(newest, past, past); err != nil {
 			t.Fatal(err)
 		}
-		src, perr := resolveSource("cassandra_snapshot_dir", base)
+		src, perr := resolveSource("cassandra_snapshot_dir", base, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -165,7 +165,7 @@ func TestNewestTreeIn(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(base, "z-undated"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		src, perr := resolveSource("cassandra_snapshot_dir", base)
+		src, perr := resolveSource("cassandra_snapshot_dir", base, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -176,9 +176,9 @@ func TestNewestTreeIn(t *testing.T) {
 
 }
 
-// TestNewestTreeInRefusesTheBrokenWinner pins the not-a-filter side of
+// TestChooseTreeInRefusesTheBrokenWinner pins the not-a-filter side of
 // the ranking: the chosen candidate faces every gate by name.
-func TestNewestTreeInRefusesTheBrokenWinner(t *testing.T) {
+func TestChooseTreeInRefusesTheBrokenWinner(t *testing.T) {
 	t.Run("a winning broken candidate is refused, not passed over", func(t *testing.T) {
 		base := t.TempDir()
 		// Neither candidate can be dated (one is a live copy, the other
@@ -192,7 +192,7 @@ func TestNewestTreeInRefusesTheBrokenWinner(t *testing.T) {
 		if err := os.Chtimes(old, past, past); err != nil {
 			t.Fatal(err)
 		}
-		_, perr := resolveSource("cassandra_snapshot_dir", base)
+		_, perr := resolveSource("cassandra_snapshot_dir", base, nil)
 		if perr == nil || perr.Code != "unsupported_source" ||
 			!strings.Contains(perr.Message, "nodetool snapshot") {
 			t.Fatalf("perr = %+v, want the chosen live copy refused by name", perr)
@@ -201,20 +201,20 @@ func TestNewestTreeInRefusesTheBrokenWinner(t *testing.T) {
 
 }
 
-func TestNewestTreeInEdgeCases(t *testing.T) {
+func TestChooseTreeInEdgeCases(t *testing.T) {
 	t.Run("a directory with no subdirectories says so", func(t *testing.T) {
 		base := t.TempDir()
 		if err := os.WriteFile(filepath.Join(base, "notes.txt"), []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		_, perr := resolveSource("cassandra_snapshot_dir", base)
+		_, perr := resolveSource("cassandra_snapshot_dir", base, nil)
 		if perr == nil || perr.Code != "source_not_found" {
 			t.Fatalf("perr = %+v, want source_not_found", perr)
 		}
 	})
 
 	t.Run("a missing directory is source_not_found", func(t *testing.T) {
-		_, perr := resolveSource("cassandra_snapshot_dir", filepath.Join(t.TempDir(), "gone"))
+		_, perr := resolveSource("cassandra_snapshot_dir", filepath.Join(t.TempDir(), "gone"), nil)
 		if perr == nil || perr.Code != "source_not_found" {
 			t.Fatalf("perr = %+v, want source_not_found", perr)
 		}
@@ -279,7 +279,7 @@ func TestWhatTheHostCannotReadIsUnreadable(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, kind := range []string{"cassandra_snapshot_tar", "cassandra_snapshot", "cassandra_snapshot_dir"} {
-			_, perr := resolveSource(kind, filepath.Join(file, "snapshot"))
+			_, perr := resolveSource(kind, filepath.Join(file, "snapshot"), nil)
 			if perr == nil || perr.Code != "source_unreadable" {
 				t.Errorf("%s: got %+v, want source_unreadable", kind, perr)
 			}
@@ -289,13 +289,13 @@ func TestWhatTheHostCannotReadIsUnreadable(t *testing.T) {
 		tree := writeTree(t, filepath.Join(t.TempDir(), "snap"), "shop.orders")
 		archive := treeToTar(t, tree, filepath.Join(t.TempDir(), "snapshot.tar"), "", false)
 		closedTo(t, archive, 0o600)
-		_, perr := resolveSource("cassandra_snapshot_tar", archive)
+		_, perr := resolveSource("cassandra_snapshot_tar", archive, nil)
 		wantUnreadable(t, perr, "")
 	})
 	t.Run("an sstable the host may not open", func(t *testing.T) {
 		tree := writeTree(t, filepath.Join(t.TempDir(), "snap"), "shop.orders")
 		closedTo(t, filepath.Join(tree, "shop", "orders", "nb-1-big-Data.db"), 0o600)
-		_, perr := resolveSource("cassandra_snapshot", tree)
+		_, perr := resolveSource("cassandra_snapshot", tree, nil)
 		wantUnreadable(t, perr, "")
 	})
 	t.Run("a snapshot directory holding no file", func(t *testing.T) {

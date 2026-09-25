@@ -80,8 +80,8 @@ type resolvedSource struct {
 //	weaviate_backup_tar — one tar (plain or gzip) of a filesystem-backend
 //	                      backup directory
 //	weaviate_backup     — one backup directory, from POST /v1/backups/filesystem
-//	weaviate_backup_dir — a directory of them; the one whose own metadata
-//	                      claims the newest completion is restored
+//	weaviate_backup_dir — a directory of them; source.params.select picks
+//	                      one, newest by default (selection.go)
 //
 // Deliberately absent: a copy of Weaviate's persistence directory
 // (PERSISTENCE_DATA_PATH). It is not an artifact anyone should ship — the
@@ -89,14 +89,18 @@ type resolvedSource struct {
 // LSM tree — and a data-directory copy carries no backup_config.json, so
 // it is refused here by the absence of the one file every real backup
 // has, with a message that names the API.
-func resolveSource(kind, sourcePath string) (*resolvedSource, *protoError) {
+func resolveSource(kind, sourcePath string, params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "weaviate_backup_tar":
 		return resolveTar(sourcePath)
 	case "weaviate_backup":
 		return resolveBackupDir(sourcePath)
 	case "weaviate_backup_dir":
-		winner, perr := newestBackupIn(sourcePath)
+		winner, perr := chooseBackupIn(sourcePath, policy)
 		if perr != nil {
 			return nil, perr
 		}
@@ -299,14 +303,24 @@ type backupCandidate struct {
 	completed time.Time
 }
 
-// newestBackupIn picks the backup whose own metadata claims the newest
-// completion — never file times, which do not survive a copy.
+// chooseBackupIn picks the backup the policy asks for, by what each
+// backup's own metadata claims — never file times, which do not survive a
+// copy.
 //
-// The pick is not a filter. A backup newer than the winner that is still
-// running, or that failed, refuses the drill by name: silently proving an
-// older backup while the directory holds a newer attempt would let the
-// record imply something the operator does not have.
-func newestBackupIn(dir string) (string, *protoError) {
+// Under newest the pick is not a filter. A backup newer than the winner
+// that is still running, or that failed, refuses the drill by name:
+// silently proving an older backup while the directory holds a newer
+// attempt would let the record imply something the operator does not have.
+//
+// Under oldest and random that reasoning does not hold, so the refusal is
+// not applied — the one place in this rollout where a policy changed more
+// than an ordering. The operator has named which end of the window the
+// drill is about, and the record names the artifact it proved, so a newer
+// failed attempt is nothing the result could be read as claiming. Keeping
+// the refusal would instead let one failed backup job make the far end of
+// the retention window undrillable, which is the only thing oldest exists
+// to reach.
+func chooseBackupIn(dir string, policy selectPolicy) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -315,9 +329,12 @@ func newestBackupIn(dir string) (string, *protoError) {
 		return "", protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
 	candidates, skipped := scanCandidates(dir, entries)
-	winner := pickWinner(candidates)
+	winner := pickWinner(candidates, policy)
 	if winner == nil {
 		return "", noWinnerError(dir, candidates, skipped)
+	}
+	if policy != selectNewest {
+		return filepath.Join(dir, winner.name), nil
 	}
 	for _, c := range candidates {
 		if c.status != "SUCCESS" && c.started.After(winner.completed) {
@@ -356,22 +373,66 @@ func scanCandidates(dir string, entries []os.DirEntry) ([]backupCandidate, int) 
 	return candidates, skipped
 }
 
-// pickWinner ranks completed backups by their claimed completion instant;
-// ties break toward the lexicographically larger name so the choice never
-// depends on directory iteration order.
-func pickWinner(candidates []backupCandidate) *backupCandidate {
-	var winner *backupCandidate
-	for i := range candidates {
-		c := &candidates[i]
-		if c.status != "SUCCESS" || c.completed.IsZero() {
-			continue
-		}
-		if winner == nil || c.completed.After(winner.completed) ||
-			(c.completed.Equal(winner.completed) && c.name > winner.name) {
+// pickWinner chooses among the backups a drill could restore at all, under
+// the declared policy.
+func pickWinner(candidates []backupCandidate, policy selectPolicy) *backupCandidate {
+	eligible := completedOnly(candidates)
+	if len(eligible) == 0 {
+		return nil
+	}
+	if policy == selectRandom {
+		return eligible[randomIndex(len(eligible))]
+	}
+	wins := backupCandidate.beats
+	if policy == selectOldest {
+		wins = backupCandidate.precedes
+	}
+	winner := eligible[0]
+	for _, c := range eligible[1:] {
+		if wins(*c, *winner) {
 			winner = c
 		}
 	}
 	return winner
+}
+
+// completedOnly narrows the candidates to the ones a drill could restore at
+// all: a SUCCESS status and a completion instant of their own. The ranking
+// applied this filter inline; it is lifted out so a random draw obeys it
+// too — a draw that could land on a failed or half-written backup would be
+// a different feature, and a worse one.
+func completedOnly(candidates []backupCandidate) []*backupCandidate {
+	eligible := make([]*backupCandidate, 0, len(candidates))
+	for i := range candidates {
+		c := &candidates[i]
+		if c.status == "SUCCESS" && !c.completed.IsZero() {
+			eligible = append(eligible, c)
+		}
+	}
+	return eligible
+}
+
+// beats orders two eligible backups for the newest policy: the later
+// claimed completion, then the lexicographically larger name so the choice
+// never depends on directory iteration order.
+func (c backupCandidate) beats(other backupCandidate) bool {
+	if !c.completed.Equal(other.completed) {
+		return c.completed.After(other.completed)
+	}
+	return c.name > other.name
+}
+
+// precedes orders two eligible backups for the oldest policy. Here it
+// really is beats turned around, and that is worth a sentence because in
+// the postgres and cassandra adapters it is not: those rank a backup
+// carrying its own recorded time above one that does not, and that rule
+// cannot invert. Everything that reaches this point carries a SUCCESS
+// status and a completion instant, so there is nothing asymmetric left.
+func (c backupCandidate) precedes(other backupCandidate) bool {
+	if !c.completed.Equal(other.completed) {
+		return c.completed.Before(other.completed)
+	}
+	return c.name < other.name
 }
 
 func noWinnerError(dir string, candidates []backupCandidate, skipped int) *protoError {

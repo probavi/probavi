@@ -57,8 +57,28 @@ always called out explicitly.
   around in those four, which is the difference from the adapters above
   and is stated in each. Each adapter carries its own copy of the policy,
   which is what the protocol boundary costs and buys: no adapter is
-  obliged to implement it, and none can break another's. Twenty-two
-  `*_dir` kinds across twenty adapters are still to come.
+  obliged to implement it, and none can break another's.
+
+  Then the six whose candidate is a **subdirectory** rather than a file,
+  dated from its own manifest: **`adapters/cassandra` 0.5.0**,
+  **`adapters/scylladb` 0.3.0**, **`adapters/prometheus` 0.6.0**,
+  **`adapters/victoriametrics` 0.3.0**, **`adapters/weaviate` 0.2.0** and
+  **`adapters/solr` 0.7.0**. Five of them rank by what the candidate
+  states about itself — a Cassandra or ScyllaDB `manifest.json`, a
+  Prometheus block's `meta.json`, a VictoriaMetrics or Weaviate metadata
+  file — so `oldest` there is exactly as strong as `newest` already was;
+  `adapters/solr` orders by directory time, and its README says so in the
+  same words the four above use. One policy changed more than an ordering,
+  in `adapters/weaviate`: its refusal of a newer failed or in-progress
+  attempt guards `newest`, where proving an older backup would let the
+  record imply the newest, and it does not apply under `oldest` or
+  `random`, where the operator has named which end of the window the drill
+  is about — otherwise one failed backup job would make that far end
+  undrillable, which is the only thing `oldest` exists to reach. A
+  directory holding no completed backup is still refused under every
+  policy.
+
+  Sixteen `*_dir` kinds across fourteen adapters are still to come.
 
 - **A release now runs the binaries it publishes.** Everything else in
   this repository proves the source tree: the unit suite, the integration

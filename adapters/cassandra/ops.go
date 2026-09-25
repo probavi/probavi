@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "cassandra"
-	adapterVersion = "0.4.0"
+	adapterVersion = "0.5.0"
 
 	// workDirName is created under the provider's scratch directory.
 	workDirName = "probavi-cassandra"
@@ -124,7 +124,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		return nil, perr
 	}
 
-	src, perr := resolveSource(req.Source.Kind, req.Source.Path)
+	src, perr := resolveSource(req.Source.Kind, req.Source.Path, req.Source.Params)
 	if perr != nil {
 		return nil, perr
 	}

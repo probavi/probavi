@@ -19,6 +19,6 @@
   "sources": {
     "scylladb_snapshot_tar": "One tar archive (plain or gzip) of a collected snapshot, keyspaces at the root or under one wrapping directory",
     "scylladb_snapshot": "One collected snapshot tree: `<keyspace>/<table>/` holding each table's `snapshots/<tag>/` contents",
-    "scylladb_snapshot_dir": "A directory of collected snapshot trees; the one whose own manifests claim the newest instant is restored"
+    "scylladb_snapshot_dir": "A directory of collected snapshot trees; source.params.select picks which one is restored — newest by the instant each tree's own manifests claim (the default), oldest, or random"
   }
 }

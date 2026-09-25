@@ -9,7 +9,7 @@ import (
 )
 
 func TestResolveSourceUnknownKind(t *testing.T) {
-	_, perr := resolveSource("prometheus_backup", "/nowhere")
+	_, perr := resolveSource("prometheus_backup", "/nowhere", nil)
 	if perr == nil || perr.Code != "unsupported_source" {
 		t.Fatalf("perr = %+v, want unsupported_source", perr)
 	}
@@ -24,7 +24,7 @@ func TestResolveTar(t *testing.T) {
 	t.Run("a walkable archive resolves with its own census", func(t *testing.T) {
 		path := buildTar(t, filepath.Join(t.TempDir(), "snap.tar.gz"), true,
 			snapshotTarEntries("snapname", maxAug2026-60000, maxAug2026))
-		src, perr := resolveSource("prometheus_snapshot_tar", path)
+		src, perr := resolveSource("prometheus_snapshot_tar", path, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -41,7 +41,7 @@ func TestResolveTar(t *testing.T) {
 		if err := os.WriteFile(path, []byte(strings.Repeat("x", 4096)), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		src, perr := resolveSource("prometheus_snapshot_tar", path)
+		src, perr := resolveSource("prometheus_snapshot_tar", path, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -79,7 +79,7 @@ func TestResolveTarRefusals(t *testing.T) {
 	for _, tc := range refusals {
 		t.Run(tc.name, func(t *testing.T) {
 			path := tc.prepare(t, t.TempDir())
-			_, perr := resolveSource("prometheus_snapshot_tar", path)
+			_, perr := resolveSource("prometheus_snapshot_tar", path, nil)
 			if perr == nil || perr.Code != tc.wantCode {
 				t.Fatalf("perr = %+v, want %s", perr, tc.wantCode)
 			}
@@ -93,7 +93,7 @@ func TestResolveTarRefusals(t *testing.T) {
 func TestResolveSnapshotDir(t *testing.T) {
 	t.Run("a healthy snapshot resolves with a tree checksum", func(t *testing.T) {
 		dir := writeSnapshot(t, filepath.Join(t.TempDir(), "snap"), maxAug2026)
-		src, perr := resolveSource("prometheus_snapshot", dir)
+		src, perr := resolveSource("prometheus_snapshot", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -105,7 +105,7 @@ func TestResolveSnapshotDir(t *testing.T) {
 
 	t.Run("the tree checksum sees content changes", func(t *testing.T) {
 		dir := writeSnapshot(t, filepath.Join(t.TempDir(), "snap"), maxAug2026)
-		before, perr := resolveSource("prometheus_snapshot", dir)
+		before, perr := resolveSource("prometheus_snapshot", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -114,7 +114,7 @@ func TestResolveSnapshotDir(t *testing.T) {
 			[]byte("changed bytes"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		after, perr := resolveSource("prometheus_snapshot", dir)
+		after, perr := resolveSource("prometheus_snapshot", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -131,7 +131,7 @@ func TestResolveSnapshotDirRefusals(t *testing.T) {
 		if err := os.WriteFile(path, []byte("tar bytes"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		_, perr := resolveSource("prometheus_snapshot", path)
+		_, perr := resolveSource("prometheus_snapshot", path, nil)
 		if perr == nil || perr.Code != "invalid_request" ||
 			!strings.Contains(perr.Message, "prometheus_snapshot_tar") {
 			t.Fatalf("perr = %+v, want invalid_request naming the tar kind", perr)
@@ -143,14 +143,14 @@ func TestResolveSnapshotDirRefusals(t *testing.T) {
 		if err := os.Mkdir(filepath.Join(dir, "wal"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		_, perr := resolveSource("prometheus_snapshot", dir)
+		_, perr := resolveSource("prometheus_snapshot", dir, nil)
 		if perr == nil || perr.Code != "unsupported_source" || !strings.Contains(perr.Message, "wal") {
 			t.Fatalf("perr = %+v, want the raw copy refused by name", perr)
 		}
 	})
 }
 
-func TestNewestSnapshotIn(t *testing.T) {
+func TestChooseSnapshotIn(t *testing.T) {
 	t.Run("the snapshot claiming the newest instant wins over a fresher mtime", func(t *testing.T) {
 		base := t.TempDir()
 		older := writeSnapshot(t, filepath.Join(base, "20260810T000000Z-aaaa"), maxAug2026-86400000)
@@ -163,7 +163,7 @@ func TestNewestSnapshotIn(t *testing.T) {
 			t.Fatal(err)
 		}
 		_ = older
-		src, perr := resolveSource("prometheus_snapshot_dir", base)
+		src, perr := resolveSource("prometheus_snapshot_dir", base, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -178,7 +178,7 @@ func TestNewestSnapshotIn(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(base, "z-undated"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		src, perr := resolveSource("prometheus_snapshot_dir", base)
+		src, perr := resolveSource("prometheus_snapshot_dir", base, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -189,9 +189,9 @@ func TestNewestSnapshotIn(t *testing.T) {
 
 }
 
-// TestNewestSnapshotInRefusesTheBrokenWinner pins the not-a-filter side
+// TestChooseSnapshotInRefusesTheBrokenWinner pins the not-a-filter side
 // of the ranking: the chosen candidate faces every gate by name.
-func TestNewestSnapshotInRefusesTheBrokenWinner(t *testing.T) {
+func TestChooseSnapshotInRefusesTheBrokenWinner(t *testing.T) {
 	t.Run("a winning broken candidate is refused, not passed over", func(t *testing.T) {
 		base := t.TempDir()
 		writeSnapshot(t, filepath.Join(base, "old-good"), maxAug2026-86400000)
@@ -210,7 +210,7 @@ func TestNewestSnapshotInRefusesTheBrokenWinner(t *testing.T) {
 		if err := os.Chtimes(live, now, now); err != nil {
 			t.Fatal(err)
 		}
-		_, perr := resolveSource("prometheus_snapshot_dir", base)
+		_, perr := resolveSource("prometheus_snapshot_dir", base, nil)
 		if perr == nil || perr.Code != "unsupported_source" || !strings.Contains(perr.Message, "wal") {
 			t.Fatalf("perr = %+v, want the chosen live copy refused by name", perr)
 		}
@@ -218,20 +218,20 @@ func TestNewestSnapshotInRefusesTheBrokenWinner(t *testing.T) {
 
 }
 
-func TestNewestSnapshotInEdgeCases(t *testing.T) {
+func TestChooseSnapshotInEdgeCases(t *testing.T) {
 	t.Run("a directory with no subdirectories says so", func(t *testing.T) {
 		base := t.TempDir()
 		if err := os.WriteFile(filepath.Join(base, "notes.txt"), []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		_, perr := resolveSource("prometheus_snapshot_dir", base)
+		_, perr := resolveSource("prometheus_snapshot_dir", base, nil)
 		if perr == nil || perr.Code != "source_not_found" {
 			t.Fatalf("perr = %+v, want source_not_found", perr)
 		}
 	})
 
 	t.Run("a missing directory is source_not_found", func(t *testing.T) {
-		_, perr := resolveSource("prometheus_snapshot_dir", filepath.Join(t.TempDir(), "gone"))
+		_, perr := resolveSource("prometheus_snapshot_dir", filepath.Join(t.TempDir(), "gone"), nil)
 		if perr == nil || perr.Code != "source_not_found" {
 			t.Fatalf("perr = %+v, want source_not_found", perr)
 		}
@@ -295,7 +295,7 @@ func TestWhatTheHostCannotReadIsUnreadable(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, kind := range []string{"prometheus_snapshot_tar", "prometheus_snapshot", "prometheus_snapshot_dir"} {
-			_, perr := resolveSource(kind, filepath.Join(file, "snap"))
+			_, perr := resolveSource(kind, filepath.Join(file, "snap"), nil)
 			if perr == nil || perr.Code != "source_unreadable" {
 				t.Errorf("%s: got %+v, want source_unreadable", kind, perr)
 			}
@@ -305,13 +305,13 @@ func TestWhatTheHostCannotReadIsUnreadable(t *testing.T) {
 		path := buildTar(t, filepath.Join(t.TempDir(), "snap.tar"), false,
 			snapshotTarEntries("snapname", maxAug2026-60000, maxAug2026))
 		closedTo(t, path, 0o600)
-		_, perr := resolveSource("prometheus_snapshot_tar", path)
+		_, perr := resolveSource("prometheus_snapshot_tar", path, nil)
 		wantUnreadable(t, perr, "")
 	})
 	t.Run("a block file the host may not open", func(t *testing.T) {
 		dir := writeSnapshot(t, filepath.Join(t.TempDir(), "snap"), maxAug2026)
 		closedTo(t, filepath.Join(dir, "01BLOCK"+strings.Repeat("0", 19), "chunks", "000001"), 0o600)
-		_, perr := resolveSource("prometheus_snapshot", dir)
+		_, perr := resolveSource("prometheus_snapshot", dir, nil)
 		wantUnreadable(t, perr, "read backup directory")
 	})
 	t.Run("a snapshot directory holding no file", func(t *testing.T) {
