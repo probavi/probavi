@@ -36,6 +36,8 @@
   "target.adapter %q must be lowercase letters, digits, and hyphens (it resolves to the executable probavi-adapter-%s)": "target.adapter %q jista' jkun fih biss ittri żgħar, ċifri u singijiet (jindika l-fajl eżegwibbli probavi-adapter-%s)",
   "target.source.kind is required (adapter-defined, e.g. \"pgdump\" — see the adapter's probe output)": "il-qasam target.source.kind huwa meħtieġ (definit mill-adattatur, eż. \"pgdump\" — ara l-output tal-kmand probe tal-adattatur)",
   "target.source.credential_env entry %q is not a valid environment variable name": "l-entrata %q f'target.source.credential_env mhijiex isem validu ta' varjabbli tal-ambjent",
+  "target.source.select %q is not a selection policy (supported: %s)": "target.source.select %q mhijiex politika ta' għażla (appoġġati: %s)",
+  "target.source.select and target.source.params.select both say which backup to restore — remove one": "target.source.select u target.source.params.select it-tnejn jgħidu liema backup għandu jiġi rrestawrat — neħħi wieħed",
   "target.pitr requires exactly one of target_time (RFC 3339, e.g. \"2026-07-30T14:32:00Z\") or target_age (e.g. \"24h\")": "target.pitr jeħtieġ eżattament wieħed minn target_time (RFC 3339, eż. \"2026-07-30T14:32:00Z\") jew target_age (eż. \"24h\")",
   "target.pitr.target_time %q is not an RFC 3339 timestamp": "target.pitr.target_time %q mhijiex marka tal-ħin RFC 3339",
   "target.pitr.target_time %q is in the future — a restore can only be proven to an instant that has already passed": "target.pitr.target_time %q qiegħed fil-futur — irkupru jista' jiġi ppruvat biss sa mument li diġà għadda",

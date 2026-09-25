@@ -841,3 +841,35 @@ func TestDeadlineOutranksCancellation(t *testing.T) {
 		t.Errorf("teardown reason = %q, want timeout", fa.teardownReasons[0])
 	}
 }
+
+// TestSourceParamsFoldsInTheSelectPolicy covers the seam the promotion of
+// target.source.select rests on: the adapter still receives one params map
+// and no new protocol field, and the loaded config is never written to.
+func TestSourceParamsFoldsInTheSelectPolicy(t *testing.T) {
+	t.Run("nothing declared passes params through", func(t *testing.T) {
+		declared := map[string]string{"stanza": "main"}
+		got := sourceParams(config.Source{Params: declared})
+		if len(got) != 1 || got["stanza"] != "main" {
+			t.Errorf("params = %v, want the operator's map unchanged", got)
+		}
+	})
+
+	t.Run("a policy is folded in under its own name", func(t *testing.T) {
+		declared := map[string]string{"stanza": "main"}
+		got := sourceParams(config.Source{Select: "oldest", Params: declared})
+		if got["select"] != "oldest" || got["stanza"] != "main" {
+			t.Errorf("params = %v, want both the policy and the operator's own", got)
+		}
+		if _, ok := declared["select"]; ok {
+			t.Error("the loaded config's params map was written to — it is shared with " +
+				"everything else that reads the config")
+		}
+	})
+
+	t.Run("a policy with no params of its own", func(t *testing.T) {
+		got := sourceParams(config.Source{Select: "random"})
+		if len(got) != 1 || got["select"] != "random" {
+			t.Errorf("params = %v, want just the policy", got)
+		}
+	})
+}

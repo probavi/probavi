@@ -36,6 +36,8 @@
   "target.adapter %q must be lowercase letters, digits, and hyphens (it resolves to the executable probavi-adapter-%s)": "το target.adapter %q επιτρέπεται να περιέχει μόνο πεζά γράμματα, ψηφία και παύλες (επιλύεται στο εκτελέσιμο probavi-adapter-%s)",
   "target.source.kind is required (adapter-defined, e.g. \"pgdump\" — see the adapter's probe output)": "απαιτείται το target.source.kind (ορίζεται από τον προσαρμογέα, π.χ. \"pgdump\" — δείτε την έξοδο probe του προσαρμογέα)",
   "target.source.credential_env entry %q is not a valid environment variable name": "η καταχώριση %q στο target.source.credential_env δεν είναι έγκυρο όνομα μεταβλητής περιβάλλοντος",
+  "target.source.select %q is not a selection policy (supported: %s)": "το target.source.select %q δεν είναι πολιτική επιλογής (υποστηρίζονται: %s)",
+  "target.source.select and target.source.params.select both say which backup to restore — remove one": "το target.source.select και το target.source.params.select ορίζουν και τα δύο ποιο αντίγραφο θα αποκατασταθεί — αφαιρέστε το ένα",
   "target.pitr requires exactly one of target_time (RFC 3339, e.g. \"2026-07-30T14:32:00Z\") or target_age (e.g. \"24h\")": "το target.pitr απαιτεί ακριβώς ένα από τα target_time (RFC 3339, π.χ. \"2026-07-30T14:32:00Z\") ή target_age (π.χ. \"24h\")",
   "target.pitr.target_time %q is not an RFC 3339 timestamp": "το target.pitr.target_time %q δεν είναι χρονοσφραγίδα RFC 3339",
   "target.pitr.target_time %q is in the future — a restore can only be proven to an instant that has already passed": "το target.pitr.target_time %q βρίσκεται στο μέλλον — η επαναφορά μπορεί να αποδειχθεί μόνο σε χρονική στιγμή που έχει ήδη παρέλθει",

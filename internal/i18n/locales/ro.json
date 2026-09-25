@@ -36,6 +36,8 @@
   "target.adapter %q must be lowercase letters, digits, and hyphens (it resolves to the executable probavi-adapter-%s)": "target.adapter %q poate conține doar litere mici, cifre și cratime (din el rezultă executabilul probavi-adapter-%s)",
   "target.source.kind is required (adapter-defined, e.g. \"pgdump\" — see the adapter's probe output)": "target.source.kind este obligatoriu (definit de adaptor, de ex. \"pgdump\" — vedeți ieșirea probe a adaptorului)",
   "target.source.credential_env entry %q is not a valid environment variable name": "intrarea %q din target.source.credential_env nu este un nume valid de variabilă de mediu",
+  "target.source.select %q is not a selection policy (supported: %s)": "target.source.select %q nu este o politică de selecție (acceptate: %s)",
+  "target.source.select and target.source.params.select both say which backup to restore — remove one": "target.source.select și target.source.params.select indică amândouă ce copie de rezervă se restaurează — eliminați una",
   "target.pitr requires exactly one of target_time (RFC 3339, e.g. \"2026-07-30T14:32:00Z\") or target_age (e.g. \"24h\")": "target.pitr cere exact unul dintre target_time (RFC 3339, de ex. \"2026-07-30T14:32:00Z\") și target_age (de ex. \"24h\")",
   "target.pitr.target_time %q is not an RFC 3339 timestamp": "target.pitr.target_time %q nu este un marcaj de timp RFC 3339",
   "target.pitr.target_time %q is in the future — a restore can only be proven to an instant that has already passed": "target.pitr.target_time %q este în viitor — o restaurare poate fi dovedită doar pentru un moment care a trecut deja",

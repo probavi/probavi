@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"os"
 	"runtime"
@@ -308,7 +309,7 @@ func (d *Drill) provisionRequest(sbx Sandbox, pitrTarget *string) *adapter.Provi
 		Source: adapter.ProvisionSource{
 			Kind:          src.Kind,
 			Path:          src.Path,
-			Params:        src.Params,
+			Params:        sourceParams(src),
 			CredentialEnv: src.CredentialEnv,
 		},
 		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
@@ -495,6 +496,21 @@ func supportsKind(probe *adapter.ProbeResult, kind string) bool {
 		}
 	}
 	return false
+}
+
+// sourceParams is what the adapter receives: the operator's params, plus
+// target.source.select folded in under its own name. The config's own map
+// is never written to — it is shared with whatever else reads the loaded
+// config — so a copy is made only when there is something to add, and the
+// loader has already refused a config that sets the key both ways.
+func sourceParams(src config.Source) map[string]string {
+	if src.Select == "" {
+		return src.Params
+	}
+	params := make(map[string]string, len(src.Params)+1)
+	maps.Copy(params, src.Params)
+	params[config.SelectParam] = src.Select
+	return params
 }
 
 func supportsPITR(probe *adapter.ProbeResult, kind string) bool {

@@ -19,6 +19,8 @@ const (
 	msgAdapterNamePattern   = "target.adapter %q must be lowercase letters, digits, and hyphens (it resolves to the executable probavi-adapter-%s)"
 	msgSourceKindRequired   = `target.source.kind is required (adapter-defined, e.g. "pgdump" — see the adapter's probe output)`
 	msgCredentialEnvName    = "target.source.credential_env entry %q is not a valid environment variable name"
+	msgSourceSelectValue    = "target.source.select %q is not a selection policy (supported: %s)"
+	msgSourceSelectTwice    = "target.source.select and target.source.params.select both say which backup to restore — remove one"
 	msgPITRExactlyOne       = `target.pitr requires exactly one of target_time (RFC 3339, e.g. "2026-07-30T14:32:00Z") or target_age (e.g. "24h")`
 	msgPITRBadTargetTime    = "target.pitr.target_time %q is not an RFC 3339 timestamp"
 	msgPITRFutureTargetTime = "target.pitr.target_time %q is in the future — a restore can only be proven to an instant that has already passed"
@@ -87,6 +89,8 @@ func Messages() []string {
 		msgAdapterNamePattern,
 		msgSourceKindRequired,
 		msgCredentialEnvName,
+		msgSourceSelectValue,
+		msgSourceSelectTwice,
 		msgPITRExactlyOne,
 		msgPITRBadTargetTime,
 		msgPITRFutureTargetTime,

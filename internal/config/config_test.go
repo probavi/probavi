@@ -151,6 +151,8 @@ func TestLoadRejects(t *testing.T) {
 		{"missing sign key", strings.Replace(validYAML, "sign_key: /etc/probavi/ed25519.key", "sign_key: \"\"", 1), []string{"evidence.sign_key is required", "keygen"}},
 		{"empty metrics section", validYAML + "metrics:\n  prometheus_textfile: \"\"\n", []string{"metrics.prometheus_textfile is required"}},
 		{"pitr with both targets", strings.Replace(validYAML, "adapter: postgres", "adapter: postgres\n  pitr:\n    target_time: \"2026-07-30T14:32:00Z\"\n    target_age: 24h", 1), []string{"exactly one of target_time"}},
+		{"unknown select policy", strings.Replace(validYAML, "    path: /backups/test.dump", "    path: /backups/test.dump\n    select: latest", 1), []string{"target.source.select", "latest", "newest, oldest, random"}},
+		{"select set twice", strings.Replace(validYAML, "    path: /backups/test.dump", "    path: /backups/test.dump\n    select: oldest\n    params:\n      select: newest", 1), []string{"both say which backup to restore"}},
 		{"pitr with neither target", strings.Replace(validYAML, "adapter: postgres", "adapter: postgres\n  pitr: {}", 1), []string{"exactly one of target_time"}},
 		{"pitr bad target_time", strings.Replace(validYAML, "adapter: postgres", "adapter: postgres\n  pitr:\n    target_time: \"yesterday 14:32\"", 1), []string{"not an RFC 3339 timestamp"}},
 		{"pitr negative target_age", strings.Replace(validYAML, "adapter: postgres", "adapter: postgres\n  pitr:\n    target_age: -24h", 1), []string{"must be positive"}},
@@ -375,4 +377,52 @@ func TestLoadersReportAMalformedDocumentRatherThanCrashing(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSourceSelectIsAcceptedAndPassedThrough covers the one source setting
+// the core reads: the three policies load, an absent one stays absent, and
+// the value is not otherwise touched — what it *means* is the adapter's,
+// and which kinds honour it is the adapter's refusal (drill-config.md §3.2).
+func TestSourceSelectIsAcceptedAndPassedThrough(t *testing.T) {
+	for _, policy := range SelectPolicies() {
+		t.Run(policy, func(t *testing.T) {
+			path := writeConfig(t, strings.Replace(validYAML,
+				"    path: /backups/test.dump",
+				"    path: /backups/test.dump\n    select: "+policy, 1))
+			cfg, err := Load(path, i18n.English())
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.Target.Source.Select != policy {
+				t.Errorf("select = %q, want %q", cfg.Target.Source.Select, policy)
+			}
+		})
+	}
+
+	t.Run("absent", func(t *testing.T) {
+		cfg, err := Load(writeConfig(t, validYAML), i18n.English())
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.Target.Source.Select != "" {
+			t.Errorf("select = %q, want empty — nothing declared is not a policy",
+				cfg.Target.Source.Select)
+		}
+	})
+
+	// params.select on its own still works: params stay uninterpreted, so a
+	// drill written before this key existed keeps running unchanged.
+	t.Run("params alone is untouched", func(t *testing.T) {
+		path := writeConfig(t, strings.Replace(validYAML,
+			"    path: /backups/test.dump",
+			"    path: /backups/test.dump\n    params:\n      select: oldest", 1))
+		cfg, err := Load(path, i18n.English())
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.Target.Source.Params["select"] != "oldest" || cfg.Target.Source.Select != "" {
+			t.Errorf("params = %v, select = %q — params must pass through untouched",
+				cfg.Target.Source.Params, cfg.Target.Source.Select)
+		}
+	})
 }

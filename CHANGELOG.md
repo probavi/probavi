@@ -13,6 +13,41 @@ always called out explicitly.
 
 ### Added
 
+- **`target.source.select` is a drill-config key, not only an adapter
+  parameter.** The rollout above put the policy in `source.params`, which
+  the core hands an adapter uninterpreted — the reversible order, chosen so
+  the semantics could settle across 26 adapters before anything was fixed
+  in the core schema. They have, so the key is promoted:
+
+  ```yaml
+  target:
+    source:
+      kind: pgdump_dir
+      path: /backups/pg
+      select: oldest        # newest (default) | oldest | random
+  ```
+
+  The loader validates the **value** — one of the three, and nothing else —
+  so a typo fails at load with exit code 3 and no evidence record, rather
+  than inside a sandbox that was created for nothing. Setting it both ways,
+  as `select` and as `params.select`, is refused too: two places saying
+  which backup a drill proves is one place too many.
+
+  What the core deliberately does **not** validate is whether the source
+  *kind* chooses a backup at all. That is engine knowledge the core does
+  not hold and must not start holding, and every adapter that implements
+  the parameter already refuses it by name, with a message naming what the
+  kind restores instead. Validating it in the core would need a
+  probe-declared capability, and the adapter protocol's v0 is frozen
+  (§11) — a major version bump buying a worse diagnostic than the one that
+  exists.
+
+  So the promotion costs nothing downstream: the key reaches the adapter as
+  `source.params.select`, no adapter changes, no protocol version, and no
+  evidence field — `backup.checksum` and `backup.created_at` already name
+  what was proved, and `drill.config_hash` covers the file that asked for
+  it. A drill that already set `params.select` keeps working untouched.
+
 - **A drill can prove the oldest backup in the retention window, not
   only last night's** (`adapters/postgres` 0.18.0, `source.params.select`).
   Every directory kind restored the newest member and nothing else was on
