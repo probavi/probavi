@@ -53,7 +53,7 @@ func TestTheDirectoryKindChoosesByTheHeaderLineAndTheClock(t *testing.T) {
 	}
 	want := writeArtifact(t, dir, "tuesday.txt", backupFixture(3))
 
-	src, perr := resolveSource(context.Background(), "couchbackup_dir", dir)
+	src, perr := resolveSource(context.Background(), "couchbackup_dir", dir, nil)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
@@ -71,7 +71,7 @@ func TestTheDirectoryKindChoosesByTheHeaderLineAndTheClock(t *testing.T) {
 	if err := os.Chtimes(tie, info.ModTime(), info.ModTime()); err != nil {
 		t.Fatal(err)
 	}
-	if src, perr = resolveSource(context.Background(), "couchbackup_dir", dir); perr != nil || src.path != tie {
+	if src, perr = resolveSource(context.Background(), "couchbackup_dir", dir, nil); perr != nil || src.path != tie {
 		t.Errorf("chose %+v (%+v), want the later name %s of two artifacts of one age", src, perr, tie)
 	}
 }
@@ -96,7 +96,7 @@ func TestTheDirectoryKindRefusesWhatHoldsNoBackup(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, perr := resolveSource(context.Background(), "couchbackup_dir", tc.path)
+			_, perr := resolveSource(context.Background(), "couchbackup_dir", tc.path, nil)
 			if perr == nil || perr.Code != tc.code || !strings.Contains(perr.Message, tc.message) {
 				t.Errorf("got %+v, want %s mentioning %q", perr, tc.code, tc.message)
 			}
@@ -112,7 +112,7 @@ func TestAPathBeneathAFileIsUnreadable(t *testing.T) {
 	beneath := filepath.Join(file, "nightly.txt")
 	for _, kind := range []string{"couchbackup", "couchbackup_dir", "couchdb_data", "couchdb_data_tar"} {
 		t.Run(kind, func(t *testing.T) {
-			_, perr := resolveSource(context.Background(), kind, beneath)
+			_, perr := resolveSource(context.Background(), kind, beneath, nil)
 			if perr == nil || perr.Code != "source_unreadable" {
 				t.Errorf("got %+v, want source_unreadable", perr)
 			}
@@ -127,13 +127,13 @@ func TestBytesTheHostCannotReadAreUnreadable(t *testing.T) {
 	t.Run("an artifact whose head will not be read", func(t *testing.T) {
 		file := writeArtifact(t, t.TempDir(), "nightly.txt", backupFixture(1))
 		closedTo(t, file, 0o600)
-		_, perr := resolveSource(context.Background(), "couchbackup", file)
+		_, perr := resolveSource(context.Background(), "couchbackup", file, nil)
 		wantUnreadable(t, perr, "read backup source")
 	})
 	t.Run("a candidate in a directory that will not be read", func(t *testing.T) {
 		dir := t.TempDir()
 		closedTo(t, writeArtifact(t, dir, "nightly.txt", backupFixture(1)), 0o600)
-		_, perr := resolveSource(context.Background(), "couchbackup_dir", dir)
+		_, perr := resolveSource(context.Background(), "couchbackup_dir", dir, nil)
 		wantUnreadable(t, perr, "read nightly.txt")
 	})
 	t.Run("bytes that will not stream", func(t *testing.T) {
@@ -147,13 +147,13 @@ func TestBytesTheHostCannotReadAreUnreadable(t *testing.T) {
 	t.Run("a shard the host may not open", func(t *testing.T) {
 		dir := dataDirFixture(t)
 		closedTo(t, filepath.Join(dir, "shards", "00000000-7fffffff", "orders.1788098722.couch"), 0o600)
-		_, perr := resolveSource(context.Background(), "couchdb_data", dir)
+		_, perr := resolveSource(context.Background(), "couchdb_data", dir, nil)
 		wantUnreadable(t, perr, "open shards/")
 	})
 	t.Run("a directory the host may not walk", func(t *testing.T) {
 		dir := dataDirFixture(t)
 		closedTo(t, filepath.Join(dir, "shards"), 0o755)
-		_, perr := resolveSource(context.Background(), "couchdb_data", dir)
+		_, perr := resolveSource(context.Background(), "couchdb_data", dir, nil)
 		wantUnreadable(t, perr, "walk backup source")
 	})
 }
@@ -246,7 +246,7 @@ func TestTheDirectoryScanRefusesAnArtifactInFlight(t *testing.T) {
 			time.Sleep(5 * time.Millisecond)
 		}
 	}()
-	_, perr := resolveSource(context.Background(), "couchbackup_dir", dir)
+	_, perr := resolveSource(context.Background(), "couchbackup_dir", dir, nil)
 	close(stop)
 	<-done
 

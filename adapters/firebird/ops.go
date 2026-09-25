@@ -11,7 +11,7 @@ import (
 
 const (
 	adapterName    = "firebird"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.2.0"
 
 	// workDirName is created under the provider's scratch directory.
 	// Firebird refuses nothing about where a database file lives, but

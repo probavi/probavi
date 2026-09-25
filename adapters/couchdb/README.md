@@ -18,7 +18,7 @@ runs under `--network none` (measured).
 | `couchdb_data_tar` | a tar of CouchDB's data directory |
 | `couchdb_data` | one copy of that directory — the tree holding `_dbs.couch`, `_nodes.couch` and `shards/` |
 | `couchbackup` | one [`couchbackup`](https://github.com/IBM/couchbackup) file |
-| `couchbackup_dir` | a directory of them; the newest by file time is restored |
+| `couchbackup_dir` | a directory of them; `source.params.select` picks one — newest by file time (the default), oldest, or random |
 
 PITR does not exist for a CouchDB backup; the probe declares `pitr: false`
 so the core refuses a `target.pitr` drill before anything runs.
@@ -132,6 +132,41 @@ It is a suspension, not a rewrite. An explicit `POST /<db>/_compact` still
 works: what a drill must not do is let the engine decide, not stop an
 operator from asking. A check reading the compaction settings still sees
 what the operator declared.
+
+## Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: couchbackup_dir
+  path: /backups/couchdb
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one an
+incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum` and `backup.size_bytes` do, and a
+scheduled drill choosing randomly covers the whole window over time.
+
+**Read the ordering caveat above before choosing `oldest`.** File time is
+all this adapter has, so a backup copied in without its timestamps looks
+like the newest thing in the directory under `newest` — and stops looking
+like the oldest under `oldest`. The policy is exactly as strong as the
+modification times in the directory are.
+
+The settle check does not change with the policy. The adapter chose the
+artifact under all three, so one a backup job is still writing still
+refuses the drill by name rather than quietly falling back to a neighbour.
+
+`select` on `couchbackup`, `couchdb_data` or `couchdb_data_tar`, which restore
+what `source.path` names, is **refused** rather than ignored.
 
 ## Drill config options
 

@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "clickhouse"
-	adapterVersion = "0.3.1"
+	adapterVersion = "0.4.0"
 
 	// defaultDatabase is ClickHouse's own default: it always exists, so the
 	// healthcheck and the sql_runner have a valid target before anything is
@@ -108,7 +108,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if perr != nil {
 		return nil, perr
 	}
-	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path)
+	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path, req.Source.Params)
 	if perr != nil {
 		return nil, perr
 	}

@@ -33,16 +33,21 @@ type resolvedSource struct {
 // without a `.zip` suffix writes an unpacked directory tree instead, which
 // this adapter does not read: one artifact, one checksum, one identity in
 // the evidence record. The README says how to produce the supported form.
-func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *protoError) {
+func resolveSource(ctx context.Context, kind, path string,
+	params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "clickhouse_backup":
 		return resolveFile(path)
 	case "clickhouse_backup_dir":
-		latest, perr := latestBackupIn(ctx, path)
+		chosen, perr := chooseBackupIn(ctx, path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveFile(latest)
+		return resolveFile(chosen)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: clickhouse_backup, clickhouse_backup_dir)", kind)
@@ -85,9 +90,9 @@ type candidate struct {
 	wallClock time.Time // zero for a file whose manifest could not be read
 }
 
-// latestBackupIn picks the archive whose manifest records the newest
-// backup time — what the backup says about itself, never the file's mtime,
-// which dates a copy rather than a backup.
+// chooseBackupIn picks the archive the policy asks for, ordered by the
+// backup time each manifest records — what the backup says about itself,
+// never the file's mtime, which dates a copy rather than a backup.
 //
 // Files that are not archives at all are skipped: a backup directory
 // routinely holds checksum files and job logs beside the artifacts. A file
@@ -102,7 +107,16 @@ type candidate struct {
 // timestamp: those are different clocks (when the file was written here
 // versus when the backup was taken there), and the question asked is only
 // "did something land after the artifact I picked".
-func latestBackupIn(ctx context.Context, dir string) (string, *protoError) {
+//
+// That refusal guards newest, and only newest. Under oldest and random the
+// operator has named which end of the retention window the drill is about
+// and the record names the artifact it proved, so a half-written archive
+// elsewhere in the directory is nothing the result could be read as
+// claiming — while keeping the refusal would fire on almost every
+// candidate, since under oldest nearly everything is newer than the chosen
+// one. It is the same scoping the weaviate adapter applies to its own
+// newer-attempt refusal, and for the same reason.
+func chooseBackupIn(ctx context.Context, dir string, policy selectPolicy) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -129,43 +143,62 @@ func latestBackupIn(ctx context.Context, dir string) (string, *protoError) {
 		}
 	}
 
-	best, perr := newestByWallClock(dir, readable)
-	if perr != nil {
-		return "", perr
+	if len(readable) == 0 {
+		return "", protoErr("source_not_found", false,
+			"backup directory %s contains no readable ClickHouse backup archive", dir)
 	}
-	for _, u := range unreadable {
-		if u.mtime.After(best.mtime) {
-			return "", protoErr("source_unreadable", false,
-				"%s is a backup archive this drill cannot read and it is newer than %s: "+
-					"a backup job may still be writing it. Run the drill after the job finishes, or have it "+
-					"write to a temporary name and rename on completion, so a drill never sees a partial file",
-				u.name, best.name)
+	best := pick(readable, policy)
+	if policy == selectNewest {
+		if perr := refuseNewerUnreadable(best, unreadable); perr != nil {
+			return "", perr
 		}
 	}
-	// The adapter chose this file, not the operator: make sure a backup job
-	// is not still writing it (see settle.go).
+	// The adapter chose this file, not the operator — under every policy:
+	// make sure a backup job is not still writing it (see settle.go).
 	if perr := assertSettled(ctx, best.path, settleWindow); perr != nil {
 		return "", perr
 	}
 	return best.path, nil
 }
 
-// newestByWallClock ranks readable archives. Ties break toward the
-// lexicographically larger name so the choice is deterministic when two
-// backups share a second.
-func newestByWallClock(dir string, candidates []candidate) (candidate, *protoError) {
-	var best candidate
-	for _, c := range candidates {
-		if best.path == "" || c.wallClock.After(best.wallClock) ||
-			(c.wallClock.Equal(best.wallClock) && c.name > best.name) {
-			best = c
+// refuseNewerUnreadable fails the drill when an archive the drill cannot
+// read landed after the one it picked — see chooseBackupIn for why that is
+// a refusal rather than a skip, and why it guards only the newest policy.
+func refuseNewerUnreadable(best candidate, unreadable []candidate) *protoError {
+	for _, u := range unreadable {
+		if u.mtime.After(best.mtime) {
+			return protoErr("source_unreadable", false,
+				"%s is a backup archive this drill cannot read and it is newer than %s: "+
+					"a backup job may still be writing it. Run the drill after the job finishes, or have it "+
+					"write to a temporary name and rename on completion, so a drill never sees a partial file",
+				u.name, best.name)
 		}
 	}
-	if best.path == "" {
-		return candidate{}, protoErr("source_not_found", false,
-			"backup directory %s contains no readable ClickHouse backup archive", dir)
+	return nil
+}
+
+// beats orders two readable archives for the newest policy: the later
+// recorded backup time, then the lexicographically larger name so the
+// choice is deterministic when two backups share a second.
+func (c candidate) beats(other candidate) bool {
+	if !c.wallClock.Equal(other.wallClock) {
+		return c.wallClock.After(other.wallClock)
 	}
-	return best, nil
+	return c.name > other.name
+}
+
+// precedes orders two readable archives for the oldest policy. Here it
+// really is beats turned around, and that is worth a sentence because in
+// the postgres and cassandra adapters it is not: those rank a backup
+// carrying its own recorded time above one that does not, and that rule
+// cannot invert. An archive whose manifest cannot be read never reaches
+// this comparison — it is either not an archive, and skipped, or it is one
+// and it refuses the drill — so there is nothing asymmetric left.
+func (c candidate) precedes(other candidate) bool {
+	if !c.wallClock.Equal(other.wallClock) {
+		return c.wallClock.Before(other.wallClock)
+	}
+	return c.name < other.name
 }
 
 // looksLikeArchive reports whether a file opens with the zip local-header

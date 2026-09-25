@@ -26,7 +26,7 @@ func TestDirectoryRanksByTheBackupsOwnTime(t *testing.T) {
 	writeArchive(t, newer, "2026-08-14 02:00:00")
 	backdate(t, newer, 48*time.Hour) // copied two days ago
 
-	src, perr := resolveSource(context.Background(), "clickhouse_backup_dir", dir)
+	src, perr := resolveSource(context.Background(), "clickhouse_backup_dir", dir, nil)
 	if perr != nil {
 		t.Fatalf("perr = %+v", perr)
 	}
@@ -45,7 +45,7 @@ func TestDirectoryTieBreaksDeterministically(t *testing.T) {
 		writeArchive(t, filepath.Join(dir, name), "2026-08-14 02:00:00")
 	}
 	for range 3 {
-		src, perr := resolveSource(context.Background(), "clickhouse_backup_dir", dir)
+		src, perr := resolveSource(context.Background(), "clickhouse_backup_dir", dir, nil)
 		if perr != nil {
 			t.Fatalf("perr = %+v", perr)
 		}
@@ -71,7 +71,7 @@ func TestResolveSourceRefusals(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, perr := resolveSource(context.Background(), tc.kind, tc.path)
+			_, perr := resolveSource(context.Background(), tc.kind, tc.path, nil)
 			if perr == nil || perr.Code != tc.want {
 				t.Errorf("perr = %+v, want %s", perr, tc.want)
 			}
@@ -94,7 +94,7 @@ func TestChecksumCoversTheStoredBytes(t *testing.T) {
 	sum := sha256.Sum256(raw)
 	want := "sha256:" + hex.EncodeToString(sum[:])
 
-	src, perr := resolveSource(context.Background(), "clickhouse_backup", archive)
+	src, perr := resolveSource(context.Background(), "clickhouse_backup", archive, nil)
 	if perr != nil {
 		t.Fatalf("perr = %+v", perr)
 	}
@@ -114,7 +114,7 @@ func TestUnreadableManifestStillRestores(t *testing.T) {
 	archive := filepath.Join(dir, "shop.zip")
 	writeArchive(t, archive, "") // a manifest with no timestamp
 
-	src, perr := resolveSource(context.Background(), "clickhouse_backup", archive)
+	src, perr := resolveSource(context.Background(), "clickhouse_backup", archive, nil)
 	if perr != nil {
 		t.Fatalf("perr = %+v, want the archive accepted", perr)
 	}

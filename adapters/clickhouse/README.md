@@ -11,7 +11,7 @@ Probavi core.
 | `source.kind` | What `source.path` points at |
 | --- | --- |
 | `clickhouse_backup` | one native backup archive |
-| `clickhouse_backup_dir` | a directory of them; the archive whose own manifest records the newest backup time is restored |
+| `clickhouse_backup_dir` | a directory of them; `source.params.select` picks one — newest by the backup time each archive's own manifest records (the default), oldest, or random |
 
 Both kinds expect the **archive** form, which is what you get when the
 backup destination ends in `.zip`:
@@ -176,6 +176,53 @@ surfaces as `CANNOT_OPEN_FILE` from the server, which reads like a broken
 backup rather than a permission the adapter chose. The archive is
 transferred `0644` into the server's backup directory, which is created if
 this server has never taken a backup.
+
+## Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: clickhouse_backup_dir
+  path: /backups/clickhouse
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one an
+incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum` and `backup.size_bytes` do, and a
+scheduled drill choosing randomly covers the whole window over time.
+
+Every policy ranks by the backup time each archive's own manifest
+records, so `oldest` here is exactly as strong as `newest` already was — a
+copy's file time cannot make an archive look like either end of the
+window. There is no separate rule about archives that state nothing: one
+whose manifest cannot be read is never ranked at all, which is also what
+keeps a random draw off a half-written zip.
+
+**`newest` refuses a newer unreadable archive; `oldest` and `random` do
+not.** Under `newest` the refusal is the point: a backup job still writing
+its zip leaves an archive with no central directory, and quietly restoring
+last night's while the record named tonight's drill is exactly the failure
+it exists to prevent. Under the other two the operator has named which end
+of the window the drill is about and the record names the artifact it
+proved, so there is no such implication to guard — and the refusal would
+fire on almost every candidate, since under `oldest` nearly everything in
+the directory is newer than the chosen one. A directory holding no
+readable archive is still refused under every policy.
+
+The settle check does not change with the policy either: the adapter chose
+the archive under all three, so one a backup job is still writing still
+refuses the drill by name.
+
+`select` on `clickhouse_backup`, which restores what `source.path` names,
+is **refused** rather than ignored.
 
 ## Where the archive is put
 

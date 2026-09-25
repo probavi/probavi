@@ -167,7 +167,7 @@ func TestDirectoryScanRefusesAnArchiveInFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, perr := resolveSource(context.Background(), "clickhouse_backup_dir", dir)
+	_, perr := resolveSource(context.Background(), "clickhouse_backup_dir", dir, nil)
 	if perr == nil {
 		t.Fatal("resolveSource accepted a directory whose newest archive was still being written")
 	}
@@ -196,7 +196,7 @@ func TestDirectoryScanIgnoresOldUnreadableFiles(t *testing.T) {
 	good := filepath.Join(dir, "z-tonight.zip")
 	writeArchive(t, good, "2026-08-14 01:00:00")
 
-	src, perr := resolveSource(context.Background(), "clickhouse_backup_dir", dir)
+	src, perr := resolveSource(context.Background(), "clickhouse_backup_dir", dir, nil)
 	if perr != nil {
 		t.Fatalf("perr = %+v, want the readable archive to be restorable", perr)
 	}

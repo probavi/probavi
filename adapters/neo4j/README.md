@@ -10,7 +10,7 @@ written from the protocol document alone.
 | Kind             | Meaning                                                    |
 |------------------|------------------------------------------------------------|
 | `neo4j_dump`     | One `neo4j-admin database dump` archive, under any file name. |
-| `neo4j_dump_dir` | A directory of dump archives; the newest regular file is restored (mtime, ties broken by name — an archive carries no timestamp of its own). |
+| `neo4j_dump_dir` | A directory of dump archives; `source.params.select` picks one — newest by file time (the default), oldest, or random, ties broken by name (an archive carries no timestamp of its own). |
 
 The file name is the backup job's business, not Probavi's.
 `neo4j-admin database load` derives the file it reads from the *database*
@@ -206,16 +206,53 @@ wrote it is expecting an accuracy this kind cannot deliver.
 
 ## Which backup a drill restores, and when it refuses
 
-For `neo4j_dump_dir` the adapter picks the newest regular file, breaking
-ties toward the lexicographically larger name so the choice is the same
-on every run. Because the adapter chose the file rather than the
-operator, it also refuses one a backup job is still writing: an artifact
+For `neo4j_dump_dir` the adapter picks the regular file
+`source.params.select` asks for — the newest by file time unless the
+config says otherwise (below) — breaking ties toward the lexicographically
+larger name so the choice is the same on every run. Because the adapter
+chose the file rather than the operator, it also refuses one a backup job
+is still writing: an artifact
 whose size or mtime moves while it is being looked at fails the drill
 with a message that says what to do. Skipping it and restoring
 yesterday's would be worse — the drill would prove an older backup while
 the record implied the newest, and nothing in the evidence would say so.
 A job that writes to a temporary name and renames on completion never
 trips this at all; that is the real fix.
+
+### Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: neo4j_dump_dir
+  path: /backups/neo4j
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one an
+incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum` and `backup.size_bytes` do, and a
+scheduled drill choosing randomly covers the whole window over time.
+
+**Read the ordering caveat above before choosing `oldest`.** File time is
+all this adapter has, so a backup copied in without its timestamps looks
+like the newest thing in the directory under `newest` — and stops looking
+like the oldest under `oldest`. The policy is exactly as strong as the
+modification times in the directory are.
+
+The settle check does not change with the policy. The adapter chose the
+artifact under all three, so one a backup job is still writing still
+refuses the drill by name rather than quietly falling back to a neighbour.
+
+`select` on `neo4j_dump`, which restores what `source.path` names, is
+**refused** rather than ignored.
 
 ## Errors it reports
 

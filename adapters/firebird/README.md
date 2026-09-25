@@ -11,7 +11,7 @@ Probavi core.
 | Kind | What it takes |
 | --- | --- |
 | `firebird_gbak` | One gbak transportable backup file |
-| `firebird_gbak_dir` | A directory of gbak backups; the newest is restored |
+| `firebird_gbak_dir` | A directory of gbak backups; `source.params.select` picks one — newest by file time (the default), oldest, or random |
 
 A gbak backup is what `gbak -b <database> <file>` writes: a single
 transportable file, restored with `gbak -c`.
@@ -150,6 +150,45 @@ source:
 Without the declaration the record's `created_at` is `null` rather than a
 guess. An unknown zone name fails the drill rather than silently dropping
 the timestamp it was meant to anchor.
+
+## Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: firebird_gbak_dir
+  path: /backups/firebird
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one an
+incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum` and `backup.size_bytes` do, and a
+scheduled drill choosing randomly covers the whole window over time.
+
+**File time is all this adapter has to order a directory by**, and that is
+a decision rather than an oversight: a gbak backup's header carries the
+wall clock of the host that took it with no offset, so it is not an
+instant two artifacts may be ranked by — reporting it needs a declared
+zone (above), and the ordering must not depend on one being declared. So a
+backup copied in without its timestamps looks like the newest thing in the
+directory under `newest`, and stops looking like the oldest under
+`oldest`. The policy is exactly as strong as the modification times in the
+directory are.
+
+The settle check does not change with the policy. The adapter chose the
+artifact under all three, so one a backup job is still writing still
+refuses the drill by name rather than quietly falling back to a neighbour.
+
+`select` on `firebird_gbak`, which restores what `source.path` names, is
+**refused** rather than ignored.
 
 ## Backup identity
 

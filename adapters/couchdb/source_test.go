@@ -79,7 +79,7 @@ func TestResolveSourceAcceptsEveryKind(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.kind, func(t *testing.T) {
-			src, perr := resolveSource(ctx, tc.kind, tc.path)
+			src, perr := resolveSource(ctx, tc.kind, tc.path, nil)
 			if perr != nil {
 				t.Fatalf("resolveSource: %v", perr)
 			}
@@ -118,7 +118,7 @@ func TestTheBatchCountIsTheOnlyCompletenessCheckTheFormatAllows(t *testing.T) {
 	ctx := context.Background()
 	whole := backupFixture(4)
 
-	full, perr := resolveSource(ctx, "couchbackup", writeArtifact(t, t.TempDir(), "b.jsonl", whole))
+	full, perr := resolveSource(ctx, "couchbackup", writeArtifact(t, t.TempDir(), "b.jsonl", whole), nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %v", perr)
 	}
@@ -128,7 +128,7 @@ func TestTheBatchCountIsTheOnlyCompletenessCheckTheFormatAllows(t *testing.T) {
 
 	// Cut inside the last line: refused.
 	torn := whole[:len(whole)-8]
-	_, perr = resolveSource(ctx, "couchbackup", writeArtifact(t, t.TempDir(), "torn.jsonl", torn))
+	_, perr = resolveSource(ctx, "couchbackup", writeArtifact(t, t.TempDir(), "torn.jsonl", torn), nil)
 	if perr == nil || perr.Code != "source_corrupt" || !strings.Contains(perr.Message, "cut mid-batch") {
 		t.Fatalf("a backup cut inside a batch = %v, want source_corrupt naming the mid-batch cut", perr)
 	}
@@ -138,7 +138,7 @@ func TestTheBatchCountIsTheOnlyCompletenessCheckTheFormatAllows(t *testing.T) {
 	// README says so and the drill's own row-count check is what closes it.
 	lines := strings.SplitAfter(string(whole), "\n")
 	shorter := strings.Join(lines[:3], "")
-	short, perr := resolveSource(ctx, "couchbackup", writeArtifact(t, t.TempDir(), "short.jsonl", []byte(shorter)))
+	short, perr := resolveSource(ctx, "couchbackup", writeArtifact(t, t.TempDir(), "short.jsonl", []byte(shorter)), nil)
 	if perr != nil {
 		t.Fatalf("a backup cut at a line boundary must resolve, not fail: %v", perr)
 	}
@@ -236,7 +236,7 @@ func TestResolveSourceRefusals(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, perr := resolveSource(ctx, tc.kind, tc.path(t))
+			_, perr := resolveSource(ctx, tc.kind, tc.path(t), nil)
 			if perr == nil {
 				t.Fatal("resolveSource accepted an artifact it must refuse")
 			}

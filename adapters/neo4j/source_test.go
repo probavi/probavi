@@ -21,7 +21,7 @@ func TestResolveSourceFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, perr := resolveSource(context.Background(), "neo4j_dump", path)
+	got, perr := resolveSource(context.Background(), "neo4j_dump", path, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource = %+v", perr)
 	}
@@ -45,7 +45,7 @@ func TestResolveSourceDirectoryPicksTheNewest(t *testing.T) {
 	newest := writeAgedIn(t, dir, "wednesday.dump", 24*time.Hour)
 	writeAgedIn(t, dir, "tuesday.dump", 48*time.Hour)
 
-	got, perr := resolveSource(context.Background(), "neo4j_dump_dir", dir)
+	got, perr := resolveSource(context.Background(), "neo4j_dump_dir", dir, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource = %+v", perr)
 	}
@@ -65,7 +65,7 @@ func TestResolveSourceDirectoryBreaksTiesDeterministically(t *testing.T) {
 		}
 	}
 	for range 3 {
-		got, perr := resolveSource(context.Background(), "neo4j_dump_dir", dir)
+		got, perr := resolveSource(context.Background(), "neo4j_dump_dir", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource = %+v", perr)
 		}
@@ -81,7 +81,7 @@ func TestResolveSourceDirectoryIgnoresSubdirectories(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "newer-directory"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	got, perr := resolveSource(context.Background(), "neo4j_dump_dir", dir)
+	got, perr := resolveSource(context.Background(), "neo4j_dump_dir", dir, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource = %+v", perr)
 	}
@@ -112,7 +112,7 @@ func TestResolveSourceRefusals(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, perr := resolveSource(context.Background(), tt.kind, tt.path)
+			_, perr := resolveSource(context.Background(), tt.kind, tt.path, nil)
 			if perr == nil {
 				t.Fatalf("resolveSource accepted %s %s", tt.kind, tt.path)
 			}
@@ -134,7 +134,7 @@ func TestFileChecksumReportsAnUnreadableArtifact(t *testing.T) {
 	if err := os.Chmod(path, 0o000); err != nil {
 		t.Fatal(err)
 	}
-	_, perr := resolveSource(context.Background(), "neo4j_dump", path)
+	_, perr := resolveSource(context.Background(), "neo4j_dump", path, nil)
 	if perr == nil || perr.Code != "source_unreadable" {
 		t.Errorf("perr = %+v, want source_unreadable", perr)
 	}

@@ -51,7 +51,12 @@ const (
 // carry the database's own creation instant rather than the backup's
 // (both measured) — so created_at is always null and directories rank by
 // modification time, the etcd adapter's precedent.
-func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *protoError) {
+func resolveSource(ctx context.Context, kind, path string,
+	params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "couchbackup":
 		if perr := refuseDirectory(path, "couchbackup_dir"); perr != nil {
@@ -59,11 +64,11 @@ func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *pr
 		}
 		return resolveBackup(path)
 	case "couchbackup_dir":
-		latest, perr := latestIn(ctx, path, candidateBackup)
+		chosen, perr := chooseIn(ctx, path, policy, candidateBackup)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveBackup(latest)
+		return resolveBackup(chosen)
 	case "couchdb_data":
 		return resolveDataDir(path)
 	case "couchdb_data_tar":
@@ -242,15 +247,16 @@ func candidateBackup(path string) (bool, *protoError) {
 	return hasBackupSignature(head), nil
 }
 
-// latestIn picks the directory's newest artifact of the given kind. No
-// CouchDB artifact records when it was taken, so file modification time is
-// the only rank available — the etcd precedent, and the README says so.
+// chooseIn picks the artifact of the given kind that the policy asks for.
+// No CouchDB artifact records when it was taken, so file modification time
+// is the only rank available — the etcd precedent, and the README says so.
 // The file the ranking chooses still faces every single-file gate, so an
 // artifact that wins the ranking and then fails a gate is refused by name
 // rather than silently passed over — the same not-a-filter principle as
 // settle.go.
-func latestIn(ctx context.Context, dir string, candidate func(string) (bool, *protoError)) (string, *protoError) {
-	best, skipped, perr := newestWhere(dir, candidate)
+func chooseIn(ctx context.Context, dir string, policy selectPolicy,
+	candidate func(string) (bool, *protoError)) (string, *protoError) {
+	best, skipped, perr := chooseWhere(dir, policy, candidate)
 	if perr != nil {
 		return "", perr
 	}
@@ -272,7 +278,8 @@ func latestIn(ctx context.Context, dir string, candidate func(string) (bool, *pr
 // newestWhere scans dir for the newest regular file the candidate
 // predicate accepts; ties break toward the lexicographically larger name
 // so the choice never depends on directory iteration order.
-func newestWhere(dir string, candidate func(path string) (bool, *protoError)) (string, int, *protoError) {
+func chooseWhere(dir string, policy selectPolicy,
+	candidate func(path string) (bool, *protoError)) (string, int, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -280,8 +287,7 @@ func newestWhere(dir string, candidate func(path string) (bool, *protoError)) (s
 	case err != nil:
 		return "", 0, protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var best string
-	var bestInfo os.FileInfo
+	candidates := make([]dirCandidate, 0, len(entries))
 	skipped := 0
 	for _, e := range entries {
 		if !e.Type().IsRegular() {
@@ -300,22 +306,12 @@ func newestWhere(dir string, candidate func(path string) (bool, *protoError)) (s
 		if err != nil {
 			return "", 0, protoErr("source_unreadable", false, "stat %s: %v", e.Name(), err)
 		}
-		if beats(info, e.Name(), bestInfo, filepath.Base(best)) {
-			best, bestInfo = path, info
-		}
+		candidates = append(candidates, dirCandidate{path: path, name: e.Name(), mtime: info.ModTime()})
 	}
-	return best, skipped, nil
-}
-
-func beats(info os.FileInfo, name string, bestInfo os.FileInfo, bestName string) bool {
-	switch {
-	case bestInfo == nil:
-		return true
-	case !info.ModTime().Equal(bestInfo.ModTime()):
-		return info.ModTime().After(bestInfo.ModTime())
-	default:
-		return name > bestName
+	if len(candidates) == 0 {
+		return "", skipped, nil
 	}
+	return pick(candidates, policy).path, skipped, nil
 }
 
 // fileChecksum streams the artifact once. The hash feeds the evidence

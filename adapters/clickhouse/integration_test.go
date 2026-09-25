@@ -390,6 +390,54 @@ func TestDirectoryDrillPicksTheNewestBackup(t *testing.T) {
 	assertQuery(t, ctx, sbx, probe, res, `SELECT count(*) FROM "shop"."orders"`, "500")
 }
 
+// TestDirectoryDrillProvesTheOldestBackup is this batch's end-to-end proof
+// that source.params.select reaches the drill: the same directory and the
+// same two archives as above, and the record proves the other end of the
+// retention window. The row counts differ, so which end was proved is a
+// measurement rather than a claim.
+func TestDirectoryDrillProvesTheOldestBackup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	provider := docker.New(nil)
+
+	dir := t.TempDir()
+	older := filepath.Join(dir, "z-decoy.zip")
+	newer := filepath.Join(dir, "a-wanted.zip")
+	makeRankingFixtures(t, ctx, provider, older, newer)
+
+	sbx, err := provider.Create(ctx, sandboxParams(t))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("clickhouse", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	probe, err := runner.Probe(ctx)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source: adapter.ProvisionSource{
+			Kind: "clickhouse_backup_dir", Path: dir,
+			Params: map[string]string{"select": "oldest"},
+		},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+		Options: map[string]string{"database": "shop"},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+
+	// The older backup holds 1 row; the one the default policy restores
+	// holds 500.
+	assertQuery(t, ctx, sbx, probe, res, `SELECT count(*) FROM "shop"."orders"`, "1")
+}
+
 // assertQuery runs one statement through the probe-declared sql_runner —
 // exactly how internal/checks runs checks without engine knowledge.
 func assertQuery(t *testing.T, ctx context.Context, sbx *docker.Sandbox,
