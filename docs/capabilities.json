@@ -9,7 +9,11 @@
   },
   "contracts": {
     "adapter_protocol": {
-      "version": "probavi-adapter/0",
+      "version": "probavi-adapter/1",
+      "spoken_versions": [
+        "probavi-adapter/1",
+        "probavi-adapter/0"
+      ],
       "spec": "docs/adapter-protocol.md",
       "schema": "docs/schemas/adapter/"
     },

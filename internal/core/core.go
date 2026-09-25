@@ -42,6 +42,9 @@ type AdapterClient interface {
 	// it into adapter.digest so a record says which build produced it
 	// (evidence-schema.md §3).
 	Path() string
+	// Protocol is the version this client is speaking: the floor before a
+	// probe has answered, the negotiated version after (protocol §8).
+	Protocol() string
 	Probe(ctx context.Context) (*adapter.ProbeResult, error)
 	Provision(ctx context.Context, req *adapter.ProvisionRequest, verbs adapter.SandboxVerbs) (*adapter.ProvisionResult, error)
 	Healthcheck(ctx context.Context, conn *adapter.Connection, state json.RawMessage, verbs adapter.SandboxVerbs) (*adapter.HealthcheckResult, error)
@@ -220,8 +223,11 @@ func (d *Drill) baseRecord() *evidence.Record {
 		Drill:  evidence.Drill{Name: cfg.Target.Name, ConfigHash: cfg.Hash, PITRTarget: pitrTarget},
 		Backup: evidence.Backup{Kind: cfg.Target.Source.Kind},
 		Adapter: evidence.Adapter{
-			Name:     cfg.Target.Adapter,
-			Protocol: adapter.ProtocolVersion,
+			Name: cfg.Target.Adapter,
+			// The floor until a probe answers: it is what the probe
+			// request carries, so a drill that got no further spoke
+			// exactly this and the record must not claim more.
+			Protocol: adapter.ProtocolFloor,
 			Digest:   evidence.FileDigest(d.Adapter.Path()),
 		},
 		Sandbox: evidence.Sandbox{Provider: cfg.Sandbox.Provider, Params: params},
@@ -252,18 +258,10 @@ func (d *Drill) execute(ctx context.Context, rec *evidence.Record) {
 		return
 	}
 	rec.Adapter.Version = &probe.AdapterVersion
-	if !supportsKind(probe, d.Config.Target.Source.Kind) {
-		rec.Outcome = evidence.OutcomeError
-		rec.Error = &evidence.DrillError{Code: "unsupported_source",
-			Message: fmt.Sprintf("adapter %s does not support source kind %s", probe.Name, d.Config.Target.Source.Kind)}
-		return
-	}
-	// The protocol (§6.2) forbids sending pitr to a source kind that did not
-	// declare the capability; gate here so the config error is precise.
-	if d.Config.Target.PITR != nil && !supportsPITR(probe, d.Config.Target.Source.Kind) {
-		rec.Outcome = evidence.OutcomeError
-		rec.Error = &evidence.DrillError{Code: "unsupported_source",
-			Message: fmt.Sprintf("source kind %s does not support point-in-time recovery (adapter %s)", d.Config.Target.Source.Kind, probe.Name)}
+	// Negotiation has happened by now, so the record stops claiming the
+	// floor and states the version this drill actually spoke.
+	rec.Adapter.Protocol = d.Adapter.Protocol()
+	if d.refusedByProbe(probe, rec) {
 		return
 	}
 
@@ -311,6 +309,38 @@ func (d *Drill) execute(ctx context.Context, rec *evidence.Record) {
 		return
 	}
 	rec.Outcome = evidence.OutcomePass
+}
+
+// refusedByProbe answers the three questions a probe settles before a
+// sandbox is created, and writes the refusal into the record when one of
+// them is no. Each is a configuration mistake only the adapter can see,
+// and each is recorded rather than merely reported (drill-config.md §5.3).
+func (d *Drill) refusedByProbe(probe *adapter.ProbeResult, rec *evidence.Record) bool {
+	src := d.Config.Target.Source
+	refuse := func(code, format string, args ...any) bool {
+		rec.Outcome = evidence.OutcomeError
+		rec.Error = &evidence.DrillError{Code: code, Message: fmt.Sprintf(format, args...)}
+		return true
+	}
+	switch {
+	case !supportsKind(probe, src.Kind):
+		return refuse(evidence.CodeUnsupportedSource,
+			"adapter %s does not support source kind %s", probe.Name, src.Kind)
+	// The protocol (§6.2) forbids sending pitr to a source kind that did
+	// not declare the capability; gate here so the config error is precise.
+	case d.Config.Target.PITR != nil && !supportsPITR(probe, src.Kind):
+		return refuse(evidence.CodeUnsupportedSource,
+			"source kind %s does not support point-in-time recovery (adapter %s)", src.Kind, probe.Name)
+	// A selection policy against a kind that chooses no backup used to be
+	// the adapter's refusal, inside the sandbox. A v1 adapter can say so in
+	// its probe, and then the drill ends here instead — same code, same
+	// verdict, no sandbox (protocol §6.1.2).
+	case src.Select != "" && !selectsABackup(probe, src.Kind):
+		return refuse(evidence.CodeInvalidRequest,
+			"source kind %s chooses no backup, so select=%s cannot apply (adapter %s)",
+			src.Kind, src.Select, probe.Name)
+	}
+	return false
 }
 
 // checkBackupManifest holds the artifact to what the backup job said it
@@ -365,7 +395,8 @@ func (d *Drill) checkDeps(probe *adapter.ProbeResult, provRes *adapter.Provision
 			}
 			return res.Healthy, res.Detail, nil
 		},
-		Runner: checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
+		Runner:  checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
+		Dialect: dialectFrom(probe),
 		Target: checks.Target{
 			User:     provRes.Connection.User,
 			Database: provRes.Connection.Database,
@@ -545,6 +576,36 @@ func sourceParams(src config.Source) map[string]string {
 	maps.Copy(params, src.Params)
 	params[config.SelectParam] = src.Select
 	return params
+}
+
+// selectsABackup reports whether a selection policy may be applied to
+// this kind. A kind that declared nothing — every v0 adapter, and any v1
+// adapter with nothing to say — is permitted here and refused by the
+// adapter itself if it does not select, which is v0's behaviour exactly.
+func selectsABackup(probe *adapter.ProbeResult, kind string) bool {
+	for _, s := range probe.Sources {
+		if s.Kind == kind && s.Capabilities.Select != nil {
+			return *s.Capabilities.Select
+		}
+	}
+	return true
+}
+
+// dialectFrom carries the adapter's §6.1.1 declarations into the check
+// runner. Nothing declared yields the zero Dialect, which is the core
+// composing its own statements and quoting SQL-standard.
+func dialectFrom(probe *adapter.ProbeResult) checks.Dialect {
+	d := checks.Dialect{}
+	if probe.Identifier != nil {
+		d.Open, d.Close, d.Separator = probe.Identifier.Open, probe.Identifier.Close, probe.Identifier.Separator
+	}
+	for kind, declared := range probe.Checks {
+		if d.Statements == nil {
+			d.Statements = make(map[string]string, len(probe.Checks))
+		}
+		d.Statements[kind] = declared.Statement
+	}
+	return d
 }
 
 func supportsPITR(probe *adapter.ProbeResult, kind string) bool {

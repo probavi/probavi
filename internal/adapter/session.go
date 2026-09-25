@@ -21,8 +21,15 @@ import (
 // for provision (put_file source allow-listing).
 func (r *Runner) do(ctx context.Context, op string, payload any, verbs SandboxVerbs, guard func(string) (string, error)) (json.RawMessage, error) {
 	requestID := newRequestID()
+	// The probe discovers the version, so it cannot be sent at one the
+	// adapter might refuse: it goes out at the floor and everything after
+	// it at what negotiation chose (§8).
+	protocol := ProtocolFloor
+	if op != "probe" {
+		protocol = r.Protocol()
+	}
 	request, err := json.Marshal(envelope{
-		Protocol: ProtocolVersion, RequestID: requestID, Op: op, Payload: mustMarshal(payload),
+		Protocol: protocol, RequestID: requestID, Op: op, Payload: mustMarshal(payload),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s request: %w", op, err)
@@ -32,6 +39,7 @@ func (r *Runner) do(ctx context.Context, op string, payload any, verbs SandboxVe
 	if err != nil {
 		return nil, err
 	}
+	s.protocol = protocol
 	defer s.finish()
 
 	if _, err := s.stdin.Write(append(request, '\n')); err != nil && !closedPipe(err) {
@@ -88,6 +96,9 @@ type session struct {
 	grace        time.Duration
 	waited       bool
 	stdinClosed  bool
+	// protocol is the version this operation is speaking. Every message
+	// of one operation carries the same one, in both directions.
+	protocol string
 }
 
 func (r *Runner) start(ctx context.Context) (*session, error) {
@@ -190,8 +201,8 @@ func (s *session) readMessage(op, requestID string) (*envelope, *Error) {
 	if err := json.Unmarshal(s.stdout.Bytes(), env); err != nil {
 		return nil, crashf("%s: stdout is not a protocol message: %v", op, err)
 	}
-	if env.Protocol != ProtocolVersion {
-		return nil, crashf("%s: message protocol %q, want %q", op, env.Protocol, ProtocolVersion)
+	if env.Protocol != s.protocol {
+		return nil, crashf("%s: message protocol %q, want %q", op, env.Protocol, s.protocol)
 	}
 	if env.RequestID != requestID {
 		return nil, crashf("%s: message request_id %q does not echo %q", op, env.RequestID, requestID)
@@ -201,7 +212,7 @@ func (s *session) readMessage(op, requestID string) (*envelope, *Error) {
 
 func (s *session) writeSandboxResult(requestID string, result sandboxResult) error {
 	line, err := json.Marshal(sandboxResultEnvelope{
-		Protocol: ProtocolVersion, RequestID: requestID, SandboxResult: result,
+		Protocol: s.protocol, RequestID: requestID, SandboxResult: result,
 	})
 	if err != nil {
 		return err

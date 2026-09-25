@@ -12,11 +12,25 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"slices"
 	"time"
 )
 
-// ProtocolVersion is the protocol this client speaks.
-const ProtocolVersion = "probavi-adapter/0"
+// ProtocolVersion is the highest protocol version this client speaks, and
+// ProtocolFloor the lowest. Both are published: an adapter declaring only
+// the floor is driven unchanged, forever (protocol §8).
+const (
+	ProtocolVersion = "probavi-adapter/1"
+	ProtocolFloor   = "probavi-adapter/0"
+)
+
+// protocolVersions are the versions this client speaks, highest first.
+// Negotiation walks it in order and takes the first the adapter also
+// declares, which is §8's "highest common one".
+var protocolVersions = []string{ProtocolVersion, ProtocolFloor}
+
+// ProtocolVersions returns the versions this client speaks, highest first.
+func ProtocolVersions() []string { return slices.Clone(protocolVersions) }
 
 // maxLineBytes is the protocol's frame size limit (§2.2).
 const maxLineBytes = 4 << 20
@@ -77,6 +91,23 @@ type Runner struct {
 	path   string
 	logger *slog.Logger
 	opts   Options
+
+	// negotiated is the version chosen from the probe response and used
+	// for every later operation of this drill. Empty until Probe has
+	// answered, which is why the probe itself goes out at the floor: the
+	// message that discovers the version cannot be sent at a version the
+	// adapter might refuse (§6.1).
+	negotiated string
+}
+
+// Protocol is the version this runner is speaking. Before a probe has
+// answered it is the floor, which is what the probe request carries and
+// therefore what a record should say about a drill that got no further.
+func (r *Runner) Protocol() string {
+	if r.negotiated == "" {
+		return ProtocolFloor
+	}
+	return r.negotiated
 }
 
 // Path is the executable this runner launches, as resolved from the

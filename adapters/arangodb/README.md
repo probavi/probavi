@@ -208,8 +208,10 @@ environment. The statement never becomes an option value.
 
 ## Conformance
 
-**12 of the 15 checks pass, and `conformance_verified` is `false`** —
-stated rather than quietly omitted. Check 9 provisions 64 KiB of random
+**14 of the 17 checks pass, and `conformance_verified` is `false`** —
+stated rather than quietly omitted. (It was 12 of 15 until the suite grew
+protocol v1's two declaration checks, which this adapter passes trivially
+by declaring nothing.) Check 9 provisions 64 KiB of random
 bytes as the source and expects a restore. This adapter's artifact is an
 `arangodump` output whose `dump.json` names the database to restore into;
 a random file names none, and inventing a name would restore into a

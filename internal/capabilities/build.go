@@ -91,10 +91,11 @@ func Generate(root, out string) error {
 
 func buildContracts(root string) (Contracts, error) {
 	c := Contracts{
-		AdapterProtocol: Contract{
-			Version: adapter.ProtocolVersion,
-			Spec:    "docs/adapter-protocol.md",
-			Schema:  "docs/schemas/adapter/",
+		AdapterProtocol: AdapterContract{
+			Version:        adapter.ProtocolVersion,
+			SpokenVersions: adapter.ProtocolVersions(),
+			Spec:           "docs/adapter-protocol.md",
+			Schema:         "docs/schemas/adapter/",
 		},
 		EvidenceSchema: EvidenceContract{
 			Version:             evidence.SchemaID,

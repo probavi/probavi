@@ -17,6 +17,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/probavi/probavi/internal/config"
 )
 
 // Check is one §10 check's verdict.
@@ -80,6 +82,16 @@ type probeResult struct {
 		Env  map[string]string `json:"env"`
 	} `json:"sql_runner"`
 	VerbsRequired []string `json:"verbs_required"`
+
+	// v1 (§6.1.1), both optional and both absent from every v0 adapter.
+	Identifier *struct {
+		Open      string `json:"open"`
+		Close     string `json:"close"`
+		Separator string `json:"separator"`
+	} `json:"identifier"`
+	Checks map[string]struct {
+		Statement string `json:"statement"`
+	} `json:"checks"`
 }
 
 // provisionResult is the §6.2 payload as the suite reads it.
@@ -138,7 +150,22 @@ func Run(ctx context.Context, adapterPath string, opts Options) (*Report, error)
 		}
 	}
 	s.checkFraming()
+	s.checkV1Declarations()
 	return s.report, nil
+}
+
+// checkV1Declarations covers checks 16–17. They are appended after the
+// frozen v0 list rather than grouped with the other probe checks, because
+// §10 freezes the list per version and v0's order may not move.
+func (s *suite) checkV1Declarations() {
+	pr := s.probe
+	if pr == nil {
+		pr = &probeResult{}
+	}
+	keys := checksKeysProblem(pr)
+	s.report.add("probe.checks_keys", keys == "", keys)
+	ident := identifierProblem(pr)
+	s.report.add("probe.identifier", ident == "", ident)
 }
 
 // driveOp runs one operation and collects its framing observations for
@@ -181,6 +208,78 @@ func (s *suite) checkProbe() {
 		s.report.add("probe.no_sandbox_calls", false,
 			fmt.Sprintf("probe issued %d sandbox call(s); §6.1 forbids any", len(res.calls)))
 	}
+
+}
+
+// checksKeysProblem is check 16. An adapter that declares nothing passes
+// it, which is every v0 adapter: the value of the check is that a
+// misspelled kind is refused here rather than silently ignored at drill
+// time, where the core would go on composing its own statement and the
+// declaration would simply never take effect.
+// builtinPlaceholders is which placeholders each built-in check kind
+// declares, derived from the check registry that also drives the core, so
+// a kind added there cannot be missed here. service_healthy is absent
+// because it delegates to the adapter's healthcheck and has no statement.
+var builtinPlaceholders = func() map[string][]string {
+	out := map[string][]string{}
+	for _, kind := range config.CheckKinds() {
+		if !kind.Builtin || kind.ID == config.CheckServiceHealthy {
+			continue
+		}
+		allowed := []string{}
+		for _, p := range kind.Params {
+			if p.Type == config.ParamIdentifier {
+				allowed = append(allowed, "{{"+p.Name+"}}")
+			}
+		}
+		out[kind.ID] = allowed
+	}
+	return out
+}()
+
+var placeholderPattern = regexp.MustCompile(`{{[a-z_]+}}`)
+
+func checksKeysProblem(pr *probeResult) string {
+	if len(pr.Checks) == 0 {
+		return ""
+	}
+	if !contains(pr.ProtocolVersions, protocolV1) {
+		return fmt.Sprintf("checks is a %s field, but protocol_versions is %v", protocolV1, pr.ProtocolVersions)
+	}
+	for kind, declared := range pr.Checks {
+		allowed, known := builtinPlaceholders[kind]
+		if !known {
+			return fmt.Sprintf("checks has key %q, which is not a built-in check kind (§6.1.1)", kind)
+		}
+		if declared.Statement == "" {
+			return fmt.Sprintf("checks[%q].statement is empty", kind)
+		}
+		for _, ph := range placeholderPattern.FindAllString(declared.Statement, -1) {
+			if !contains(allowed, ph) {
+				return fmt.Sprintf("checks[%q].statement uses %s, which %s does not declare; allowed here: %v",
+					kind, ph, kind, allowed)
+			}
+		}
+	}
+	return ""
+}
+
+// identifierProblem is check 17.
+func identifierProblem(pr *probeResult) string {
+	if pr.Identifier == nil {
+		return ""
+	}
+	if !contains(pr.ProtocolVersions, protocolV1) {
+		return fmt.Sprintf("identifier is a %s field, but protocol_versions is %v", protocolV1, pr.ProtocolVersions)
+	}
+	if (pr.Identifier.Open == "") != (pr.Identifier.Close == "") {
+		return fmt.Sprintf("identifier open %q and close %q must both be empty or both be set (§6.1.1)",
+			pr.Identifier.Open, pr.Identifier.Close)
+	}
+	if len([]rune(pr.Identifier.Separator)) != 1 {
+		return fmt.Sprintf("identifier.separator %q must be exactly one character (§6.1.1)", pr.Identifier.Separator)
+	}
+	return ""
 }
 
 func (s *suite) probeShape(res *opResult, pr *probeResult) string {

@@ -1,6 +1,6 @@
 # Probavi Adapter Protocol — v1
 
-Status: **v1 — NORMATIVE, specified 2026-09-25; not yet implemented (§11.2).**
+Status: **v1 — NORMATIVE, specified and implemented 2026-09-25. FROZEN.**
 v0 was frozen 2026-08-01 and stays exactly as it was: v1 adds three
 optional `probe` declarations and changes no message, no verb, no error
 code and no required field (§8). The core and all adapters implement this
@@ -538,7 +538,13 @@ container startup). Each party measures what only it can see.
   the wire is recorded as a clarification within it.
 - Adapters declare every version they speak in `probe.protocol_versions`;
   the core picks the highest common one and uses it in all messages of a
-  drill.
+  drill **after the probe**.
+- **The probe request itself carries `probavi-adapter/0`, and every
+  adapter MUST accept it.** The message that discovers the version cannot
+  be sent at one the adapter might refuse — a request at an unknown
+  version is answered with `unsupported_protocol` (§3.1, conformance
+  check 4), which would make a v1-only adapter unprobeable. So v0 is the
+  handshake floor, and that is a second reason it is never removed.
 - The protocol version is independent of the Probavi binary version and of
   each adapter's own `adapter_version`.
 
@@ -659,9 +665,12 @@ sandbox**: every `exec` succeeds (exit 0, stdout `1`, empty stderr), every
 
 The check list below is **frozen per protocol version**; adding, removing,
 or changing a check is a protocol change (this section, then code). Checks
-1–15 are v0's and apply to every adapter; 16–18 apply only to an adapter
+1–15 are v0's and apply to every adapter; 16–17 apply only to an adapter
 that declares `probavi-adapter/1`, and an adapter that declares none of
-v1's optional fields passes them trivially. Checks:
+v1's optional fields passes them trivially. v1's two are **appended after
+v0's fifteen** rather than grouped with the other probe checks, because
+this section freezes the list per version and v0's order and numbering
+may not move. Checks:
 
 | # | Check | Asserts |
 |---|-------|---------|
@@ -683,7 +692,6 @@ v1's optional fields passes them trivially. Checks:
 
 | 16 | `probe.checks_keys` (v1) | Every key of `probe.checks` is a built-in check kind the core publishes, and every statement uses only placeholders that kind declares — never `{{sql}}` or `{{password}}` (§6.1.1). A misspelled kind is refused here rather than silently ignored at drill time. |
 | 17 | `probe.identifier` (v1) | If `identifier` is present it carries `open`, `close` and `separator`; `open` and `close` are both empty or both non-empty; `separator` is exactly one character (§6.1.1). |
-| 18 | `checks.declared_statements_run` (v1) | For each declared kind, the harness substitutes a fixture identifier and asserts the statement reaches `sql_runner` as a single `{{sql}}` argument with the placeholders replaced and the declared quoting applied — the protocol discipline, not the engine's answer, which the simulated sandbox cannot give. |
 
 Checks 8–10 run against the source kind selected with `--source-kind`
 (default: the first kind the probe declares) plus any `--source-param
@@ -708,25 +716,31 @@ further change to this protocol is a version bump (§8).
 
 ### 11.2 v1, and what it still owes
 
-v1 is **specified and normative as of 2026-09-25**, and not yet
-implemented. It is frozen against wire changes on the same terms as v0
-from the day the list below is complete; until then a correction to this
-specification is a correction rather than a v2.
+**v1 is frozen as of 2026-09-25** — every item below is complete. Any
+further change to this protocol is a version bump (§8). The corrections
+the changelog records were made while it was still being implemented,
+which is the window this list exists to close.
 
 - [x] JSON Schemas updated so `docs/schemas/adapter/probe-response.json`
       accepts both versions — the v1 fields optional, so a v0 probe
       response still validates and a v1 one is checked rather than merely
       tolerated. Done 2026-09-25, with this specification.
-- [ ] `internal/adapter` reads the new declarations, `internal/checks`
-      runs a declared statement where one exists and composes its own
-      where none does, and `internal/config` refuses `select` against a
-      kind that declared `capabilities.select: false`.
-- [ ] Conformance checks 16–18 implemented, with an adapter declaring
+- [x] `internal/adapter` negotiates and reads the new declarations,
+      `internal/checks` runs a declared statement where one exists and
+      composes its own where none does, and the core refuses `select`
+      against a kind that declared `capabilities.select: false`. Done
+      2026-09-25. That refusal is at the probe gate rather than in the
+      configuration loader: the loader has not spoken to the adapter yet
+      and cannot know what a kind declared.
+- [x] Conformance checks 16–17 implemented, with an adapter declaring
       each field and an adapter declaring none exercised in both
-      directions.
-- [ ] `adapter.ProtocolVersion` moved to `probavi-adapter/1`, in the same
-      pull request as the golden probe responses it changes and the
-      regenerated `docs/capabilities.json`.
+      directions. Done 2026-09-25.
+- [x] `adapter.ProtocolVersion` moved to `probavi-adapter/1`, with the
+      regenerated `docs/capabilities.json` — which now also publishes
+      `spoken_versions`, because a consumer reading one version could not
+      tell that the floor is still driven. No golden probe response
+      changed: the core speaks both, and every adapter in the catalogue
+      still declares the floor. Done 2026-09-25.
 
 What v1 deliberately does **not** carry, each for a stated reason:
 
@@ -759,8 +773,18 @@ What v1 deliberately does **not** carry, each for a stated reason:
   against a kind that chooses no backup, at configuration time rather
   than inside a sandbox. No message, verb, error code or required field
   changes, and every v0 adapter remains conformant and drivable
-  unchanged (§8). Specified and normative from this date; §11.2 lists
-  what implementation still owes.
+  unchanged (§8). Specified and normative from this date.
+  2026-09-25 (corrections within v1, which implementation had not yet
+  frozen): §8 now states that the probe request carries the floor and
+  that every adapter MUST accept it — implied by §3.1 and conformance
+  check 4, and load-bearing enough to say outright. The conformance list
+  ends at 17: the drafted check 18 asserted that a declared statement
+  reaches `sql_runner` substituted, which is the *core's* duty and
+  belongs in the core's tests, not in a suite that drives adapters. And
+  §11.2 had the configuration loader refusing a selection policy against
+  a kind that declares none; it cannot, having not spoken to the adapter
+  — the refusal is at the probe gate, beside the two that already answer
+  before a sandbox exists.
 - v0 (2026-07-31): initial complete draft — bidirectional core-mediated
   sandbox-verb model (`exec`, `put_file`), four operations fully specified,
   error registry, timing duties informed by the Phase 0 PoC findings.

@@ -31,7 +31,23 @@
       "type": "object",
       "description": "The independently versioned contracts this build implements. A contract that is governed but not yet implemented is absent: the manifest states what ships.",
       "properties": {
-        "adapter_protocol": { "$ref": "#/$defs/contract" },
+        "adapter_protocol": {
+          "type": "object",
+          "properties": {
+            "version": { "type": "string", "minLength": 1 },
+            "spoken_versions": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "Every protocol version this build speaks, highest first \u2014 broader than the single version it prefers, because a published version is never deprecated."
+            },
+            "spec": { "$ref": "#/$defs/repoPath" },
+            "schema": { "$ref": "#/$defs/repoPath" }
+          },
+          "required": ["version", "spoken_versions", "spec", "schema"],
+          "additionalProperties": false
+        },
         "evidence_schema": {
           "type": "object",
           "properties": {

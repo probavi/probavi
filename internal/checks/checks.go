@@ -60,6 +60,63 @@ type Deps struct {
 	// Logger receives what a check must not record: the engine's own
 	// diagnostics on a failed runner. Nil discards them.
 	Logger *slog.Logger
+	// Dialect is what the adapter declared about how to ask (adapter
+	// protocol §6.1.1). The zero value is what every v0 adapter means:
+	// the core composes its own statements and quotes SQL-standard.
+	Dialect Dialect
+}
+
+// Dialect carries an adapter's §6.1.1 declarations into the check runner.
+//
+// It exists so the core stops writing SQL for engines that have none or
+// have their own — four built-ins composed here produced four
+// engine-specific failures across the catalogue. What the adapter chooses
+// is how to ask; what the answer means stays the core's, so a record says
+// the same thing for every engine.
+type Dialect struct {
+	// Statements maps a built-in check kind to the statement the adapter
+	// declared for it. A kind absent here is composed by the core.
+	Statements map[string]string
+	// Open, Close and Separator spell a qualified identifier. Separator
+	// empty means nothing was declared, and the SQL-standard default
+	// applies — a declared Identifier always carries one, while Open and
+	// Close are legitimately empty for an engine that takes bare names.
+	Open, Close, Separator string
+}
+
+// statement is what to run for a built-in kind: the adapter's declaration
+// with the identifiers substituted, or the core's own composition when the
+// adapter declared none. The core substitutes and runs; it does not parse,
+// and a declared statement is not required to be SQL.
+func (d Dialect) statement(kind, composed, table, column string) string {
+	tmpl, ok := d.Statements[kind]
+	if !ok {
+		return composed
+	}
+	return strings.NewReplacer("{{table}}", table, "{{column}}", column).Replace(tmpl)
+}
+
+// quote validates a possibly qualified identifier and spells it the way
+// the adapter declared. Validation is the core's and never moves: each
+// part must match identPattern, so a drill configuration cannot inject a
+// statement and no declared quoting rule can make it able to — a
+// validated part cannot contain any quoting character.
+func (d Dialect) quote(name string) (string, error) {
+	open, closing, sep := `"`, `"`, "."
+	if d.Separator != "" {
+		open, closing, sep = d.Open, d.Close, d.Separator
+	}
+	parts := strings.Split(name, ".")
+	if len(parts) > 2 {
+		return "", fmt.Errorf("invalid identifier %s: at most schema.name", name)
+	}
+	for i, part := range parts {
+		if !identPattern.MatchString(part) {
+			return "", fmt.Errorf("invalid identifier: %s", name)
+		}
+		parts[i] = open + part + closing
+	}
+	return strings.Join(parts, sep), nil
 }
 
 // Result is one executed check, ready to be mapped into an evidence record.
@@ -144,11 +201,12 @@ func checkName(c *config.Check, i int) string {
 }
 
 func runTableExists(ctx context.Context, deps *Deps, table string) (bool, string, error) {
-	ident, err := quoteIdent(table)
+	ident, err := deps.Dialect.quote(table)
 	if err != nil {
 		return false, "", err
 	}
-	out, qerr := query(ctx, deps, "SELECT count(*) FROM "+ident+" WHERE 1=0")
+	stmt := deps.Dialect.statement(config.CheckTableExists, "SELECT count(*) FROM "+ident+" WHERE 1=0", ident, "")
+	out, qerr := query(ctx, deps, stmt)
 	if qerr != nil {
 		return false, "", qerr
 	}
@@ -159,11 +217,12 @@ func runTableExists(ctx context.Context, deps *Deps, table string) (bool, string
 }
 
 func runRowCount(ctx context.Context, deps *Deps, c *config.Check) (bool, string, error) {
-	ident, err := quoteIdent(c.Table)
+	ident, err := deps.Dialect.quote(c.Table)
 	if err != nil {
 		return false, "", err
 	}
-	out, qerr := query(ctx, deps, "SELECT count(*) FROM "+ident)
+	stmt := deps.Dialect.statement(config.CheckRowCount, "SELECT count(*) FROM "+ident, ident, "")
+	out, qerr := query(ctx, deps, stmt)
 	if qerr != nil {
 		return false, "", qerr
 	}
@@ -179,15 +238,16 @@ func runRowCount(ctx context.Context, deps *Deps, c *config.Check) (bool, string
 }
 
 func runFreshness(ctx context.Context, deps *Deps, c *config.Check) (bool, string, error) {
-	table, err := quoteIdent(c.Table)
+	table, err := deps.Dialect.quote(c.Table)
 	if err != nil {
 		return false, "", err
 	}
-	column, err := quoteIdent(c.Column)
+	column, err := deps.Dialect.quote(c.Column)
 	if err != nil {
 		return false, "", err
 	}
-	out, qerr := query(ctx, deps, "SELECT max("+column+") FROM "+table)
+	stmt := deps.Dialect.statement(config.CheckFreshness, "SELECT max("+column+") FROM "+table, table, column)
+	out, qerr := query(ctx, deps, stmt)
 	if qerr != nil {
 		return false, "", qerr
 	}
@@ -242,23 +302,6 @@ func boundsText(minBound, maxBound *int64) string {
 	default:
 		return fmt.Sprintf("max %d", *maxBound)
 	}
-}
-
-// quoteIdent validates and quotes a possibly schema-qualified identifier.
-// Strict validation makes SQL injection through config impossible — the
-// sandbox is disposable, but evidence must never record a poisoned check.
-func quoteIdent(name string) (string, error) {
-	parts := strings.Split(name, ".")
-	if len(parts) > 2 {
-		return "", fmt.Errorf("invalid identifier %s: at most schema.name", name)
-	}
-	for i, p := range parts {
-		if !identPattern.MatchString(p) {
-			return "", fmt.Errorf("invalid identifier: %s", name)
-		}
-		parts[i] = `"` + p + `"`
-	}
-	return strings.Join(parts, "."), nil
 }
 
 // truncateDetail keeps details inside the evidence limit. It delegates to

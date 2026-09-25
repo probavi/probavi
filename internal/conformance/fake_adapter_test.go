@@ -141,7 +141,7 @@ func (f *fakeAdapter) probePayload() map[string]any {
 	case "bad-verb":
 		verbs = []string{"teleport"}
 	}
-	return map[string]any{
+	payload := map[string]any{
 		"name":              name,
 		"adapter_version":   "0.0.1",
 		"protocol_versions": versions,
@@ -149,6 +149,40 @@ func (f *fakeAdapter) probePayload() map[string]any {
 		"sources":           sources,
 		"sql_runner":        map[string]any{"argv": argv, "env": map[string]string{}},
 		"verbs_required":    verbs,
+	}
+	f.bendV1(payload)
+	return payload
+}
+
+// bendV1 adds the §6.1.1 declarations, correctly for the v1 mode and
+// wrongly for each violation the suite must catch.
+func (f *fakeAdapter) bendV1(payload map[string]any) {
+	switch f.mode {
+	case "v1":
+		payload["protocol_versions"] = []string{protocolVersion, protocolV1}
+		payload["identifier"] = map[string]string{"open": "`", "close": "`", "separator": "."}
+		payload["checks"] = map[string]any{
+			"row_count": map[string]string{"statement": "SELECT COUNT(*) FROM {{table}}"},
+		}
+	case "v1-unknown-check-kind":
+		payload["protocol_versions"] = []string{protocolVersion, protocolV1}
+		payload["checks"] = map[string]any{
+			"row_counts": map[string]string{"statement": "SELECT COUNT(*) FROM {{table}}"},
+		}
+	case "v1-stray-placeholder":
+		payload["protocol_versions"] = []string{protocolVersion, protocolV1}
+		payload["checks"] = map[string]any{
+			"row_count": map[string]string{"statement": "SELECT COUNT(*) FROM {{table}} WHERE x = {{password}}"},
+		}
+	case "v1-undeclared-version":
+		// The fields without the version that defines them.
+		payload["identifier"] = map[string]string{"open": "`", "close": "`", "separator": "."}
+	case "v1-half-quoted":
+		payload["protocol_versions"] = []string{protocolVersion, protocolV1}
+		payload["identifier"] = map[string]string{"open": "[", "close": "", "separator": "."}
+	case "v1-long-separator":
+		payload["protocol_versions"] = []string{protocolVersion, protocolV1}
+		payload["identifier"] = map[string]string{"open": "", "close": "", "separator": "::"}
 	}
 }
 
