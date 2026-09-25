@@ -13,6 +13,48 @@ always called out explicitly.
 
 ### Added
 
+- **The adapter protocol moves to `probavi-adapter/1`** — three optional
+  `probe` declarations, and no message, verb, error code or required
+  field changed. **Every existing adapter keeps working unchanged**: the
+  core speaks both versions, probes at the floor and picks the highest
+  the adapter declares, and v0 is never deprecated. Migration is per
+  adapter and opt-in; mixed fleets are the expected state, not a
+  transition.
+
+  ```json
+  "identifier": {"open": "`", "close": "`", "separator": "."},
+  "checks": {"row_count": {"statement": "SELECT COUNT(*) FROM {{table}}"}}
+  ```
+
+  `checks` lets an adapter declare the statement for a named built-in in
+  its **own engine's language** — it is explicitly not required to be
+  SQL. Until now the core composed `SELECT count(*) …` and
+  `SELECT max(…) …` as text and handed it to `sql_runner`, which is the
+  core writing SQL for engines that have none or have their own, and four
+  built-ins written that way produced four engine-specific failures
+  across the catalogue. What the adapter chooses is *how to ask*, never
+  *what the answer means*, so a record still says the same thing for
+  every engine.
+
+  `identifier` moves quoting to the adapter that knows the dialect. The
+  core keeps the guarantee it already had — each part of an identifier
+  validated against a fixed pattern before substitution, so a drill
+  configuration cannot inject a statement and no declared quoting rule
+  can make it able to — and gives up the one it should never have had.
+
+  `sources[].capabilities.select` lets a drill that names a selection
+  policy against a kind choosing no backup end at the probe gate, before
+  a sandbox exists, instead of inside one. Same code, same verdict, no
+  container.
+
+  A record now states the version the drill actually spoke, and
+  `docs/capabilities.json` publishes `spoken_versions` beside the
+  version, because a consumer reading one value could not tell that the
+  floor is still driven. The conformance suite grew checks 16–17,
+  appended after v0's frozen fifteen: an adapter declaring nothing passes
+  both, and a misspelled check kind is refused there rather than
+  silently ignored at drill time.
+
 - **A drill can refuse a backup that is not the one the backup tool
   wrote** (`target.source.manifest`, `internal/manifest`,
   `probavi-manifest/1`). A record already carries the checksum, size and

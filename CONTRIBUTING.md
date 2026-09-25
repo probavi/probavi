@@ -16,13 +16,11 @@ code — when this file and that one disagree, that one wins.
 
 ## What helps most right now
 
-- **Feedback on the specs.** The adapter protocol (v1) and the evidence
-  schema (v2) are normative; a design flaw found now is worth more than
-  any feature. Open an issue — and v1 is the one to read first, because it
-  is specified and not yet frozen (`docs/adapter-protocol.md` §11.2), so a
-  correction is still a correction rather than a v2. Protocol v0 is
-  frozen and stays drivable forever: an adapter written against it never
-  has to move.
+- **Feedback on the frozen specs.** The adapter protocol (v1) and the
+  evidence schema (v2) are normative and frozen; a design flaw found now
+  is worth more than any feature. Open an issue. Protocol v0 is frozen
+  too and stays drivable forever: an adapter written against it never has
+  to move, and v1's three declarations are opted into one at a time.
 - **New engine adapters.** Adapters are external processes speaking a
   small line-delimited JSON protocol — any language, buildable from
   [docs/adapter-protocol.md](docs/adapter-protocol.md) alone. That is the

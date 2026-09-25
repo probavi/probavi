@@ -18,7 +18,11 @@ import (
 
 const (
 	protocolVersion = "probavi-adapter/0"
-	maxLineBytes    = 4 << 20
+	// protocolV1 is not what the harness drives at: the probe request goes
+	// out at the floor, because it is the message that discovers the
+	// version. v1 only names the fields whose presence the suite checks.
+	protocolV1   = "probavi-adapter/1"
+	maxLineBytes = 4 << 20
 )
 
 // envelope is any message an adapter may emit (§3).

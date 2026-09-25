@@ -36,6 +36,10 @@ type fakeAdapter struct {
 	teardownReasons []string
 	teardownStates  []string
 
+	// protocol is the version this fake claims to have negotiated. Empty
+	// means the floor, which is what a v0 adapter yields.
+	protocol string
+
 	// path is the executable the core would hash into adapter.digest.
 	// Empty by default, so a record carries a null digest unless a test
 	// says otherwise — the shape a drill produces when the file cannot be
@@ -44,6 +48,15 @@ type fakeAdapter struct {
 }
 
 func (f *fakeAdapter) Path() string { return f.path }
+
+// Protocol answers what a negotiated runner would: the fake speaks the
+// version a test set, and the floor otherwise.
+func (f *fakeAdapter) Protocol() string {
+	if f.protocol == "" {
+		return adapter.ProtocolFloor
+	}
+	return f.protocol
+}
 
 func (f *fakeAdapter) Probe(context.Context) (*adapter.ProbeResult, error) {
 	return f.probe, f.probeErr
@@ -1019,5 +1032,81 @@ func TestTheManifestPathNeverReachesTheAdapter(t *testing.T) {
 	}
 	if got["select"] != "oldest" || got["stanza"] != "main" {
 		t.Errorf("params = %v, want the policy and the operator's own untouched", got)
+	}
+}
+
+// --- adapter protocol v1 -----------------------------------------------------
+
+func boolPtr(b bool) *bool { return &b }
+
+// TestSelectAgainstAKindThatChoosesNothingEndsAtTheProbe: what a v1
+// declaration buys. The same refusal used to come from the adapter inside
+// a sandbox; now it comes before one exists.
+func TestSelectAgainstAKindThatChoosesNothingEndsAtTheProbe(t *testing.T) {
+	probe := testProbe()
+	probe.Sources[0].Capabilities.Select = boolPtr(false)
+	fa := &fakeAdapter{probe: probe, provRes: testProvision(), healthy: true, protocol: adapter.ProtocolVersion}
+	fp := &fakeProvider{sbx: &fakeSandbox{execValue: "1"}}
+	d, _ := newDrill(t, fa, fp)
+	d.Config.Target.Source.Select = "oldest"
+
+	rec, err := d.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rec.Outcome != evidence.OutcomeError || rec.Error == nil || rec.Error.Code != evidence.CodeInvalidRequest {
+		t.Fatalf("outcome = %q, error = %+v; want error/%s", rec.Outcome, rec.Error, evidence.CodeInvalidRequest)
+	}
+	for _, want := range []string{"pgdump", "oldest"} {
+		if !strings.Contains(rec.Error.Message, want) {
+			t.Errorf("message does not name %q: %s", want, rec.Error.Message)
+		}
+	}
+	if fp.created != 0 {
+		t.Errorf("sandboxes created = %d, want 0 — the probe already settled it", fp.created)
+	}
+	if rec.Adapter.Protocol != adapter.ProtocolVersion {
+		t.Errorf("adapter.protocol = %q, want the negotiated %q", rec.Adapter.Protocol, adapter.ProtocolVersion)
+	}
+}
+
+// TestAnUndeclaredSelectCapabilityIsNotARefusal: absent is not false. Every
+// v0 adapter declares nothing, and its drills must run exactly as before —
+// the adapter's own refusal still answers for a kind that selects nothing.
+func TestAnUndeclaredSelectCapabilityIsNotARefusal(t *testing.T) {
+	fa := &fakeAdapter{probe: testProbe(), provRes: testProvision(), healthy: true}
+	fp := &fakeProvider{sbx: &fakeSandbox{execValue: "1"}}
+	d, _ := newDrill(t, fa, fp)
+	d.Config.Target.Source.Select = "oldest"
+
+	rec, err := d.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rec.Outcome != evidence.OutcomePass {
+		t.Fatalf("outcome = %q (%+v), want pass — an undeclared capability is not a denial", rec.Outcome, rec.Error)
+	}
+	if rec.Adapter.Protocol != adapter.ProtocolFloor {
+		t.Errorf("adapter.protocol = %q, want the floor %q", rec.Adapter.Protocol, adapter.ProtocolFloor)
+	}
+}
+
+// TestDialectFromCarriesWhatTheAdapterDeclared, and nothing when it
+// declared nothing — the zero Dialect is v0's behaviour.
+func TestDialectFromCarriesWhatTheAdapterDeclared(t *testing.T) {
+	bare := dialectFrom(testProbe())
+	if bare.Separator != "" || bare.Statements != nil {
+		t.Errorf("dialect = %+v, want the zero value for an adapter that declared nothing", bare)
+	}
+
+	probe := testProbe()
+	probe.Identifier = &adapter.Identifier{Open: "`", Close: "`", Separator: "."}
+	probe.Checks = map[string]adapter.CheckStatement{"row_count": {Statement: "SELECT COUNT(*) FROM {{table}}"}}
+	d := dialectFrom(probe)
+	if d.Open != "`" || d.Close != "`" || d.Separator != "." {
+		t.Errorf("dialect quoting = %q %q %q, want the declaration", d.Open, d.Close, d.Separator)
+	}
+	if d.Statements["row_count"] != "SELECT COUNT(*) FROM {{table}}" {
+		t.Errorf("statements = %v, want the declared row_count", d.Statements)
 	}
 }

@@ -78,6 +78,9 @@ var frozenList = []string{
 	"provision.missing_source", "provision.happy_path", "provision.timings",
 	"healthcheck.shape", "teardown.empty_state", "teardown.idempotent",
 	"sigterm.cancels", "framing.discipline",
+	// v1's, appended: §10 freezes the list per version, so v0's fifteen
+	// keep their order and their numbers.
+	"probe.checks_keys", "probe.identifier",
 }
 
 func TestConformantAdapterPassesEverything(t *testing.T) {
@@ -424,5 +427,40 @@ func TestTheOperatorsOwnArtifactIsUsedWhenNamed(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Errorf("directory holds %d entries, want only the artifact itself", len(entries))
+	}
+}
+
+// TestV1DeclarationsAreChecked covers §10's checks 16–17. An adapter that
+// declares nothing passes both, which is every v0 adapter; an adapter that
+// declares something wrong is refused here, where the cost is a failing
+// conformance run rather than a declaration that silently never takes
+// effect at 3am.
+func TestV1DeclarationsAreChecked(t *testing.T) {
+	t.Run("a correct v1 adapter passes", func(t *testing.T) {
+		report := runSuite(t, "v1", Options{})
+		if report.Failed != 0 {
+			t.Fatalf("report = %d passed / %d failed: %+v", report.Passed, report.Failed, report.Checks)
+		}
+	})
+
+	tests := []struct {
+		mode, check, wantIn string
+	}{
+		{"v1-unknown-check-kind", "probe.checks_keys", "not a built-in check kind"},
+		{"v1-stray-placeholder", "probe.checks_keys", "{{password}}"},
+		{"v1-undeclared-version", "probe.identifier", "probavi-adapter/1"},
+		{"v1-half-quoted", "probe.identifier", "both be empty or both be set"},
+		{"v1-long-separator", "probe.identifier", "exactly one character"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.mode, func(t *testing.T) {
+			got := check(t, runSuite(t, tc.mode, Options{}), tc.check)
+			if got.OK {
+				t.Fatalf("%s passed against %s, want a refusal", tc.check, tc.mode)
+			}
+			if !strings.Contains(got.Detail, tc.wantIn) {
+				t.Errorf("detail = %q, want it to name %q", got.Detail, tc.wantIn)
+			}
+		})
 	}
 }

@@ -57,6 +57,29 @@ type ProbeResult struct {
 	Sources          []SourceKind `json:"sources"`
 	SQLRunner        SQLRunner    `json:"sql_runner"`
 	VerbsRequired    []string     `json:"verbs_required"`
+
+	// Identifier and Checks are v1's (§6.1.1), both optional. Absent —
+	// which is every v0 adapter and any v1 adapter with nothing to
+	// declare — means the core composes its own statements and quotes
+	// SQL-standard, exactly as it always has.
+	Identifier *Identifier               `json:"identifier,omitempty"`
+	Checks     map[string]CheckStatement `json:"checks,omitempty"`
+}
+
+// Identifier is how an engine spells a qualified name (§6.1.1). Open and
+// Close are the quoting characters — both empty for an engine that takes
+// bare names — and Separator joins the parts of a qualified one.
+type Identifier struct {
+	Open      string `json:"open"`
+	Close     string `json:"close"`
+	Separator string `json:"separator"`
+}
+
+// CheckStatement is what an adapter declares for one built-in check kind.
+// Statement is not required to be SQL: it is whatever this engine's
+// sql_runner takes, which for several engines is not SQL at all.
+type CheckStatement struct {
+	Statement string `json:"statement"`
 }
 
 // Engine identifies the database engine an adapter drives.
@@ -71,8 +94,14 @@ type SourceKind struct {
 }
 
 // Capabilities flags optional adapter features per source kind.
+//
+// Select is a pointer because absent and false are different answers
+// (§6.1.2): absent means the kind has not been asked — every v0 adapter —
+// while false is a declaration the core acts on by refusing a selection
+// policy before a sandbox exists.
 type Capabilities struct {
-	PITR bool `json:"pitr"`
+	PITR   bool  `json:"pitr"`
+	Select *bool `json:"select,omitempty"`
 }
 
 // SQLRunner is the declarative check-execution template (§6.1) that lets
@@ -170,10 +199,12 @@ func (r *Runner) Probe(ctx context.Context) (*ProbeResult, error) {
 	if res.Name == "" {
 		return nil, crashf("probe payload: name is empty")
 	}
-	if !contains(res.ProtocolVersions, ProtocolVersion) {
+	chosen := highestCommon(res.ProtocolVersions)
+	if chosen == "" {
 		return nil, &Error{Code: "unsupported_protocol",
-			Message: fmt.Sprintf("adapter speaks %v, core speaks %s", res.ProtocolVersions, ProtocolVersion)}
+			Message: fmt.Sprintf("adapter speaks %v, core speaks %v", res.ProtocolVersions, protocolVersions)}
 	}
+	r.negotiated = chosen
 	return res, nil
 }
 
@@ -357,4 +388,16 @@ func contains(list []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// highestCommon returns the highest version both sides speak, or "" when
+// they share none. The core's list is ordered highest first, so the first
+// match is the answer (§8).
+func highestCommon(theirs []string) string {
+	for _, v := range protocolVersions {
+		if contains(theirs, v) {
+			return v
+		}
+	}
+	return ""
 }

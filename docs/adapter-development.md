@@ -106,11 +106,13 @@ $ probavi adapter conformance <name-or-path>
 ok   probe.shape
 ok   probe.sql_runner
 ...
-{"adapter":"...","passed":15,"failed":0,...}
+{"adapter":"...","passed":17,"failed":0,...}
 ```
 
 The command drives your adapter through the check list of
-`adapter-protocol.md` §10, frozen per protocol version — framing discipline, handshake behavior, error
+`adapter-protocol.md` §10, frozen per protocol version — fifteen for v0 and
+two more for v1's optional declarations, which an adapter that declares
+none of them passes trivially — framing discipline, handshake behavior, error
 registry mapping, timing plausibility, teardown idempotence, SIGTERM
 handling — against a simulated sandbox where every command succeeds. No
 container runtime is needed, so it belongs in your adapter's CI on every

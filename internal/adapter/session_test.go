@@ -85,9 +85,10 @@ func TestReadLoopCrashesWhenTheSandboxResultCannotBeWritten(t *testing.T) {
 	call := `{"protocol":"` + ProtocolVersion + `","request_id":"` + requestID +
 		`","sandbox_call":{"call_id":"c1","verb":"exec","args":{"argv":["true"]}}}`
 	s := &session{
-		stdin:  errWriter{err: errors.New("stdin is gone")},
-		stdout: bufio.NewScanner(strings.NewReader(call + "\n")),
-		logger: slog.New(slog.DiscardHandler),
+		stdin:    errWriter{err: errors.New("stdin is gone")},
+		stdout:   bufio.NewScanner(strings.NewReader(call + "\n")),
+		logger:   slog.New(slog.DiscardHandler),
+		protocol: ProtocolVersion,
 	}
 
 	final, verr := s.readLoop(context.Background(), "provision", requestID, &fakeVerbs{}, nil)

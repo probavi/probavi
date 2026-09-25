@@ -362,20 +362,75 @@ func TestRunAbortsOnInfrastructureFailure(t *testing.T) {
 }
 
 func TestQuoteIdent(t *testing.T) {
+	// The zero Dialect is what every v0 adapter means, and it must keep
+	// spelling identifiers exactly as the core always has.
+	var standard Dialect
 	valid := map[string]string{
 		"orders":       `"orders"`,
 		"sales.orders": `"sales"."orders"`,
 		"_x1":          `"_x1"`,
 	}
 	for in, want := range valid {
-		if got, err := quoteIdent(in); err != nil || got != want {
-			t.Errorf("quoteIdent(%q) = %q, %v; want %q", in, got, err, want)
+		if got, err := standard.quote(in); err != nil || got != want {
+			t.Errorf("quote(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
 	for _, in := range []string{`a"b`, "a;b", "a b", "a.b.c", "1abc", "", "a.", `x); DROP`} {
-		if _, err := quoteIdent(in); err == nil {
-			t.Errorf("quoteIdent(%q) succeeded, want rejection", in)
+		if _, err := standard.quote(in); err == nil {
+			t.Errorf("quote(%q) succeeded, want rejection", in)
 		}
+	}
+}
+
+// TestDeclaredQuotingIsHonoured: the engines that motivated the bump. One
+// refuses SQL-standard quoting outright; another spells a qualified name
+// with brackets. The core applies what was declared and validates exactly
+// as before, which is why no declaration can widen what it accepts.
+func TestDeclaredQuotingIsHonoured(t *testing.T) {
+	tests := []struct {
+		name    string
+		dialect Dialect
+		in      string
+		want    string
+	}{
+		{"bare names", Dialect{Separator: "."}, "sales.orders", "sales.orders"},
+		{"backticks", Dialect{Open: "`", Close: "`", Separator: "."}, "orders", "`orders`"},
+		{"brackets", Dialect{Open: "[", Close: "]", Separator: "."}, "sales.orders", "[sales].[orders]"},
+		{"other separator", Dialect{Open: "", Close: "", Separator: ":"}, "sales.orders", "sales:orders"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.dialect.quote(tc.in)
+			if err != nil || got != tc.want {
+				t.Errorf("quote(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+			}
+		})
+	}
+
+	// Validation does not move with the quoting: whatever an adapter
+	// declares, a part that could carry a statement is still refused.
+	bare := Dialect{Separator: "."}
+	for _, in := range []string{`a"b`, "a;b", "a b", `x); DROP`, "a.b.c"} {
+		if _, err := bare.quote(in); err == nil {
+			t.Errorf("quote(%q) succeeded under a bare-name dialect, want rejection", in)
+		}
+	}
+}
+
+// TestDeclaredStatementReplacesTheComposedOne: the point of §6.1.1.
+func TestDeclaredStatementReplacesTheComposedOne(t *testing.T) {
+	d := Dialect{
+		Separator:  ".",
+		Statements: map[string]string{"row_count": "SELECT COUNT(*) FROM {{table}} WHERE 1=1"},
+	}
+	got := d.statement("row_count", "SELECT count(*) FROM `t`", "`t`", "")
+	if got != "SELECT COUNT(*) FROM `t` WHERE 1=1" {
+		t.Errorf("statement = %q, want the declaration with the identifier substituted", got)
+	}
+	// An undeclared kind still gets the core's composition, which is what
+	// lets an adapter declare one built-in and leave the others alone.
+	if got := d.statement("freshness", "SELECT max(c) FROM t", "t", "c"); got != "SELECT max(c) FROM t" {
+		t.Errorf("statement = %q, want the core's own composition", got)
 	}
 }
 

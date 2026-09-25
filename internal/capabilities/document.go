@@ -34,7 +34,7 @@ type Project struct {
 // implements it, never when it is merely governed: the manifest states
 // what ships.
 type Contracts struct {
-	AdapterProtocol     Contract         `json:"adapter_protocol"`
+	AdapterProtocol     AdapterContract  `json:"adapter_protocol"`
 	EvidenceSchema      EvidenceContract `json:"evidence_schema"`
 	NotificationPayload Contract         `json:"notification_payload"`
 	EvidencePush        Contract         `json:"evidence_push"`
@@ -46,6 +46,17 @@ type Contract struct {
 	Version string `json:"version"`
 	Spec    string `json:"spec"`
 	Schema  string `json:"schema"`
+}
+
+// AdapterContract additionally reports every protocol version this build
+// speaks. The list is broader than the single version it prefers, because
+// a published version is never deprecated: an adapter written against the
+// floor is driven unchanged, forever (adapter-protocol.md §8).
+type AdapterContract struct {
+	Version        string   `json:"version"`
+	SpokenVersions []string `json:"spoken_versions"`
+	Spec           string   `json:"spec"`
+	Schema         string   `json:"schema"`
 }
 
 // EvidenceContract additionally reports every schema version the verifier
