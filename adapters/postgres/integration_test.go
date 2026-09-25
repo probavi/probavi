@@ -800,34 +800,52 @@ const (
 	walgSHA256  = "51ec330530f98fc3eb4f008fa539d291a2cac51e7076b256472862e45ceff0bd"
 )
 
-// buildWalgImage builds (once, cached afterwards) a postgres image with
-// wal-g installed — the documented requirement for the walg source kind.
+// buildWalgImage builds (once, cached afterwards) an engine image with
+// wal-g in it.
+//
+// The fetch happens in its own stage on a current Debian base, and only
+// the binary is copied into the engine image. That is not tidiness: the
+// variant images are built on bases whose own apt suites can outlive their
+// distribution's support — measured here, postgis/postgis:17-3.5 is Debian
+// 11 and `apt-get install ca-certificates curl` exits 100 against it — and
+// an image is not the right place to discover that a release from 2026 is
+// being installed from a suite that stopped being refreshed. Nothing about
+// wal-g or the engine had changed; the clock had.
+//
+// The tag carries the base image, because one runner builds several of
+// them and a shared tag would hand a job the layer another base produced.
 func buildWalgImage(t *testing.T, ctx context.Context) string {
 	t.Helper()
-	if _, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none",
-		verifiedImage(t), "sh", "-c", "command -v apt-get").CombinedOutput(); err != nil {
-		t.Skipf("image %s cannot host the wal-g tool build (no apt-get); "+
-			"the wal-g flow is exercised by the plain postgres matrix jobs", verifiedImage(t))
-	}
-	const tag = "probavi-it-walg:1"
+	base := verifiedImage(t)
+	tag := "probavi-it-walg:" + strings.NewReplacer("/", "-", ":", "-", ".", "-").Replace(base)
 	dir := t.TempDir()
-	dockerfile := fmt.Sprintf(`FROM %s
+	dockerfile := fmt.Sprintf(`FROM debian:12-slim AS fetch
 RUN set -eux; \
-    apt-get -o Acquire::Check-Valid-Until=false update && \
-    apt-get install -y --no-install-recommends ca-certificates curl && \
+    apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && \
     curl -fsSL -o /tmp/walg.tar.gz \
       https://github.com/wal-g/wal-g/releases/download/%s/%s && \
     echo "%s  /tmp/walg.tar.gz" | sha256sum -c - && \
     tar -xzf /tmp/walg.tar.gz -C /usr/local/bin && \
     mv /usr/local/bin/wal-g-pg-20.04-amd64 /usr/local/bin/wal-g && \
-    chmod +x /usr/local/bin/wal-g && rm -f /tmp/walg.tar.gz && \
-    rm -rf /var/lib/apt/lists/*
-`, verifiedImage(t), walgVersion, walgAsset, walgSHA256)
+    chmod +x /usr/local/bin/wal-g
+
+FROM %s
+COPY --from=fetch /usr/local/bin/wal-g /usr/local/bin/wal-g
+`, walgVersion, walgAsset, walgSHA256, base)
 	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o600); err != nil {
 		t.Fatalf("write dockerfile: %v", err)
 	}
 	if out, err := exec.CommandContext(ctx, "docker", "build", "-q", "-t", tag, dir).CombinedOutput(); err != nil {
 		t.Fatalf("build test image: %v: %s", err, out)
+	}
+	// Measured rather than guessed from the base's name: the release is a
+	// glibc build, so an image on musl takes the COPY and then cannot run
+	// what it received. The variant's own claim is its extension's logical
+	// restore; this kind keeps its coverage from the plain postgres jobs.
+	if out, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none",
+		tag, "wal-g", "--version").CombinedOutput(); err != nil {
+		t.Skipf("wal-g does not run in an image based on %s (%s); the walg flow is exercised "+
+			"by the plain postgres matrix jobs", base, strings.TrimSpace(string(out)))
 	}
 	return tag
 }

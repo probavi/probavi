@@ -453,7 +453,7 @@ the adapter refuses an image without it by name rather than letting
 suite builds exactly this, digest-checked:
 
 ```dockerfile
-FROM postgres:16
+FROM debian:12-slim AS fetch
 RUN set -eux; \
     apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && \
     curl -fsSL -o /tmp/walg.tar.gz \
@@ -462,12 +462,23 @@ RUN set -eux; \
       | sha256sum -c - && \
     tar -xzf /tmp/walg.tar.gz -C /usr/local/bin && \
     mv /usr/local/bin/wal-g-pg-20.04-amd64 /usr/local/bin/wal-g && \
-    chmod +x /usr/local/bin/wal-g && rm -f /tmp/walg.tar.gz && \
-    rm -rf /var/lib/apt/lists/*
+    chmod +x /usr/local/bin/wal-g
+
+FROM postgres:16
+COPY --from=fetch /usr/local/bin/wal-g /usr/local/bin/wal-g
 ```
 
-A pinned tag alone would still let the bytes change under a re-tag, which
-is why the digest is checked in the build.
+Two things about that shape are deliberate. **The digest is checked**,
+because a pinned tag alone would still let the bytes change under a
+re-tag. And **the fetch happens in its own stage on a current base**: an
+engine image can be built on a distribution release whose own package
+suite has stopped being refreshed — measured, `postgis/postgis:17-3.5` is
+Debian 11 and installing `curl` into it exits 100 — and an image build is
+not where an operator should meet that. Nothing about wal-g or the engine
+changes; the clock does.
+
+The release is a glibc build, so an image on musl takes the `COPY` and
+then cannot run what it received.
 
 ### What the adapter reads, and what it refuses
 
