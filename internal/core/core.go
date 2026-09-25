@@ -26,6 +26,7 @@ import (
 	"github.com/probavi/probavi/internal/checks"
 	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/evidence"
+	"github.com/probavi/probavi/internal/manifest"
 )
 
 // teardownGrace bounds cleanup work that runs after the drill context is
@@ -266,6 +267,15 @@ func (d *Drill) execute(ctx context.Context, rec *evidence.Record) {
 		return
 	}
 
+	// The backup manifest is held against the artifact here: after the
+	// evidence log is open, before a sandbox exists and before a byte
+	// moves (docs/backup-manifest.md §5). A drill that names none is
+	// unaffected, which is every drill written before the key existed.
+	if fault := d.checkBackupManifest(); fault != nil {
+		d.recordFault(rec, fault)
+		return
+	}
+
 	provisionStart := d.Now()
 	sbx, err := d.Provider.Create(ctx, d.Config.Sandbox.Params)
 	if err != nil {
@@ -301,6 +311,30 @@ func (d *Drill) execute(ctx context.Context, rec *evidence.Record) {
 		return
 	}
 	rec.Outcome = evidence.OutcomePass
+}
+
+// checkBackupManifest holds the artifact to what the backup job said it
+// wrote. Nothing here is engine knowledge: the rule is the core's own and
+// runs on the drill host, which is what lets it answer before any adapter
+// has spoken (docs/backup-manifest.md §4).
+func (d *Drill) checkBackupManifest() *manifest.Fault {
+	src := d.Config.Target.Source
+	if src.Manifest == "" {
+		return nil
+	}
+	return manifest.Check(src.Path, src.Manifest)
+}
+
+// recordFault writes a core-side failure into the record under the same §7
+// taxonomy classify applies to everything else, so the one map decides
+// which codes are verdicts about the backup and which are not.
+func (d *Drill) recordFault(rec *evidence.Record, fault *manifest.Fault) {
+	rec.Outcome = evidence.OutcomeError
+	if failCodes[fault.Code] {
+		rec.Outcome = evidence.OutcomeFail
+	}
+	rec.Error = &evidence.DrillError{Code: fault.Code, Message: sanitizeMessage(fault.Message)}
+	d.Logger.Error("drill did not pass", "code", fault.Code, "outcome", rec.Outcome)
 }
 
 func (d *Drill) provisionRequest(sbx Sandbox, pitrTarget *string) *adapter.ProvisionRequest {

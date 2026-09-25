@@ -119,6 +119,7 @@ optional *section* that is present must be complete (§5.2).
 |---|---|---|
 | `kind` | yes | Source kind, defined by the adapter, not by the core. What an adapter accepts is what its `probe` declares — `probavi adapter probe <name>` prints it, and `docs/capabilities.json` states the same for every shipped adapter. |
 | `path` | no at load | Location of the backup on the **drill host's** filesystem. The loader does not require it: whether a kind needs one, and what it means, is the adapter's business. |
+| `manifest` | no | Path to the **backup manifest** beside the backup — the JSON file the backup job wrote stating what it produced. The core checks the artifact against it before a sandbox exists and refuses a drill that disagrees. See below. |
 | `select` | no | Which member of a directory of backups the drill proves: `newest` (the default), `oldest` or `random`. The loader refuses any other value; whether the *kind* chooses a backup at all is the adapter's to say, and its refusal. See below. |
 | `params` | no | Engine-specific settings for this source, handed to the adapter uninterpreted. Where an engine-specific recovery coordinate (LSN, GTID, binlog position) is ever needed, this is where it belongs — not in the core schema. |
 | `credential_env` | no | Names of environment variables the adapter needs in order to *read* the backup. Names only; values never enter this file or any protocol message. Each must match `^[A-Za-z_][A-Za-z0-9_]*$`. |
@@ -180,6 +181,46 @@ it records none, the order is file time and `oldest` is only as strong as
 the modification times in the directory are. Each adapter's README says
 which of the two it is, and `docs/capabilities.json` carries the same per
 kind.
+
+#### `manifest`: proving it is the backup the tool wrote
+
+A drill proves that the file it was handed restores. It says nothing about
+whether that file is the one the backup job produced — a truncated copy, a
+half-finished `rsync`, a download that returned zero bytes with exit status
+0, or a retention job that swapped in a different night's artifact are all
+outside what a record asserts.
+
+```yaml
+target:
+  source:
+    kind: pgdump
+    path: /backups/pg/nightly.dump
+    manifest: /backups/pg/nightly.manifest.json
+```
+
+```json
+{
+  "schema": "probavi-manifest/1",
+  "expected_checksum": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  "expected_size_bytes": 4182016
+}
+```
+
+The checksum rule is the core's own and runs on the drill host: SHA-256
+over a regular file's bytes, or a canonical tree hash for a directory,
+both stated to the byte in `docs/backup-manifest.md` §3, with a shell
+recipe in §3.1 that a backup job can run. It is **not** the
+adapter-defined `backup.checksum` a record carries, and the two are not
+comparable (§4 there) — this one has to answer before any adapter has
+spoken, which is what lets it fail a drill *before* the restore.
+
+Nothing about this key reaches the adapter. The check has already happened
+by the time one runs, and `params` is a namespace adapters own, where a
+key called `manifest` may already mean an engine's own file.
+
+What it catches is corruption, not tampering: whoever can rewrite the
+backup can rewrite the manifest lying beside it. `docs/backup-manifest.md`
+§6 states that, and states what a matching manifest does not prove.
 
 ### 3.3 `target.pitr`
 
@@ -345,6 +386,8 @@ different points with deliberately different consequences:
 | Unknown adapter, unknown sandbox provider, missing or too-permissive key file, evidence log already locked, `url_env`/`secret_env` unset | Wiring, before the drill starts | Exit code 3 and **no evidence record** — nothing ran, so there is nothing to prove. |
 | `source.kind` the adapter does not declare; `pitr` against a kind without the capability | The adapter's `probe`, before a sandbox is created | A signed record with outcome `error` and code `unsupported_source`. |
 | `select` against a kind that chooses no backup | The adapter's `provision`, inside the sandbox | A signed record with outcome `error` and code `invalid_request`, naming the kind and what it restores instead. |
+| A `manifest` the core cannot use: absent, unreadable, not JSON, an unknown `schema`, or asserting nothing | The core, before a sandbox exists | A signed record with outcome `error` and code `invalid_request`. The manifest is the config's problem; the backup was never looked at. |
+| The artifact disagrees with the `manifest` | The core, before a sandbox exists | A signed record with outcome `fail` and code `source_corrupt`, whose message names what the artifact is and what the manifest expected. |
 | Backup absent, unreadable, or rejected by the engine's tooling; a check that fails | The adapter, or the check | A signed record with outcome `fail` (`source_not_found`, `source_unreadable`, `source_corrupt`, `restore_failed`, `check_failed`). |
 
 The middle row is the important one: once the drill is under way, a
@@ -365,6 +408,7 @@ The core forwards these fields and interprets none of them
 | `target.source.params` | `source.params` |
 | `target.source.select` | `source.params.select`, folded into the same map |
 | `target.source.credential_env` | `source.credential_env` (names; the values are in the adapter's environment) |
+| `target.source.manifest` | — nothing; the core checks it itself, before the adapter runs |
 | `target.options` | `options` |
 | `target.pitr` | `pitr.target_time`, always absolute |
 | — | `sandbox.scratch_dir`, from the provider |

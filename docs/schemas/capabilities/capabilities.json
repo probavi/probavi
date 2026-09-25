@@ -29,7 +29,7 @@
     },
     "contracts": {
       "type": "object",
-      "description": "The four independently versioned contracts this build speaks.",
+      "description": "The independently versioned contracts this build implements. A contract that is governed but not yet implemented is absent: the manifest states what ships.",
       "properties": {
         "adapter_protocol": { "$ref": "#/$defs/contract" },
         "evidence_schema": {
@@ -51,9 +51,10 @@
           "additionalProperties": false
         },
         "notification_payload": { "$ref": "#/$defs/contract" },
-        "evidence_push": { "$ref": "#/$defs/contract" }
+        "evidence_push": { "$ref": "#/$defs/contract" },
+        "backup_manifest": { "$ref": "#/$defs/contract" }
       },
-      "required": ["adapter_protocol", "evidence_schema", "notification_payload", "evidence_push"],
+      "required": ["adapter_protocol", "evidence_schema", "notification_payload", "evidence_push", "backup_manifest"],
       "additionalProperties": false
     },
     "adapters": {

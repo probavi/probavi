@@ -13,6 +13,71 @@ always called out explicitly.
 
 ### Added
 
+- **A drill can refuse a backup that is not the one the backup tool
+  wrote** (`target.source.manifest`, `internal/manifest`,
+  `probavi-manifest/1`). A record already carries the checksum, size and
+  creation time the adapter measured on the source; nothing carried what
+  those values were *meant* to be. So a drill proved that the file it was
+  handed restores, not that the file the backup job produced restores —
+  and a truncated copy, a half-finished `rsync`, a download that returned
+  zero bytes with exit status 0, or a retention job that swapped in a
+  different night's artifact all passed honestly and in full.
+
+  ```yaml
+  target:
+    source:
+      kind: pgdump
+      path: /backups/pg/nightly.dump
+      manifest: /backups/pg/nightly.manifest.json
+  ```
+
+  ```json
+  {
+    "schema": "probavi-manifest/1",
+    "expected_checksum": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "expected_size_bytes": 4182016
+  }
+  ```
+
+  The check runs after the evidence log is open and **before the sandbox
+  exists**, so a disagreement fails the drill before the restore and still
+  leaves a signed record. The checksum rule is the core's own, computed on
+  the drill host: SHA-256 over a regular file's bytes, or a canonical tree
+  hash for a directory, stated to the byte in `docs/backup-manifest.md`
+  §3. It is **not** the adapter-defined `backup.checksum` a record
+  carries, and the two are not comparable — that one answers *what did
+  this drill restore* and is only produced during provision, which is too
+  late for a check whose whole point is to answer first.
+
+  **No `probavi manifest write` ships, and that is the decision rather
+  than the omission** (§9.1). A manifest has to be written at backup time,
+  beside the backup, before it is copied anywhere, so such a helper would
+  run on a host where Probavi is otherwise not installed. What the
+  deferral pays for instead is a documented shell recipe (§3.1) that a
+  test executes against the rule on every build, reading it out of the
+  specification rather than copying it: a hand-written tree hash framed
+  differently would not disagree occasionally, it would disagree on every
+  drill forever, and each disagreement would sign a `fail` naming a backup
+  that is fine.
+
+  **What is wrong with the manifest is the configuration's problem; what
+  disagrees with it is a verdict about the backup.** A manifest that is
+  missing, unreadable, not JSON, of an unknown schema, or asserting
+  nothing records `invalid_request` with outcome `error` — a drill must
+  never write "the backup is the problem" into an append-only log about an
+  artifact it never looked at. A genuine disagreement records
+  `source_corrupt` with outcome `fail`, and the message names what the
+  artifact is and what the manifest expected.
+
+  It catches corruption, not tampering: whoever can rewrite the backup can
+  rewrite the manifest beside it, and `docs/backup-manifest.md` §6 says so
+  rather than leaving a reader to assume otherwise. The key reaches no
+  adapter — the check has happened by the time one runs, and `params` is a
+  namespace adapters own. Not yet shipped, and specified as such: the two
+  record fields `backup.manifest_hash` and `backup.manifest_match` ride on
+  the single `probavi-evidence/3` bump the ROADMAP gathers four items
+  into.
+
 - **wal-g repositories, with point-in-time recovery**
   (`adapters/postgres` 0.19.0, source kind `walg`). The Phase 2 promise was
   WAL replay through wal-g *or* pgBackRest and shipped only the second;

@@ -97,7 +97,7 @@ value as unreadable rather than guessing.
 - **Paths** (`docs`, `spec`, `schema`) are repository-relative; a trailing
   slash marks a directory. The generator fails if any of them is missing,
   so they are never dead links.
-- **`contracts`** carries the four independently versioned contracts.
+- **`contracts`** carries the five independently versioned contracts this build implements. A contract that is governed but not yet implemented is absent: the manifest states what ships (§2).
   `evidence_schema.readable_versions` is every version the verifier
   accepts, which is broader than the one version it writes.
 - **`checks[].kind`** is `builtin` (selected with the `builtin` key in
@@ -120,7 +120,7 @@ that also drives the behavior, so the two cannot disagree:
 | `cli` | `internal/cli`, the table `cmd/probavi` dispatches from |
 | `notifications` | `internal/notify` constants and `config.NotifyOutcomes()` |
 | `locales` | the embedded catalogs in `internal/i18n/locales/`, plus the canonical source language |
-| `contracts` | the frozen version constants of `internal/adapter`, `internal/evidence`, `internal/notify`, `internal/push` |
+| `contracts` | the frozen version constants of `internal/adapter`, `internal/evidence`, `internal/notify`, `internal/push`, `internal/manifest` |
 | `project`, `non_goals` | declared in `internal/capabilities` — a maturity judgement and a set of things no code implements are the only facts here that no registry can hold |
 
 The generator refuses to produce a file when these disagree: an adapter

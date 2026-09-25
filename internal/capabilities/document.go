@@ -29,13 +29,16 @@ type Project struct {
 	Repository string `json:"repository"`
 }
 
-// Contracts states the versions of the four independently versioned
-// contracts this build speaks.
+// Contracts states the versions of the five independently versioned
+// contracts this build speaks. A contract is listed when a build
+// implements it, never when it is merely governed: the manifest states
+// what ships.
 type Contracts struct {
 	AdapterProtocol     Contract         `json:"adapter_protocol"`
 	EvidenceSchema      EvidenceContract `json:"evidence_schema"`
 	NotificationPayload Contract         `json:"notification_payload"`
 	EvidencePush        Contract         `json:"evidence_push"`
+	BackupManifest      Contract         `json:"backup_manifest"`
 }
 
 // Contract is one versioned contract with its normative document.

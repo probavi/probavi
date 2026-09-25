@@ -426,3 +426,45 @@ func TestSourceSelectIsAcceptedAndPassedThrough(t *testing.T) {
 		}
 	})
 }
+
+// TestSourceManifestLoads: the loader carries the path and nothing more.
+// Whether the file is there, parses, or agrees with the backup is settled
+// at drill time, where the answer is a signed record rather than exit code
+// 3 and silence (docs/backup-manifest.md §5).
+func TestSourceManifestLoads(t *testing.T) {
+	t.Run("declared", func(t *testing.T) {
+		path := writeConfig(t, strings.Replace(validYAML,
+			"    path: /backups/test.dump",
+			"    path: /backups/test.dump\n    manifest: /backups/test.manifest.json", 1))
+		cfg, err := Load(path, i18n.English())
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.Target.Source.Manifest != "/backups/test.manifest.json" {
+			t.Errorf("manifest = %q, want the declared path", cfg.Target.Source.Manifest)
+		}
+	})
+
+	// A manifest naming a file that is not there loads cleanly on purpose:
+	// refusing it here would end the drill with no record at all, and "the
+	// backup was not what it should be" is precisely the finding that
+	// belongs in the log.
+	t.Run("a path that does not exist still loads", func(t *testing.T) {
+		path := writeConfig(t, strings.Replace(validYAML,
+			"    path: /backups/test.dump",
+			"    path: /backups/test.dump\n    manifest: /nowhere/absent.manifest.json", 1))
+		if _, err := Load(path, i18n.English()); err != nil {
+			t.Fatalf("Load refused a manifest path at load time: %v", err)
+		}
+	})
+
+	t.Run("absent", func(t *testing.T) {
+		cfg, err := Load(writeConfig(t, validYAML), i18n.English())
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.Target.Source.Manifest != "" {
+			t.Errorf("manifest = %q, want empty", cfg.Target.Source.Manifest)
+		}
+	})
+}
