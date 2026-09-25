@@ -321,8 +321,17 @@ func softwareMajorOf(sets []backupSet, position int) int {
 	return 0
 }
 
+// mediaCandidate is one artifact the directory offers, paired with what
+// the engine said about it. The whole list is built before anything is
+// chosen, because a random draw cannot be made one candidate at a time.
+type mediaCandidate struct {
+	sel  selection
+	rank mediaRank
+}
+
 // selectBackup asks the engine what every candidate in the directory is,
-// then restores the one whose newest full backup finished last.
+// then restores the one the policy asks for — the newest by default
+// (selection.go).
 //
 // Ranking by what the header records rather than by the file's
 // modification time is issue #100: a backup copied into the directory
@@ -336,17 +345,16 @@ func softwareMajorOf(sets []backupSet, position int) int {
 // nothing accumulates in the sandbox, and the chosen artifact is
 // transferred once more to the path the restore reads: probing is how the
 // drill finds the backup, and only the transfer that feeds the restore
-// counts as recovery time — the same separation bak_chain makes.
+// counts as recovery time — the same separation bak_chain makes. Every
+// policy pays that same price, since a candidate nobody probed cannot be
+// ranked or drawn.
 func selectBackup(ctx context.Context, c *core, plan *sourcePlan, destPath string) (*selection, *protoError) {
 	if plan.fixed != "" {
 		return selectNamed(ctx, c, plan.fixed, destPath, plan.loc)
 	}
 	probePath := destPath + probeSuffix
 	rejected := make([]string, 0, len(plan.candidates))
-	var (
-		best     *selection
-		bestRank mediaRank
-	)
+	candidates := make([]mediaCandidate, 0, len(plan.candidates))
 	for i, candidate := range plan.candidates {
 		if _, perr := c.putFile(ctx, putFileArgs{SourcePath: candidate, DestPath: probePath, Mode: "0600"}); perr != nil {
 			return nil, perr
@@ -372,29 +380,71 @@ func selectBackup(ctx context.Context, c *core, plan *sourcePlan, destPath strin
 			position, clock = found, finishedAtOf(sets, found)
 		}
 		finished, dated := headerClock(clock)
-		rank := mediaRank{clock: finished, dated: dated, index: i}
-		if best == nil || rank.beats(bestRank) {
-			best, bestRank = &selection{hostPath: candidate, position: position,
+		candidates = append(candidates, mediaCandidate{
+			sel: selection{hostPath: candidate, position: position,
 				createdAt:     backupFinishedAt(clock, plan.loc),
-				softwareMajor: softwareMajorOf(sets, position)}, rank
-		}
+				softwareMajor: softwareMajorOf(sets, position)},
+			rank: mediaRank{clock: finished, dated: dated, index: i},
+		})
 	}
-	if best == nil {
+	if len(candidates) == 0 {
 		return nil, noFullBackup(plan, rejected)
 	}
+	chosen := pickMedia(candidates, plan.policy)
 
-	// The adapter chose this file, not the operator: make sure a backup job
-	// is not still writing it (see settle.go). The header alone cannot say
-	// — a truncated backup still reads as a valid one.
-	if perr := assertSettled(ctx, best.hostPath, settleWindow); perr != nil {
+	// The adapter chose this file, not the operator — under every policy:
+	// make sure a backup job is not still writing it (see settle.go). The
+	// header alone cannot say — a truncated backup still reads as a valid
+	// one.
+	if perr := assertSettled(ctx, chosen.hostPath, settleWindow); perr != nil {
 		return nil, perr
 	}
-	put, perr := c.putFile(ctx, putFileArgs{SourcePath: best.hostPath, DestPath: destPath, Mode: "0600"})
+	put, perr := c.putFile(ctx, putFileArgs{SourcePath: chosen.hostPath, DestPath: destPath, Mode: "0600"})
 	if perr != nil {
 		return nil, perr
 	}
-	best.transfer = put.DurationSeconds
-	return best, nil
+	chosen.transfer = put.DurationSeconds
+	return &chosen, nil
+}
+
+// pickMedia chooses one candidate under the policy. The slice is never
+// empty: a directory offering nothing restorable is reported by the
+// caller, which can say what it passed over and why.
+func pickMedia(candidates []mediaCandidate, policy selectPolicy) selection {
+	if policy == selectRandom {
+		pool := datableMedia(candidates)
+		return pool[randomIndex(len(pool))].sel
+	}
+	wins := mediaRank.beats
+	if policy == selectOldest {
+		wins = mediaRank.precedes
+	}
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if wins(c.rank, best.rank) {
+			best = c
+		}
+	}
+	return best.sel
+}
+
+// datableMedia narrows a random draw to the candidates the engine could
+// date, where there are any. That is the preference the ordering already
+// applies — a drill would rather restore the backup it can also say
+// something true about — and a draw that ignored it would make the
+// undatable media of a directory as likely to be proved as the backups
+// whose completion time the record can name.
+func datableMedia(candidates []mediaCandidate) []mediaCandidate {
+	dated := make([]mediaCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		if c.rank.dated {
+			dated = append(dated, c)
+		}
+	}
+	if len(dated) == 0 {
+		return candidates
+	}
+	return dated
 }
 
 // probeSuffix names the scratch path every candidate is probed through,
@@ -420,6 +470,29 @@ func (r mediaRank) beats(other mediaRank) bool {
 		return r.clock.After(other.clock)
 	default:
 		return r.index < other.index
+	}
+}
+
+// precedes orders the candidates for the oldest policy — and is not the
+// negation of beats, which is the whole reason it is written out. The
+// first rule does not invert: a candidate the engine could date still
+// outranks one it could not, because datedness is not a clock. Reversing
+// it would make "oldest" mean "prefer the media nothing can be said
+// about", and a drill that restores an undatable backup in preference to
+// a dated one proves less, not more.
+//
+// The other two rules do invert, the scan order included. index looks like
+// an arbitrary tie-break and is not: the scan is newest file first, so the
+// *highest* index is the oldest file — the same fallback beats uses, read
+// from the other end.
+func (r mediaRank) precedes(other mediaRank) bool {
+	switch {
+	case r.dated != other.dated:
+		return r.dated
+	case r.dated && !r.clock.Equal(other.clock):
+		return r.clock.Before(other.clock)
+	default:
+		return r.index > other.index
 	}
 }
 

@@ -64,7 +64,7 @@ func names(chain []chainNode) string {
 // forward. The intermediate logs 02 and 04 are covered by differential
 // 05 and are deliberately not replayed.
 func TestBuildChainOnTheMeasuredDirectory(t *testing.T) {
-	chain, perr := buildChain(realDirectory())
+	chain, perr := buildChain(realDirectory(), selectNewest)
 	if perr != nil {
 		t.Fatalf("buildChain: %+v", perr)
 	}
@@ -114,7 +114,7 @@ func TestBuildChainVariants(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			chain, perr := buildChain(tt.nodes)
+			chain, perr := buildChain(tt.nodes, selectNewest)
 			if perr != nil {
 				t.Fatalf("buildChain: %+v", perr)
 			}
@@ -200,7 +200,7 @@ func TestBuildChainRefusesAGap(t *testing.T) {
 	// Full, then log 04 and later: nothing carries the redo point from
 	// the full's end (392) to log 04's start (448).
 	nodes := []chainNode{all[0], all[3], all[5], all[6]}
-	_, perr := buildChain(nodes)
+	_, perr := buildChain(nodes, selectNewest)
 	if perr == nil {
 		t.Fatal("buildChain accepted a chain with a missing log")
 	}
@@ -217,7 +217,7 @@ func TestBuildChainRefusesAGap(t *testing.T) {
 func TestBuildChainRefusals(t *testing.T) {
 	all := realDirectory()
 	t.Run("no full backup at all", func(t *testing.T) {
-		_, perr := buildChain(all[1:2])
+		_, perr := buildChain(all[1:2], selectNewest)
 		if perr == nil || perr.Code != "source_not_found" {
 			t.Fatalf("perr = %+v, want source_not_found", perr)
 		}
@@ -227,7 +227,7 @@ func TestBuildChainRefusals(t *testing.T) {
 	})
 	t.Run("a full with no readable checkpoint", func(t *testing.T) {
 		broken := node("bad.bak", backupTypeFull, lsnFullFirst, lsnFullLast, "", "0")
-		if _, perr := buildChain([]chainNode{broken}); perr == nil || perr.Code != "source_corrupt" {
+		if _, perr := buildChain([]chainNode{broken}, selectNewest); perr == nil || perr.Code != "source_corrupt" {
 			t.Errorf("perr = %+v, want source_corrupt", perr)
 		}
 	})
@@ -242,7 +242,7 @@ func TestChainIgnoresAnotherFullsBackups(t *testing.T) {
 	nodes := append(realDirectory(),
 		node("08-other-chain-log.trn", backupTypeLog, lsnLog7Last, "42000000099999999",
 			otherAnchor, otherAnchor))
-	chain, perr := buildChain(nodes)
+	chain, perr := buildChain(nodes, selectNewest)
 	if perr != nil {
 		t.Fatalf("buildChain: %+v", perr)
 	}

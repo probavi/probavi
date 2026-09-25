@@ -5,8 +5,11 @@ package main_test
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -577,6 +580,57 @@ func TestBackupTypeSelectionEndToEnd(t *testing.T) {
 	t.Run("a stale backup copied in later does not outrank a newer one", func(t *testing.T) {
 		assertRankingIgnoresFileTimes(t, ctx, provider, runner, rankDir)
 	})
+	t.Run("select: oldest proves the other end of the retention window", func(t *testing.T) {
+		assertSelectOldestPicksTheOlderBackup(t, ctx, provider, runner, rankDir)
+	})
+}
+
+// assertSelectOldestPicksTheOlderBackup is the whole point of the select
+// parameter, on a real engine and against the same two files the ranking
+// proof uses: the default restores the backup the server finished last, and
+// select: oldest restores the other one. The row counts differ, so which
+// end of the window was proved is a measurement rather than a claim — and
+// the record's own backup.created_at has to name it too.
+func assertSelectOldestPicksTheOlderBackup(t *testing.T, ctx context.Context, provider *docker.Provider,
+	runner *adapter.Runner, dir string) {
+	sbx := freshSandbox(t, ctx, provider)
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source: adapter.ProvisionSource{
+			Kind: "bak_dir", Path: dir,
+			Params: map[string]string{"select": "oldest", "backup_timezone": "UTC"},
+		},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if got := queryScalar(t, ctx, sbx, res.Connection.Database, "SELECT count(*) FROM dbo.orders"); got != strconv.Itoa(rankStaleRows) {
+		t.Errorf("row count = %s, want %d — select: oldest restored the newest backup instead",
+			got, rankStaleRows)
+	}
+	// The identity has to describe what was actually proved: the checksum
+	// of the older file, and the completion time its own header records.
+	if want := hostSum(t, filepath.Join(dir, "stale.bak")); res.SourceIdentity.Checksum != want {
+		t.Errorf("checksum = %s, want the older backup's %s", res.SourceIdentity.Checksum, want)
+	}
+	if res.SourceIdentity.CreatedAt == nil {
+		t.Fatal("created_at = nil, want the chosen backup's own completion time")
+	}
+}
+
+// hostSum is the checksum the adapter reports, computed independently.
+func hostSum(t *testing.T, path string) string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		t.Fatal(err)
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 
 // assertRankingIgnoresFileTimes is issue #100 on a real engine: both files
@@ -806,8 +860,11 @@ func makeBackupSetFixture(t *testing.T, ctx context.Context, provider *docker.Pr
 }
 
 // rankFreshRows is how many rows the later of the two ranking fixtures
-// carries; the earlier one has one.
-const rankFreshRows = 3
+// carries; rankStaleRows is the earlier one's.
+const (
+	rankFreshRows = 3
+	rankStaleRows = 1
+)
 
 func copyFixture(t *testing.T, ctx context.Context, sbx *docker.Sandbox, containerPath, dest string) {
 	t.Helper()

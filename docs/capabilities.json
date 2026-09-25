@@ -695,7 +695,7 @@
       "name": "SQL Server",
       "status": "experimental",
       "since": "0.2.0",
-      "adapter_version": "0.8.0",
+      "adapter_version": "0.9.0",
       "engine": {
         "id": "sqlserver",
         "name": "Microsoft SQL Server"
@@ -725,17 +725,17 @@
         },
         {
           "id": "bak_chain",
-          "name": "A directory of backups replayed as a chain: the newest full, its newest differential, and the log backups that follow",
+          "name": "A directory of backups replayed as a chain: the full source.params.select picks — newest by checkpoint (the default), oldest, or random — its newest differential, and the log backups that follow",
           "pitr": false
         },
         {
           "id": "bak_dir",
-          "name": "A directory of backup files; the full backup whose header records the newest completion time is restored",
+          "name": "A directory of backup files; source.params.select picks which one is restored — newest by the completion time each backup's own header records (the default), oldest, or random",
           "pitr": false
         },
         {
           "id": "bak_with_logins",
-          "name": "A directory holding one .bak and a server-logins T-SQL script, restored together",
+          "name": "A directory holding one .bak and a server-logins T-SQL script, restored together — the backup named by source.params.bak, or picked by source.params.select",
           "pitr": false
         }
       ],
