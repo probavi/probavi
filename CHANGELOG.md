@@ -13,6 +13,30 @@ always called out explicitly.
 
 ### Added
 
+- **The second adapter declares `probavi-adapter/1`** (`adapters/cassandra`
+  0.6.0), and it is the first to declare a *statement* rather than
+  quoting.
+
+  `table_exists` is the one built-in CQL cannot be asked in the core's
+  words. The core composes `SELECT count(*) FROM <table> WHERE 1=0`, and a
+  CQL `WHERE` clause must name a column, so cqlsh answers
+  `SyntaxException`. The adapter declares `DESCRIBE TABLE {{table}}` for
+  that built-in — the engine's own way to ask the question, answered from
+  the schema, and carrying no row of restored data back.
+
+  The runner used to perform that substitution itself, matching the whole
+  statement against the grammar the core generates and rewriting it with
+  `sed`. **The declaration produces the identical statement** — the core
+  substitutes the same quoted identifier — and deletes the recognition,
+  which leaves the runner two lines long. A check of your own reaches
+  cqlsh byte for byte, and now nothing there could do otherwise.
+
+  **No identifier quoting is declared, and that is the point of the
+  declarations being independent:** CQL quotes identifiers exactly as the
+  core does, so this adapter says nothing about it. An adapter states only
+  what is true of its engine, and a test holds it to declaring just the
+  one built-in.
+
 - **The first adapter declares `probavi-adapter/1`** (`adapters/tdengine`
   0.6.0), and what it declares deletes code rather than adding it.
 

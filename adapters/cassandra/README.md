@@ -174,14 +174,26 @@ checks:
     min: 100000
 ```
 
-One of the three is rewritten on the way through, because CQL cannot
+One of the three is **declared** rather than composed, because CQL cannot
 express it. `table_exists` probes with `SELECT count(*) FROM <table> WHERE
 1=0`, and a CQL `WHERE` clause must name a column — cqlsh answers
-`SyntaxException`. The runner sends `DESCRIBE TABLE <table>` instead: the
-engine's own way to ask the question, answered from the schema, non-zero
-for a table that is not there, and carrying no row of restored data on its
-way back. The rewrite matches the core's generated probe end to end, so a
-check you write reaches cqlsh exactly as you wrote it.
+`SyntaxException`. This adapter declares `DESCRIBE TABLE {{table}}` for
+that built-in (adapter protocol §6.1.1, `probavi-adapter/1`): the engine's
+own way to ask the question, answered from the schema, non-zero for a
+table that is not there, and carrying no row of restored data on its way
+back.
+
+The runner used to perform that substitution itself, matching the whole
+statement against the grammar the core generates and rewriting it with
+`sed`. The declaration produces the identical statement — the core
+substitutes the same quoted identifier — and deletes the recognition. A
+check you write reaches cqlsh **byte for byte**, and now nothing here
+could do otherwise.
+
+No identifier quoting is declared, and that is not an omission: CQL quotes
+identifiers exactly as the core does, so there is nothing to say. The
+declarations are independent, and an adapter states only what is true of
+its engine.
 
 With several keyspaces in one artifact, `connection.database` is the
 alphabetically first; checks against the others use qualified names.

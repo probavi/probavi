@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "cassandra"
-	adapterVersion = "0.5.0"
+	adapterVersion = "0.6.0"
 
 	// workDirName is created under the provider's scratch directory.
 	workDirName = "probavi-cassandra"
@@ -43,11 +43,14 @@ const (
 // yields the bare number, a two-column row yields tab-separated values,
 // and a CQL error exits 2.
 //
-// The script also rewrites one statement the core generates. table_exists
-// probes with `SELECT count(*) FROM <table> WHERE 1=0`, and CQL has no such
-// predicate — a WHERE clause must name a column, so cqlsh answers
-// `SyntaxException: no viable alternative at input '1'` and the check
-// failed on every drill while the README said it worked (issue #277).
+// table_exists is not a statement this engine can be asked in the core's
+// words, so the adapter declares the one it can be (§6.1.1). The core
+// composes that probe as `SELECT count(*) FROM <table> WHERE 1=0`, and CQL
+// has no such predicate — a WHERE clause must name a column, so cqlsh
+// answers `SyntaxException: no viable alternative at input '1'` and the
+// check failed on every drill while the README said it worked (issue
+// #277).
+//
 // `DESCRIBE TABLE` is the engine's own way to ask the question: it exits 0
 // for a table that exists and non-zero for one that does not, which is
 // exactly what the core reads, and it answers from the schema — so nothing
@@ -55,18 +58,20 @@ const (
 // above emits nothing at all. A probe for a table's existence should not
 // put a row of restored production data on stdout, and this one does not.
 //
-// The rewrite is guarded by the whole statement rather than by position, so
-// a check of the operator's own can never be caught by it: what does not
-// match the core's generated probe end to end reaches cqlsh as written. The
-// identifier itself passes through untouched — CQL quotes identifiers the
-// same way the core does.
+// **This script used to perform that substitution itself**, by matching the
+// whole statement against the grammar the core generates and rewriting it
+// with sed. The declaration produces the identical statement — the core
+// substitutes the same quoted identifier — and deletes the recognition: an
+// adapter matching its own core's SQL in order to correct it is the shape
+// `probavi-adapter/1` exists to remove. Nothing here rewrites a statement
+// any more, so a check of the operator's own reaches cqlsh byte for byte.
+//
+// No `identifier` is declared, and that is not an omission: CQL quotes
+// identifiers exactly as the core does, so there is nothing to say. The two
+// declarations are independent, and an adapter says only what is true of
+// its engine.
 const runnerScript = `set -o pipefail
-probe='^SELECT count\(\*\) FROM "[A-Za-z_][A-Za-z0-9_]*"(\."[A-Za-z_][A-Za-z0-9_]*")? WHERE 1=0$'
-stmt=$2
-if printf '%s' "$stmt" | grep -Eq "$probe"; then
-  stmt=$(printf '%s' "$stmt" | sed -E 's/^SELECT count\(\*\) FROM (.*) WHERE 1=0$/DESCRIBE TABLE \1/')
-fi
-cqlsh --no-color -k "$1" -e "$stmt" | awk '/^-+[-+]*$/{d=1;next} d&&NF==0{exit} d{gsub(/^ +| +$/,""); gsub(/ *\| */,"\t"); print}'`
+cqlsh --no-color -k "$1" -e "$2" | awk '/^-+[-+]*$/{d=1;next} d&&NF==0{exit} d{gsub(/^ +| +$/,""); gsub(/ *\| */,"\t"); print}'`
 
 // probePayload reports identity and capabilities (§6.1). Probe must not
 // touch the sandbox and needs no credentials.
@@ -74,12 +79,18 @@ func probePayload() any {
 	return map[string]any{
 		"name":              adapterName,
 		"adapter_version":   adapterVersion,
-		"protocol_versions": []string{protocolVersion},
+		"protocol_versions": protocolVersions,
 		"engine":            map[string]string{"name": "cassandra"},
 		"sources": []map[string]any{
 			{"kind": "cassandra_snapshot_tar", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "cassandra_snapshot", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "cassandra_snapshot_dir", "capabilities": map[string]bool{"pitr": false}},
+		},
+		// The statement CQL can actually be asked for table_exists. The
+		// core substitutes the quoted identifier, so what reaches cqlsh is
+		// byte for byte what this adapter's own rewrite used to produce.
+		"checks": map[string]any{
+			"table_exists": map[string]string{"statement": "DESCRIBE TABLE {{table}}"},
 		},
 		"sql_runner": map[string]any{
 			// Checks are CQL. The dialect — including cqlsh's decorated
