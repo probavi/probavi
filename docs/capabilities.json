@@ -594,7 +594,7 @@
       "name": "MariaDB",
       "status": "experimental",
       "since": "0.7.0",
-      "adapter_version": "0.5.0",
+      "adapter_version": "0.6.0",
       "engine": {
         "id": "mariadb",
         "name": "MariaDB"
@@ -627,6 +627,11 @@
           "pitr": false
         },
         {
+          "id": "mariadb_backup_with_binlogs",
+          "name": "A directory holding an unprepared mariadb-backup full and the binary logs written after it, named by source.params.backup and source.params.binlogs — the full is restored, then the logs are replayed from the position it ended on, to target.pitr or to the end of the archive",
+          "pitr": true
+        },
+        {
           "id": "mariadb_dump",
           "name": "One mariadb-dump (or mysqldump) SQL file, plain or gzip-compressed",
           "pitr": false
@@ -637,7 +642,7 @@
           "pitr": false
         }
       ],
-      "pitr": false,
+      "pitr": true,
       "conformance_verified": true,
       "docs": "adapters/mariadb/README.md"
     },

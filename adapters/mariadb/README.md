@@ -37,6 +37,7 @@ field dates the adapter, never the engine (`docs/capabilities.md` §3).
 | `mariadb_dump` | one SQL dump, plain or gzip-compressed |
 | `mariadb_dump_dir` | a directory of them; `params.select` picks which one — `newest` by the time each dump records in its own trailer (the default), `oldest`, or `random` |
 | `mariadb_backup` | an unprepared `mariadb-backup` full-backup directory (physical restore) |
+| `mariadb_backup_with_binlogs` | a directory holding such a backup (`params.backup`) and the binary logs written after it (`params.binlogs`) — the full is restored, then the logs are replayed. The only kind here that supports **point-in-time recovery**. |
 
 Dumps taken with either `mariadb-dump` or its `mysqldump` ancestor are
 accepted: both banners are recognised, and both write the same
@@ -181,6 +182,101 @@ to use instead. The check refuses only on positive evidence: a backup
 without a readable `server_version` simply skips it, and the restore
 speaks for itself (with the error-log surfacing above as the diagnostic
 of last resort).
+
+## Point-in-time recovery (`mariadb_backup_with_binlogs`)
+
+A full backup proves one moment. Everything written after it — the hours
+an incident actually spans — is outside the drill unless the logs that
+recorded it are replayed too, and a recovery run-book that ends at the
+full is not the run-book anyone follows at 3am.
+
+```yaml
+target:
+  source:
+    kind: mariadb_backup_with_binlogs
+    path: /backups/mariadb/2026-09-25  # holds both members
+    params:
+      backup: full                    # the mariadb-backup --target-dir output
+      binlogs: binlogs                # the logs written after it
+  pitr:
+    target_age: 6h                    # or target_time, an absolute instant
+```
+
+**Why one directory and two names.** The core hands an adapter only files
+belonging to the drill's configured source (adapter protocol §4.2), which
+exists so an adapter — a third-party binary — cannot copy arbitrary host
+files into a sandbox it controls. A server's live binary log directory is
+therefore not something a drill can point at: an archive copies the logs
+beside the full they follow, which is the layout a run-book wants anyway.
+Both members are named explicitly rather than recognised by layout, so
+renaming a directory cannot silently change what a drill proves.
+
+**Where the replay starts.** From the backup itself.
+`mariadb-backup --backup` writes a binlog-info file naming the log file
+and position the server had reached, so the replay begins exactly where
+the full stops — no overlap to re-apply, no gap to guess at. A backup
+without it was taken from a server with the binary log switched off, and
+is refused with that said rather than worked around.
+
+**That file has two names.** MariaDB renamed the `xtrabackup_*` metadata
+files at 11.0 — the same rename this adapter already handles for
+`mariadb_backup_checkpoints` beside the pre-11 `xtrabackup_checkpoints` —
+so a drill reads whichever name the release that took the backup wrote:
+
+| Release | The file |
+|---|---|
+| 10.11 | `xtrabackup_binlog_info` |
+| 12.3 | `mariadb_backup_binlog_info` |
+
+Both measured, both carrying the same `file` TAB `position` line, and the
+integration suite restores on every verified release so the pair cannot
+quietly stop covering one.
+
+**Where it stops.** At `target.pitr` if the drill asks for one, and at the
+end of the archive if it does not — "how far can we actually recover" is a
+question worth drilling on its own.
+
+**Two refusals rather than a best effort.** A directory missing the log the
+backup named cannot be replayed at all. A gap in the middle is worse: the
+replay would succeed, stop early, and leave a signed record claiming a
+recovery that skipped whatever the missing log held. Both fail the drill
+and name the file.
+
+### The precision this can and cannot give you
+
+**Binary log event timestamps are second-granular**, while a drill's target
+is an absolute instant in milliseconds. `--stop-datetime` stops at the
+first event *at or after* the target, so the point actually reached can be
+earlier and coarser than the point requested. The evidence schema is
+already right about this — `drill.pitr_target` records the instant
+**requested**, never a claim about the instant reached — but a reader who
+is not told will assume otherwise.
+
+The replay runs under `TZ=UTC` and the target is converted to UTC, because
+`--stop-datetime` is read in the *client's* local zone. Left to the image's
+zone, the same drill config would stop at a different point on a
+differently configured host, and a recovery point that depends on the
+machine it was proved on is not evidence.
+
+The replay is **positional, not GTID-based**. The binlog-info file may
+carry a GTID set as a third field and this adapter ignores it: a
+GTID-based replay asks the server to skip what it already has, which is a
+different guarantee needing a different proof, and mixing the two would
+leave a record that does not say which one it rested on.
+
+### What the record says
+
+The replay's seconds count toward `restore_seconds`, not a phase of their
+own: every one of them is time an operator would spend before the database
+is usable, which is what the RTO trend is for. `backup.created_at` remains
+when the **full** was taken — the logs reach further forward and the record
+does not pretend otherwise; how far is what `drill.pitr_target` records.
+`state.mode` reads `physical+binlog` rather than `physical`, because it is
+a different proof from a full-only restore.
+
+The sandbox image needs `mariadb-binlog` beside `mariadbd` and
+`mariadb-backup` — the official mariadb images ship all three, which is
+why this kind needs no image built for it.
 
 ## The event scheduler is suspended for the drill
 
