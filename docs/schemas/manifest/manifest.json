@@ -11,7 +11,7 @@
     },
     "expected_checksum": {
       "$ref": "#/$defs/sha256Ref",
-      "description": "The artifact's digest under backup-manifest.md §3: SHA-256 over a regular file's bytes, or the canonical tree hash for a directory. Not the adapter's backup.checksum."
+      "description": "The artifact's digest under backup-manifest.md §3, whose framing is stated to the byte there and reproduced by the shell recipe in §3.1: SHA-256 over a regular file's bytes, or the canonical tree hash for a directory. Not the adapter's backup.checksum."
     },
     "expected_size_bytes": {
       "$ref": "#/$defs/int53",
