@@ -15,7 +15,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/goccy/go-yaml"
@@ -71,12 +73,28 @@ type PITR struct {
 
 // Source describes the backup source; Kind is adapter-defined and Params
 // pass through the core uninterpreted (adapter protocol §6.2).
+//
+// Select is the one source setting the core does read, and only far enough
+// to reject a value no adapter accepts. It reaches the adapter as
+// params.select, so the promotion cost no protocol change and no adapter
+// change; which *kinds* choose a backup at all stays the adapter's
+// knowledge, and its refusal (drill-config.md §3.2).
 type Source struct {
 	Kind          string            `yaml:"kind"`
 	Path          string            `yaml:"path"`
+	Select        string            `yaml:"select"`
 	Params        map[string]string `yaml:"params"`
 	CredentialEnv []string          `yaml:"credential_env"`
 }
+
+// SelectParam is the source parameter Select is forwarded as. It is also
+// the key this loader refuses to see set twice.
+const SelectParam = "select"
+
+// SelectPolicies are the values Select accepts, in documentation order.
+// The core does not decide what they mean — an adapter does, and every
+// adapter that implements them implements these three.
+func SelectPolicies() []string { return []string{"newest", "oldest", "random"} }
 
 // Sandbox selects the disposable runtime; Params are provider-specific and
 // pass through the core uninterpreted.
@@ -291,13 +309,29 @@ func (t *Target) validate(p *problems) {
 	if t.Source.Kind == "" {
 		p.add(msgSourceKindRequired)
 	}
-	for _, name := range t.Source.CredentialEnv {
+	t.Source.validate(p)
+	if t.PITR != nil {
+		t.PITR.validate(p)
+	}
+}
+
+// validate holds the two rules the core can apply to a source without
+// engine knowledge: that select names a policy some adapter could honour,
+// and that it is not also set through params, which would leave two
+// places saying which backup a drill proves.
+func (src *Source) validate(p *problems) {
+	for _, name := range src.CredentialEnv {
 		if !envNamePattern.MatchString(name) {
 			p.add(msgCredentialEnvName, name)
 		}
 	}
-	if t.PITR != nil {
-		t.PITR.validate(p)
+	if src.Select != "" {
+		if !slices.Contains(SelectPolicies(), src.Select) {
+			p.add(msgSourceSelectValue, src.Select, strings.Join(SelectPolicies(), ", "))
+		}
+		if _, ok := src.Params[SelectParam]; ok {
+			p.add(msgSourceSelectTwice)
+		}
 	}
 }
 

@@ -119,6 +119,7 @@ optional *section* that is present must be complete (§5.2).
 |---|---|---|
 | `kind` | yes | Source kind, defined by the adapter, not by the core. What an adapter accepts is what its `probe` declares — `probavi adapter probe <name>` prints it, and `docs/capabilities.json` states the same for every shipped adapter. |
 | `path` | no at load | Location of the backup on the **drill host's** filesystem. The loader does not require it: whether a kind needs one, and what it means, is the adapter's business. |
+| `select` | no | Which member of a directory of backups the drill proves: `newest` (the default), `oldest` or `random`. The loader refuses any other value; whether the *kind* chooses a backup at all is the adapter's to say, and its refusal. See below. |
 | `params` | no | Engine-specific settings for this source, handed to the adapter uninterpreted. Where an engine-specific recovery coordinate (LSN, GTID, binlog position) is ever needed, this is where it belongs — not in the core schema. |
 | `credential_env` | no | Names of environment variables the adapter needs in order to *read* the backup. Names only; values never enter this file or any protocol message. Each must match `^[A-Za-z_][A-Za-z0-9_]*$`. |
 
@@ -132,6 +133,53 @@ path with every symlink component followed, so a symlink inside the source
 that leads out of it is refused. The configured path itself is permitted
 unresolved, because `/backups/latest` pointing at today's directory is an
 ordinary layout (adapter protocol §4.2).
+
+#### `select`: which backup in the retention window
+
+A directory kind holds a retention window, and by default a drill proves
+the newest member of it. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one an
+incident reaches for, once it is clear the damage predates yesterday.
+
+```yaml
+target:
+  source:
+    kind: pgdump_dir
+    path: /backups/pg
+    select: oldest        # newest (default) | oldest | random
+```
+
+`random` draws uniformly and is deliberately not reproducible: a scheduled
+drill choosing randomly covers the whole window over time, and what it
+restored is still in the record, because `backup.checksum`,
+`backup.size_bytes` and `backup.created_at` name the artifact.
+
+**What the core validates, and what it deliberately does not.** The loader
+checks the *value*: `newest`, `oldest` or `random`, and nothing else. It
+does **not** check whether the source kind chooses a backup at all,
+because that is engine knowledge the core does not hold and must not start
+holding — `pgdump_dir` selects, `pgdump` restores what `path` names, and
+only the adapter knows which is which. An adapter that implements the
+parameter refuses it on a kind that selects nothing, by name and with a
+message the core could not write; the refusal lands as a signed record
+(§5.3). The parameter reaches the adapter as `source.params.select`, which
+is why this key cost no adapter protocol version and no change to any
+adapter.
+
+Setting it **both** ways — `target.source.select` and a `select` entry
+under `target.source.params` — is refused at load. Two places saying which
+backup a drill proves is one place too many. Reading that one key name is
+the only exception to the rule above that params pass through
+uninterpreted, and it exists to prevent the collision rather than to
+interpret anything.
+
+What each policy *means* is the adapter's, and the meanings differ in a
+way worth knowing before choosing `oldest`: where an artifact records its
+own instant, the ordering is as strong at both ends of the window; where
+it records none, the order is file time and `oldest` is only as strong as
+the modification times in the directory are. Each adapter's README says
+which of the two it is, and `docs/capabilities.json` carries the same per
+kind.
 
 ### 3.3 `target.pitr`
 
@@ -276,11 +324,12 @@ environment variable name patterns; that `pitr` sets exactly one of its
 two keys and that `target_time` parses and has passed; that each check
 sets exactly one of `builtin`/`sql`, names a known built-in, carries the
 parameters that built-in requires — and carries none that it does not
-(`max_age` on a `row_count` check is an error, not a decoration); that a
-present `metrics` section names a file; and that a present `notify`
-section lists webhooks, each with exactly one of `url`/`url_env`, a
-well-formed literal URL, valid environment variable names, and no unknown
-or repeated outcome in `on`.
+(`max_age` on a `row_count` check is an error, not a decoration); that
+`target.source.select` names one of the three policies and is not also set
+through `params`; that a present `metrics` section names a file; and that
+a present `notify` section lists webhooks, each with exactly one of
+`url`/`url_env`, a well-formed literal URL, valid environment variable
+names, and no unknown or repeated outcome in `on`.
 
 Diagnostics are translated (`docs/i18n.md`); the language comes from
 `PROBAVI_LANG`, then `LC_ALL`, `LC_MESSAGES`, `LANG`. Key locators such as
@@ -295,6 +344,7 @@ different points with deliberately different consequences:
 |---|---|---|
 | Unknown adapter, unknown sandbox provider, missing or too-permissive key file, evidence log already locked, `url_env`/`secret_env` unset | Wiring, before the drill starts | Exit code 3 and **no evidence record** — nothing ran, so there is nothing to prove. |
 | `source.kind` the adapter does not declare; `pitr` against a kind without the capability | The adapter's `probe`, before a sandbox is created | A signed record with outcome `error` and code `unsupported_source`. |
+| `select` against a kind that chooses no backup | The adapter's `provision`, inside the sandbox | A signed record with outcome `error` and code `invalid_request`, naming the kind and what it restores instead. |
 | Backup absent, unreadable, or rejected by the engine's tooling; a check that fails | The adapter, or the check | A signed record with outcome `fail` (`source_not_found`, `source_unreadable`, `source_corrupt`, `restore_failed`, `check_failed`). |
 
 The middle row is the important one: once the drill is under way, a
@@ -313,6 +363,7 @@ The core forwards these fields and interprets none of them
 | `target.source.kind` | `source.kind` |
 | `target.source.path` | `source.path` |
 | `target.source.params` | `source.params` |
+| `target.source.select` | `source.params.select`, folded into the same map |
 | `target.source.credential_env` | `source.credential_env` (names; the values are in the adapter's environment) |
 | `target.options` | `options` |
 | `target.pitr` | `pitr.target_time`, always absolute |
@@ -340,6 +391,13 @@ What is *not* in the record is as much a part of this contract:
 variable name the file lists. A record states what was restored — the
 backup's kind, its checksum, its size, its own creation time — never where
 it was fetched from or with what.
+
+`target.source.select` is in that list too, and for the same reason. A
+record does not need to say which *policy* chose the backup, because it
+already says which backup: `backup.checksum` and `backup.created_at` name
+the artifact, and `drill.config_hash` covers the file that asked for it.
+A field for the policy would be an evidence schema change earning nothing
+the record does not already carry.
 
 Hence the one rule this section exists for: **`sandbox.params` are
 published**. An image name and a memory limit belong there; a Docker

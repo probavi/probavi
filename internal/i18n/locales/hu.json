@@ -36,6 +36,8 @@
   "target.adapter %q must be lowercase letters, digits, and hyphens (it resolves to the executable probavi-adapter-%s)": "a target.adapter (%q) csak kisbetűt, számjegyet és kötőjelet tartalmazhat (ebből áll össze a probavi-adapter-%s futtatható fájl neve)",
   "target.source.kind is required (adapter-defined, e.g. \"pgdump\" — see the adapter's probe output)": "a target.source.kind megadása kötelező (az adapter határozza meg, pl. \"pgdump\" — lásd az adapter probe-kimenetét)",
   "target.source.credential_env entry %q is not a valid environment variable name": "a target.source.credential_env %q eleme nem érvényes környezeti változónév",
+  "target.source.select %q is not a selection policy (supported: %s)": "a target.source.select %q értéke nem választási szabály (támogatott: %s)",
+  "target.source.select and target.source.params.select both say which backup to restore — remove one": "a target.source.select és a target.source.params.select is megmondja, melyik mentést kell visszaállítani — töröld az egyiket",
   "target.pitr requires exactly one of target_time (RFC 3339, e.g. \"2026-07-30T14:32:00Z\") or target_age (e.g. \"24h\")": "a target.pitr esetén pontosan az egyik adható meg a target_time (RFC 3339, pl. \"2026-07-30T14:32:00Z\") és a target_age (pl. \"24h\") közül",
   "target.pitr.target_time %q is not an RFC 3339 timestamp": "a target.pitr.target_time (%q) nem RFC 3339 időbélyeg",
   "target.pitr.target_time %q is in the future — a restore can only be proven to an instant that has already passed": "a target.pitr.target_time (%q) a jövőben van — visszaállítást csak olyan időpontra lehet bizonyítani, amely már elmúlt",

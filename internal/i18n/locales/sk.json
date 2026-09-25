@@ -36,6 +36,8 @@
   "target.adapter %q must be lowercase letters, digits, and hyphens (it resolves to the executable probavi-adapter-%s)": "target.adapter %q smie obsahovať len malé písmená, číslice a spojovníky (zodpovedá mu spustiteľný súbor probavi-adapter-%s)",
   "target.source.kind is required (adapter-defined, e.g. \"pgdump\" — see the adapter's probe output)": "pole target.source.kind je povinné (definované adaptérom, napr. \"pgdump\" — pozri výstup probe adaptéra)",
   "target.source.credential_env entry %q is not a valid environment variable name": "položka %q v target.source.credential_env nie je platný názov premennej prostredia",
+  "target.source.select %q is not a selection policy (supported: %s)": "target.source.select %q nie je pravidlo výberu (podporované: %s)",
+  "target.source.select and target.source.params.select both say which backup to restore — remove one": "target.source.select aj target.source.params.select určujú, ktorá záloha sa má obnoviť — jedno odstráňte",
   "target.pitr requires exactly one of target_time (RFC 3339, e.g. \"2026-07-30T14:32:00Z\") or target_age (e.g. \"24h\")": "target.pitr vyžaduje presne jedno z target_time (RFC 3339, napr. \"2026-07-30T14:32:00Z\") alebo target_age (napr. \"24h\")",
   "target.pitr.target_time %q is not an RFC 3339 timestamp": "target.pitr.target_time %q nie je časová pečiatka RFC 3339",
   "target.pitr.target_time %q is in the future — a restore can only be proven to an instant that has already passed": "target.pitr.target_time %q je v budúcnosti — obnovu možno preukázať len k okamihu, ktorý už nastal",

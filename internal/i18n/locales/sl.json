@@ -36,6 +36,8 @@
   "target.adapter %q must be lowercase letters, digits, and hyphens (it resolves to the executable probavi-adapter-%s)": "target.adapter %q sme vsebovati le male črke, števke in vezaje (iz njega nastane ime izvedljive datoteke probavi-adapter-%s)",
   "target.source.kind is required (adapter-defined, e.g. \"pgdump\" — see the adapter's probe output)": "polje target.source.kind je obvezno (določi ga adapter, npr. \"pgdump\" — glejte izpis ukaza probe adapterja)",
   "target.source.credential_env entry %q is not a valid environment variable name": "vnos %q v target.source.credential_env ni veljavno ime okoljske spremenljivke",
+  "target.source.select %q is not a selection policy (supported: %s)": "target.source.select %q ni pravilo izbire (podprta: %s)",
+  "target.source.select and target.source.params.select both say which backup to restore — remove one": "target.source.select in target.source.params.select oba določata, katera varnostna kopija se obnovi — odstranite enega",
   "target.pitr requires exactly one of target_time (RFC 3339, e.g. \"2026-07-30T14:32:00Z\") or target_age (e.g. \"24h\")": "target.pitr zahteva natanko eno od target_time (RFC 3339, npr. \"2026-07-30T14:32:00Z\") ali target_age (npr. \"24h\")",
   "target.pitr.target_time %q is not an RFC 3339 timestamp": "target.pitr.target_time %q ni časovni žig RFC 3339",
   "target.pitr.target_time %q is in the future — a restore can only be proven to an instant that has already passed": "target.pitr.target_time %q je v prihodnosti — obnovitev je mogoče dokazati le do trenutka, ki je že minil",

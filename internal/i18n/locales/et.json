@@ -36,6 +36,8 @@
   "target.adapter %q must be lowercase letters, digits, and hyphens (it resolves to the executable probavi-adapter-%s)": "target.adapter %q tohib sisaldada ainult väiketähti, numbreid ja sidekriipse (see viitab käivitatavale failile probavi-adapter-%s)",
   "target.source.kind is required (adapter-defined, e.g. \"pgdump\" — see the adapter's probe output)": "väli target.source.kind on kohustuslik (määrab adapter, nt \"pgdump\" — vaadake adapteri probe-käsu väljundit)",
   "target.source.credential_env entry %q is not a valid environment variable name": "kirje %q väljal target.source.credential_env ei ole kehtiv keskkonnamuutuja nimi",
+  "target.source.select %q is not a selection policy (supported: %s)": "target.source.select %q ei ole valikureegel (toetatud: %s)",
+  "target.source.select and target.source.params.select both say which backup to restore — remove one": "target.source.select ja target.source.params.select määravad mõlemad, milline varukoopia taastatakse — eemaldage üks",
   "target.pitr requires exactly one of target_time (RFC 3339, e.g. \"2026-07-30T14:32:00Z\") or target_age (e.g. \"24h\")": "target.pitr nõuab täpselt ühte järgmistest: target_time (RFC 3339, nt \"2026-07-30T14:32:00Z\") või target_age (nt \"24h\")",
   "target.pitr.target_time %q is not an RFC 3339 timestamp": "target.pitr.target_time %q ei ole RFC 3339 ajatempel",
   "target.pitr.target_time %q is in the future — a restore can only be proven to an instant that has already passed": "target.pitr.target_time %q on tulevikus — taastamist saab tõendada ainult ajahetke kohta, mis on juba möödunud",
