@@ -33,26 +33,30 @@ type resolvedSource struct {
 //	scylladb_snapshot     — path is one collected snapshot tree:
 //	                        <keyspace>/<table>/ holding each table's
 //	                        snapshots/<tag>/ contents
-//	scylladb_snapshot_dir — path is a directory of such trees; the one
-//	                        whose own manifests claim the newest instant
-//	                        is restored
+//	scylladb_snapshot_dir — path is a directory of such trees;
+//	                        source.params.select picks one, newest by
+//	                        default (selection.go)
 //
 // A snapshot's manifest.json states when it was taken, in epoch seconds
 // (measured), so created_at and the directory ranking both come from what
 // the artifact states about itself — never from file times a copy would
 // reset.
-func resolveSource(kind, path string) (*resolvedSource, *protoError) {
+func resolveSource(kind, path string, params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "scylladb_snapshot_tar":
 		return resolveTar(path)
 	case "scylladb_snapshot":
 		return resolveTree(path)
 	case "scylladb_snapshot_dir":
-		latest, perr := newestTreeIn(path)
+		chosen, perr := chooseTreeIn(path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveTree(latest)
+		return resolveTree(chosen)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: scylladb_snapshot_tar, scylladb_snapshot, "+
@@ -121,11 +125,12 @@ type treeCandidate struct {
 	mtime        time.Time
 }
 
-// newestTreeIn picks the snapshot tree whose own manifests claim the
-// newest instant. A tree that can be dated from its own files wins over
-// one that cannot, and the chosen tree still faces every single-tree
-// gate, so a broken candidate that wins the ranking is refused by name.
-func newestTreeIn(dir string) (string, *protoError) {
+// chooseTreeIn picks the snapshot tree the policy asks for, out of what
+// each candidate states about itself. A tree that can be dated from its
+// own files wins over one that cannot under every policy, and the chosen
+// tree still faces every single-tree gate, so a broken candidate that
+// wins the ranking is refused by name.
+func chooseTreeIn(dir string, policy selectPolicy) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -133,7 +138,7 @@ func newestTreeIn(dir string) (string, *protoError) {
 	case err != nil:
 		return "", protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var best *treeCandidate
+	candidates := make([]treeCandidate, 0, len(entries))
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -146,16 +151,13 @@ func newestTreeIn(dir string) (string, *protoError) {
 		if census, perr := inspectSnapshotTree(filepath.Join(dir, e.Name())); perr == nil {
 			candidate.maxCreatedMs = census.maxCreatedMs
 		}
-		if best == nil || candidate.beats(*best) {
-			c := candidate
-			best = &c
-		}
+		candidates = append(candidates, candidate)
 	}
-	if best == nil {
+	if len(candidates) == 0 {
 		return "", protoErr("source_not_found", false,
 			"backup directory %s contains no snapshot trees", dir)
 	}
-	return filepath.Join(dir, best.name), nil
+	return filepath.Join(dir, pick(candidates, policy).name), nil
 }
 
 // beats orders candidates: a dated tree outranks every undated one, a
@@ -172,6 +174,29 @@ func (c treeCandidate) beats(o treeCandidate) bool {
 		return c.mtime.After(o.mtime)
 	default:
 		return c.name > o.name
+	}
+}
+
+// precedes orders candidates for the oldest policy — and is not the
+// negation of beats, which is the whole reason it is written out. The
+// first rule does not invert: a tree that states its own instant
+// still outranks one that does not, because datedness is not a clock.
+// Reversing it would make "oldest" mean "prefer the candidate nothing can
+// be said about", and restoring an undatable tree in preference to a
+// dated one proves less, not more. Past that rule everything is turned
+// around: an older claimed instant wins, undated candidates fall back to
+// older directory time, and remaining ties break toward the
+// lexicographically smaller name so the choice is still deterministic.
+func (c treeCandidate) precedes(o treeCandidate) bool {
+	switch {
+	case (c.maxCreatedMs != 0) != (o.maxCreatedMs != 0):
+		return c.maxCreatedMs != 0
+	case c.maxCreatedMs != o.maxCreatedMs:
+		return c.maxCreatedMs < o.maxCreatedMs
+	case !c.mtime.Equal(o.mtime):
+		return c.mtime.Before(o.mtime)
+	default:
+		return c.name < o.name
 	}
 }
 

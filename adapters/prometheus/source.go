@@ -33,25 +33,29 @@ type resolvedSource struct {
 //	prometheus_snapshot     — path is one snapshot directory from
 //	                          POST /api/v1/admin/tsdb/snapshot
 //	prometheus_snapshot_dir — path is a directory of snapshot
-//	                          directories; the one whose own blocks claim
-//	                          the newest instant is restored
+//	                          directories; source.params.select picks
+//	                          one, newest by default (selection.go)
 //
 // A snapshot's blocks record their time ranges as epoch milliseconds
 // (measured), so created_at and the directory ranking both come from
 // what the artifact states about itself — never from file times a copy
 // would reset.
-func resolveSource(kind, path string) (*resolvedSource, *protoError) {
+func resolveSource(kind, path string, params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "prometheus_snapshot_tar":
 		return resolveTar(path)
 	case "prometheus_snapshot":
 		return resolveSnapshotDir(path)
 	case "prometheus_snapshot_dir":
-		latest, perr := newestSnapshotIn(path)
+		chosen, perr := chooseSnapshotIn(path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveSnapshotDir(latest)
+		return resolveSnapshotDir(chosen)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: prometheus_snapshot_tar, prometheus_snapshot, "+
@@ -138,13 +142,12 @@ type snapshotCandidate struct {
 	mtime     time.Time
 }
 
-// newestSnapshotIn picks the snapshot whose own blocks claim the newest
-// instant. A snapshot that can be dated from its own files wins over one
-// that cannot — the drill would rather restore the backup it can also
-// say something true about, the mariadb adapter's precedent — and the
-// chosen directory still faces every single-snapshot gate, so a broken
-// or live-copied candidate that wins the ranking is refused by name.
-func newestSnapshotIn(dir string) (string, *protoError) {
+// chooseSnapshotIn picks the snapshot the policy asks for, out of what
+// each candidate states about itself. A snapshot that can be dated from
+// its own blocks wins over one that cannot under every policy, and the
+// chosen directory still faces every single-snapshot gate, so a broken or
+// live-copied candidate that wins the ranking is refused by name.
+func chooseSnapshotIn(dir string, policy selectPolicy) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -152,7 +155,7 @@ func newestSnapshotIn(dir string) (string, *protoError) {
 	case err != nil:
 		return "", protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var best *snapshotCandidate
+	candidates := make([]snapshotCandidate, 0, len(entries))
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -165,16 +168,13 @@ func newestSnapshotIn(dir string) (string, *protoError) {
 		if census, perr := inspectSnapshotDir(filepath.Join(dir, e.Name())); perr == nil {
 			candidate.maxTimeMs = census.maxTimeMs
 		}
-		if best == nil || candidate.beats(*best) {
-			c := candidate
-			best = &c
-		}
+		candidates = append(candidates, candidate)
 	}
-	if best == nil {
+	if len(candidates) == 0 {
 		return "", protoErr("source_not_found", false,
 			"backup directory %s contains no snapshot directories", dir)
 	}
-	return filepath.Join(dir, best.name), nil
+	return filepath.Join(dir, pick(candidates, policy).name), nil
 }
 
 // beats orders candidates: a dated snapshot outranks every undated one,
@@ -191,6 +191,29 @@ func (c snapshotCandidate) beats(o snapshotCandidate) bool {
 		return c.mtime.After(o.mtime)
 	default:
 		return c.name > o.name
+	}
+}
+
+// precedes orders candidates for the oldest policy — and is not the
+// negation of beats, which is the whole reason it is written out. The
+// first rule does not invert: a snapshot that states its own instant
+// still outranks one that does not, because datedness is not a clock.
+// Reversing it would make "oldest" mean "prefer the candidate nothing can
+// be said about", and restoring an undatable snapshot in preference to a
+// dated one proves less, not more. Past that rule everything is turned
+// around: an older claimed instant wins, undated candidates fall back to
+// older directory time, and remaining ties break toward the
+// lexicographically smaller name so the choice is still deterministic.
+func (c snapshotCandidate) precedes(o snapshotCandidate) bool {
+	switch {
+	case (c.maxTimeMs != 0) != (o.maxTimeMs != 0):
+		return c.maxTimeMs != 0
+	case c.maxTimeMs != o.maxTimeMs:
+		return c.maxTimeMs < o.maxTimeMs
+	case !c.mtime.Equal(o.mtime):
+		return c.mtime.Before(o.mtime)
+	default:
+		return c.name < o.name
 	}
 }
 

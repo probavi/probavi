@@ -19,6 +19,6 @@
   "sources": {
     "victoriametrics_backup_tar": "One tar archive (plain or gzip) of a `vmbackup` output, its files at the root or under one wrapping directory",
     "victoriametrics_backup": "One `vmbackup` output directory",
-    "victoriametrics_backup_dir": "A directory of `vmbackup` outputs; the one whose own metadata claims the newest instant is restored"
+    "victoriametrics_backup_dir": "A directory of `vmbackup` outputs; source.params.select picks which one is restored — newest by the instant each backup's own metadata claims (the default), oldest, or random"
   }
 }

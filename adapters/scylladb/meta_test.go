@@ -153,7 +153,7 @@ func TestATarEntryThatIsNotAFileIsIgnored(t *testing.T) {
 
 	// shop/orders collected only a symlink, so it has no schema and no
 	// manifest: the walk produces a verdict rather than a census.
-	_, perr := resolveSource("scylladb_snapshot_tar", path)
+	_, perr := resolveSource("scylladb_snapshot_tar", path, nil)
 	if perr == nil {
 		t.Fatal("an archive holding no usable table was accepted with a census")
 	}
@@ -170,7 +170,7 @@ func TestAnArchiveWholeEnoughToWalkCarriesItsInstant(t *testing.T) {
 		snapshotTable{keyspace: "shop", table: "orders", createdAt: 1789900285, sstables: 1},
 		snapshotTable{keyspace: "shop", table: "items", createdAt: 1789900999, sstables: 1},
 	)
-	src, perr := resolveSource("scylladb_snapshot_tar", tarOf(t, root, ""))
+	src, perr := resolveSource("scylladb_snapshot_tar", tarOf(t, root, ""), nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -231,7 +231,7 @@ func TestAKeyspaceDirectoryTheHostCannotReadIsUnreadable(t *testing.T) {
 			t.Errorf("restore permissions: %v", err)
 		}
 	})
-	_, perr := resolveSource("scylladb_snapshot", root)
+	_, perr := resolveSource("scylladb_snapshot", root, nil)
 	if perr == nil || perr.Code != "source_unreadable" {
 		t.Errorf("verdict = %+v, want source_unreadable", perr)
 	}
@@ -254,7 +254,7 @@ func TestATableDirectoryTheHostCannotReadIsUnreadable(t *testing.T) {
 			t.Errorf("restore permissions: %v", err)
 		}
 	})
-	_, perr := resolveSource("scylladb_snapshot", root)
+	_, perr := resolveSource("scylladb_snapshot", root, nil)
 	if perr == nil || perr.Code != "source_unreadable" {
 		t.Errorf("verdict = %+v, want source_unreadable", perr)
 	}

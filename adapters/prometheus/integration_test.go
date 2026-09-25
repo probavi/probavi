@@ -737,6 +737,65 @@ func TestSnapshotDirDrillPicksTheClaimedNewest(t *testing.T) {
 	}
 }
 
+// TestSnapshotDirDrillProvesTheOldestSnapshot is this family's end-to-end
+// proof that source.params.select reaches the drill: the same directory
+// and the same two snapshots as above, and the record names the other end
+// of the retention window.
+func TestSnapshotDirDrillProvesTheOldestSnapshot(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := wrapperImage(t, ctx, verifiedImage(t))
+	provider := docker.New(nil)
+
+	base := t.TempDir()
+	older := filepath.Join(base, "snap-a")
+	newest := filepath.Join(base, "snap-b")
+	makeFixtures(t, ctx, provider, image, older, newest, "")
+
+	sbx, err := provider.Create(ctx, sandboxParams(image))
+	if err != nil {
+		t.Fatalf("create drill sandbox: %v", err)
+	}
+	defer destroy(t, sbx)
+
+	runner, err := adapter.New("prometheus", nil, nil)
+	if err != nil {
+		t.Fatalf("resolve adapter: %v", err)
+	}
+	res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+		Source: adapter.ProvisionSource{
+			Kind: "prometheus_snapshot_dir", Path: base,
+			Params: map[string]string{"select": "oldest"},
+		},
+		Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+	}, sbx)
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	olderClaim, err := resolveOwnClaim(older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newestClaim, err := resolveOwnClaim(newest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.SourceIdentity.CreatedAt == nil {
+		t.Fatal("created_at = nil")
+	}
+	restored, err := time.Parse(time.RFC3339, *res.SourceIdentity.CreatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restored.Equal(olderClaim) {
+		t.Errorf("the record dates the restore at %v, want the older snapshot's own claim %v "+
+			"(the newer one claims %v) — select: oldest did not reach the drill",
+			restored, olderClaim, newestClaim)
+	}
+}
+
 // resolveOwnClaim reads the newest instant a snapshot's blocks claim,
 // the same way the adapter ranks candidates.
 func resolveOwnClaim(dir string) (time.Time, error) {

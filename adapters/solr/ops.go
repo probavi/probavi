@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "solr"
-	adapterVersion = "0.6.0"
+	adapterVersion = "0.7.0"
 	// defaultPort is where Solr listens inside the sandbox. Nothing is
 	// published: checks run in-sandbox through the runner below.
 	defaultPort = 8983
@@ -109,7 +109,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if perr := checkRequest(req); perr != nil {
 		return nil, perr
 	}
-	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path)
+	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path, req.Source.Params)
 	if perr != nil {
 		return nil, perr
 	}

@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "scylladb"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 
 	// workDirName is created under the provider's scratch directory.
 	workDirName = "probavi-scylladb"
@@ -121,7 +121,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		return nil, perr
 	}
 
-	src, perr := resolveSource(req.Source.Kind, req.Source.Path)
+	src, perr := resolveSource(req.Source.Kind, req.Source.Path, req.Source.Params)
 	if perr != nil {
 		return nil, perr
 	}

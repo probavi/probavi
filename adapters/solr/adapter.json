@@ -19,6 +19,6 @@
   "sources": {
     "solr_backup_tar": "A tar archive of one backup directory",
     "solr_backup": "One Collections API backup directory (`action=BACKUP`), holding a single collection",
-    "solr_backup_dir": "A directory of backup directories; the newest is restored"
+    "solr_backup_dir": "A directory of backup directories; source.params.select picks which one is restored — newest by directory time (the default), oldest, or random"
   }
 }

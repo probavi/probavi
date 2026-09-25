@@ -120,7 +120,7 @@
       "name": "Apache Cassandra",
       "status": "experimental",
       "since": "0.13.0",
-      "adapter_version": "0.4.0",
+      "adapter_version": "0.5.0",
       "engine": {
         "id": "cassandra",
         "name": "Apache Cassandra"
@@ -146,7 +146,7 @@
         },
         {
           "id": "cassandra_snapshot_dir",
-          "name": "A directory of collected snapshot trees; the one whose own manifests claim the newest instant is restored",
+          "name": "A directory of collected snapshot trees; source.params.select picks which one is restored — newest by the instant each tree's own manifests claim (the default), oldest, or random",
           "pitr": false
         },
         {
@@ -998,7 +998,7 @@
       "name": "Prometheus",
       "status": "experimental",
       "since": "0.12.0",
-      "adapter_version": "0.5.0",
+      "adapter_version": "0.6.0",
       "engine": {
         "id": "prometheus",
         "name": "Prometheus"
@@ -1020,7 +1020,7 @@
         },
         {
           "id": "prometheus_snapshot_dir",
-          "name": "A directory of snapshot directories; the one whose own blocks claim the newest instant is restored",
+          "name": "A directory of snapshot directories; source.params.select picks which one is restored — newest by the instant each snapshot's own blocks claim (the default), oldest, or random",
           "pitr": false
         },
         {
@@ -1183,7 +1183,7 @@
       "name": "ScyllaDB",
       "status": "experimental",
       "since": "0.31.0",
-      "adapter_version": "0.2.0",
+      "adapter_version": "0.3.0",
       "engine": {
         "id": "scylladb",
         "name": "ScyllaDB"
@@ -1205,7 +1205,7 @@
         },
         {
           "id": "scylladb_snapshot_dir",
-          "name": "A directory of collected snapshot trees; the one whose own manifests claim the newest instant is restored",
+          "name": "A directory of collected snapshot trees; source.params.select picks which one is restored — newest by the instant each tree's own manifests claim (the default), oldest, or random",
           "pitr": false
         },
         {
@@ -1223,7 +1223,7 @@
       "name": "Apache Solr",
       "status": "experimental",
       "since": "0.20.0",
-      "adapter_version": "0.6.0",
+      "adapter_version": "0.7.0",
       "engine": {
         "id": "solr",
         "name": "Apache Solr"
@@ -1245,7 +1245,7 @@
         },
         {
           "id": "solr_backup_dir",
-          "name": "A directory of backup directories; the newest is restored",
+          "name": "A directory of backup directories; source.params.select picks which one is restored — newest by directory time (the default), oldest, or random",
           "pitr": false
         },
         {
@@ -1424,7 +1424,7 @@
       "name": "VictoriaMetrics",
       "status": "experimental",
       "since": "0.16.0",
-      "adapter_version": "0.2.2",
+      "adapter_version": "0.3.0",
       "engine": {
         "id": "victoriametrics",
         "name": "VictoriaMetrics"
@@ -1446,7 +1446,7 @@
         },
         {
           "id": "victoriametrics_backup_dir",
-          "name": "A directory of `vmbackup` outputs; the one whose own metadata claims the newest instant is restored",
+          "name": "A directory of `vmbackup` outputs; source.params.select picks which one is restored — newest by the instant each backup's own metadata claims (the default), oldest, or random",
           "pitr": false
         },
         {
@@ -1464,7 +1464,7 @@
       "name": "Weaviate",
       "status": "experimental",
       "since": "0.25.0",
-      "adapter_version": "0.1.0",
+      "adapter_version": "0.2.0",
       "engine": {
         "id": "weaviate",
         "name": "Weaviate"
@@ -1490,7 +1490,7 @@
         },
         {
           "id": "weaviate_backup_dir",
-          "name": "A directory of them; the one whose own metadata claims the newest completion is restored",
+          "name": "A directory of them; source.params.select picks which one is restored — newest by the completion each backup's own metadata claims (the default), oldest, or random",
           "pitr": false
         },
         {

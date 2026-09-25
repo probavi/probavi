@@ -24,6 +24,6 @@
   "sources": {
     "weaviate_backup_tar": "One tar archive (plain or gzip) of a filesystem-backend backup directory",
     "weaviate_backup": "One backup directory, from `POST /v1/backups/filesystem`",
-    "weaviate_backup_dir": "A directory of them; the one whose own metadata claims the newest completion is restored"
+    "weaviate_backup_dir": "A directory of them; source.params.select picks which one is restored — newest by the completion each backup's own metadata claims (the default), oldest, or random"
   }
 }

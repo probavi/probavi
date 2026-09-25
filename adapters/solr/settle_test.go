@@ -176,7 +176,7 @@ func TestDirectoryScanRefusesAnArtifactInFlight(t *testing.T) {
 	newest := writeAgedIn(t, dir, "z-in-flight.d", 0)
 
 	stop := keepAppending(t, newest)
-	_, perr := resolveSource(context.Background(), "solr_backup_dir", dir)
+	_, perr := resolveSource(context.Background(), "solr_backup_dir", dir, nil)
 	stop()
 
 	if perr == nil {

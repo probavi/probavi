@@ -190,7 +190,7 @@ func TestResolveSourceAcceptsEveryKind(t *testing.T) {
 		{kind: "weaviate_backup_dir", path: multi, wantSuffix: "newer", wantMeta: true},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
-			src, perr := resolveSource(tc.kind, tc.path)
+			src, perr := resolveSource(tc.kind, tc.path, nil)
 			if perr != nil {
 				t.Fatalf("resolve: %+v", perr)
 			}
@@ -229,7 +229,7 @@ func TestTheArchiveKindReadsNoContent(t *testing.T) {
 	if err := os.WriteFile(p, []byte("not a tar at all"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	src, perr := resolveSource("weaviate_backup_tar", p)
+	src, perr := resolveSource("weaviate_backup_tar", p, nil)
 	if perr != nil {
 		t.Fatalf("an unreadable archive must pass the host: %+v", perr)
 	}
@@ -267,7 +267,7 @@ func TestBackupDirGates(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := writeBackupFixture(t, t.TempDir(), "b", tc.spec)
-			_, perr := resolveSource("weaviate_backup", dir)
+			_, perr := resolveSource("weaviate_backup", dir, nil)
 			if perr == nil {
 				t.Fatal("expected a refusal")
 			}
@@ -281,17 +281,17 @@ func TestBackupDirGates(t *testing.T) {
 	}
 }
 
-// TestNewestBackupInPrefersTheBackupsOwnClaim: ranking is by the
+// TestChooseBackupInPrefersTheBackupsOwnClaim: ranking is by the
 // completion instant each backup states about itself, never file times —
 // and a newer attempt that is not a completed backup refuses the drill by
 // name rather than being silently passed over.
-func TestNewestBackupInRanks(t *testing.T) {
+func TestChooseBackupInRanks(t *testing.T) {
 	t.Run("the claimed instant ranks, not file times", func(t *testing.T) {
 		parent := t.TempDir()
 		// Written second (newer mtime), completed earlier.
 		writeBackupFixture(t, parent, "written-later", backupSpec{completedAt: "2026-09-01T00:00:00Z"})
 		writeBackupFixture(t, parent, "completed-later", backupSpec{completedAt: "2026-09-02T00:00:00Z"})
-		winner, perr := newestBackupIn(parent)
+		winner, perr := chooseBackupIn(parent, selectNewest)
 		if perr != nil {
 			t.Fatalf("rank: %+v", perr)
 		}
@@ -304,7 +304,7 @@ func TestNewestBackupInRanks(t *testing.T) {
 		parent := t.TempDir()
 		writeBackupFixture(t, parent, "a", backupSpec{})
 		writeBackupFixture(t, parent, "b", backupSpec{})
-		winner, perr := newestBackupIn(parent)
+		winner, perr := chooseBackupIn(parent, selectNewest)
 		if perr != nil {
 			t.Fatalf("rank: %+v", perr)
 		}
@@ -315,7 +315,7 @@ func TestNewestBackupInRanks(t *testing.T) {
 
 }
 
-func TestNewestBackupInRefusesNewerAttempts(t *testing.T) {
+func TestChooseBackupInRefusesNewerAttempts(t *testing.T) {
 	t.Run("a newer in-progress attempt refuses by name", func(t *testing.T) {
 		parent := t.TempDir()
 		writeBackupFixture(t, parent, "good", backupSpec{
@@ -323,7 +323,7 @@ func TestNewestBackupInRefusesNewerAttempts(t *testing.T) {
 		writeBackupFixture(t, parent, "running", backupSpec{
 			status: "TRANSFERRING", startedAt: "2026-09-02T00:00:00Z",
 			completedAt: "0001-01-01T00:00:00Z"})
-		_, perr := newestBackupIn(parent)
+		_, perr := chooseBackupIn(parent, selectNewest)
 		if perr == nil {
 			t.Fatal("a directory with a newer in-progress attempt must refuse")
 		}
@@ -339,7 +339,7 @@ func TestNewestBackupInRefusesNewerAttempts(t *testing.T) {
 		writeBackupFixture(t, parent, "broken", backupSpec{
 			status: "FAILED", startedAt: "2026-09-02T00:00:00Z",
 			completedAt: "0001-01-01T00:00:00Z"})
-		_, perr := newestBackupIn(parent)
+		_, perr := chooseBackupIn(parent, selectNewest)
 		if perr == nil {
 			t.Fatal("a directory whose newest attempt failed must refuse")
 		}
@@ -350,7 +350,7 @@ func TestNewestBackupInRefusesNewerAttempts(t *testing.T) {
 
 }
 
-func TestNewestBackupInCensus(t *testing.T) {
+func TestChooseBackupInCensus(t *testing.T) {
 	t.Run("nothing restorable reports the census", func(t *testing.T) {
 		parent := t.TempDir()
 		if err := os.WriteFile(filepath.Join(parent, "notes.txt"), []byte("x"), 0o600); err != nil {
@@ -359,7 +359,7 @@ func TestNewestBackupInCensus(t *testing.T) {
 		if err := os.Mkdir(filepath.Join(parent, "not-a-backup"), 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
-		_, perr := newestBackupIn(parent)
+		_, perr := chooseBackupIn(parent, selectNewest)
 		if perr == nil || perr.Code != "source_not_found" {
 			t.Fatalf("refusal = %+v, want source_not_found", perr)
 		}
@@ -416,7 +416,7 @@ func TestMetaReadIsBounded(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, metaFileName), huge, 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_, perr := resolveSource("weaviate_backup", dir)
+	_, perr := resolveSource("weaviate_backup", dir, nil)
 	if perr == nil || perr.Code != "source_corrupt" {
 		t.Fatalf("refusal = %+v, want source_corrupt for an implausible manifest", perr)
 	}
@@ -538,7 +538,7 @@ func TestTheArchiveKindRefusesTheShapesAnOperatorGetsWrong(t *testing.T) {
 		"beneath a file": {filepath.Join(empty, "nightly.tar"), "source_unreadable", "stat backup source"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, perr := resolveSource("weaviate_backup_tar", tc.path)
+			_, perr := resolveSource("weaviate_backup_tar", tc.path, nil)
 			wantRefused(t, perr, tc.code, tc.message)
 		})
 	}
@@ -551,20 +551,20 @@ func TestWhatTheHostCannotReadIsUnreadable(t *testing.T) {
 	t.Run("an archive the host may not open", func(t *testing.T) {
 		archive := tarOf(t, writeBackupFixture(t, t.TempDir(), "nightly", backupSpec{}))
 		closedTo(t, archive, 0o600)
-		_, perr := resolveSource("weaviate_backup_tar", archive)
+		_, perr := resolveSource("weaviate_backup_tar", archive, nil)
 		wantRefused(t, perr, "source_unreadable", "read backup source")
 	})
 	t.Run("a chunk the host may not open", func(t *testing.T) {
 		backup := writeBackupFixture(t, t.TempDir(), "nightly", backupSpec{})
 		closedTo(t, filepath.Join(backup, metaFileName), 0o600)
-		_, perr := resolveSource("weaviate_backup", backup)
+		_, perr := resolveSource("weaviate_backup", backup, nil)
 		wantRefused(t, perr, "source_unreadable", "read "+metaFileName)
 	})
 	t.Run("a directory of backups the host may not list", func(t *testing.T) {
 		parent := t.TempDir()
 		writeBackupFixture(t, parent, "nightly", backupSpec{})
 		closedTo(t, parent, 0o755)
-		_, perr := resolveSource("weaviate_backup_dir", parent)
+		_, perr := resolveSource("weaviate_backup_dir", parent, nil)
 		wantRefused(t, perr, "source_unreadable", "")
 	})
 	t.Run("bytes that will not stream", func(t *testing.T) {
@@ -579,7 +579,7 @@ func TestWhatTheHostCannotReadIsUnreadable(t *testing.T) {
 // differently to an operator.
 func TestADirectoryOfBackupsSaysWhyItHasNoWinner(t *testing.T) {
 	t.Run("a directory with nothing in it", func(t *testing.T) {
-		_, perr := resolveSource("weaviate_backup_dir", t.TempDir())
+		_, perr := resolveSource("weaviate_backup_dir", t.TempDir(), nil)
 		wantRefused(t, perr, "source_not_found", "contains no files")
 	})
 	t.Run("a directory holding no backup", func(t *testing.T) {
@@ -590,7 +590,7 @@ func TestADirectoryOfBackupsSaysWhyItHasNoWinner(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(parent, "notes.txt"), []byte("not a backup\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		_, perr := resolveSource("weaviate_backup_dir", parent)
+		_, perr := resolveSource("weaviate_backup_dir", parent, nil)
 		wantRefused(t, perr, "source_not_found", "were passed over")
 	})
 }

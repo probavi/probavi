@@ -61,7 +61,7 @@ func tarOf(t *testing.T, root, prefix string) string {
 // a refusal.
 func wantRefusal(t *testing.T, kind, path, code, phrase string) {
 	t.Helper()
-	_, perr := resolveSource(kind, path)
+	_, perr := resolveSource(kind, path, nil)
 	if perr == nil {
 		t.Fatalf("resolveSource(%s, %s) succeeded, want %s", kind, path, code)
 	}
@@ -79,7 +79,7 @@ func TestATreeIsReadForWhatItStatesAboutItself(t *testing.T) {
 		snapshotTable{keyspace: "shop", table: "orders", createdAt: 1789900285, sstables: 2},
 		snapshotTable{keyspace: "shop", table: "items", createdAt: 1789900100, sstables: 1},
 	)
-	src, perr := resolveSource("scylladb_snapshot", root)
+	src, perr := resolveSource("scylladb_snapshot", root, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -111,7 +111,7 @@ func TestAnArchiveIsWalkedOnTheHost(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
 			writeSnapshot(t, root, oneTable())
-			src, perr := resolveSource("scylladb_snapshot_tar", tarOf(t, root, prefix))
+			src, perr := resolveSource("scylladb_snapshot_tar", tarOf(t, root, prefix), nil)
 			if perr != nil {
 				t.Fatalf("resolveSource: %+v", perr)
 			}
@@ -134,7 +134,7 @@ func TestAnArchiveIsWalkedOnTheHost(t *testing.T) {
 func TestAStreamThatIsNotTarShapedSaysNothing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "notatar.tar")
 	writeFile(t, path, "this is not a tar archive at all\n")
-	src, perr := resolveSource("scylladb_snapshot_tar", path)
+	src, perr := resolveSource("scylladb_snapshot_tar", path, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource refused an unreadable stream: %+v — the sandbox decides", perr)
 	}
@@ -210,7 +210,7 @@ func TestANameThatCannotGoIntoCQLIsRefused(t *testing.T) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
-		_, perr := resolveSource("scylladb_snapshot", root)
+		_, perr := resolveSource("scylladb_snapshot", root, nil)
 		if perr == nil || perr.Code != "invalid_request" {
 			t.Errorf("table name %q was accepted (%v), want it refused", bad, perr)
 		}
@@ -233,7 +233,7 @@ func TestTheDirectoryKindPicksWhatTheManifestsDate(t *testing.T) {
 			t.Fatalf("chtimes: %v", err)
 		}
 	}
-	src, perr := resolveSource("scylladb_snapshot_dir", root)
+	src, perr := resolveSource("scylladb_snapshot_dir", root, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -314,7 +314,7 @@ func TestAnInstantOutsideTheRangeDoesNotDateARecord(t *testing.T) {
 			writeSnapshot(t, root, snapshotTable{
 				keyspace: "shop", table: "orders", createdAt: tc.createdAt, sstables: 1,
 			})
-			src, perr := resolveSource("scylladb_snapshot", root)
+			src, perr := resolveSource("scylladb_snapshot", root, nil)
 			if perr != nil {
 				t.Fatalf("resolveSource: %+v", perr)
 			}
@@ -392,7 +392,7 @@ func TestAManifestListingNothingIsStillComplete(t *testing.T) {
 	writeSnapshot(t, root, snapshotTable{
 		keyspace: "shop", table: "orders", createdAt: 1789900285, sstables: 0,
 	})
-	src, perr := resolveSource("scylladb_snapshot", root)
+	src, perr := resolveSource("scylladb_snapshot", root, nil)
 	if perr != nil {
 		t.Fatalf("an empty but whole table was refused: %+v", perr)
 	}

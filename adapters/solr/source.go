@@ -37,23 +37,28 @@ type resolvedSource struct {
 //
 //	solr_backup_tar — path is one tar archive of a backup directory
 //	solr_backup     — path is one Collections API backup directory
-//	solr_backup_dir — path is a directory of them; the newest is chosen
+//	solr_backup_dir — path is a directory of them; source.params.select
+//	                  picks one, newest by default (selection.go)
 //
 // A backup directory is what `action=BACKUP&name=<name>` leaves behind:
 // one subdirectory per collection, each holding backup_N.properties,
 // shard_backup_metadata, zk_backup_N and index (measured on Solr 10).
-func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *protoError) {
+func resolveSource(ctx context.Context, kind, path string, params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "solr_backup_tar":
 		return resolveTar(path)
 	case "solr_backup":
 		return resolveBackup(path)
 	case "solr_backup_dir":
-		latest, perr := latestBackupIn(ctx, path)
+		chosen, perr := chooseBackupIn(ctx, path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveBackup(latest)
+		return resolveBackup(chosen)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: solr_backup_tar, solr_backup, solr_backup_dir)", kind)
@@ -234,9 +239,9 @@ func soleCollection(path string) (string, *protoError) {
 	}
 }
 
-// latestBackupIn picks the newest backup directory in dir; ties break
-// toward the lexicographically larger name so the choice is deterministic.
-func latestBackupIn(ctx context.Context, dir string) (string, *protoError) {
+// chooseBackupIn picks the backup directory the policy asks for, ordered
+// by directory time (selection.go says why that is all there is).
+func chooseBackupIn(ctx context.Context, dir string, policy selectPolicy) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -244,10 +249,7 @@ func latestBackupIn(ctx context.Context, dir string) (string, *protoError) {
 	case err != nil:
 		return "", protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var (
-		best     string
-		bestTime time.Time
-	)
+	candidates := make([]dirCandidate, 0, len(entries))
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -256,21 +258,18 @@ func latestBackupIn(ctx context.Context, dir string) (string, *protoError) {
 		if ierr != nil {
 			return "", protoErr("source_unreadable", false, "stat %s: %v", e.Name(), ierr)
 		}
-		if best == "" || info.ModTime().After(bestTime) ||
-			(info.ModTime().Equal(bestTime) && e.Name() > filepath.Base(best)) {
-			best = filepath.Join(dir, e.Name())
-			bestTime = info.ModTime()
-		}
+		candidates = append(candidates, dirCandidate{name: e.Name(), mtime: info.ModTime()})
 	}
-	if best == "" {
+	if len(candidates) == 0 {
 		return "", protoErr("source_not_found", false, "backup directory %s contains no backups", dir)
 	}
-	// The adapter chose this backup, not the operator: make sure a backup
-	// job is not still writing it (see settle.go).
-	if perr := assertSettled(ctx, best, settleWindow); perr != nil {
+	chosen := filepath.Join(dir, pick(candidates, policy).name)
+	// The adapter chose this backup, not the operator — under every policy
+	// — so make sure a backup job is not still writing it (see settle.go).
+	if perr := assertSettled(ctx, chosen, settleWindow); perr != nil {
 		return "", perr
 	}
-	return best, nil
+	return chosen, nil
 }
 
 // treeChecksum hashes every regular file in the artifact, path and

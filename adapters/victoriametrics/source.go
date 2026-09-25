@@ -77,25 +77,29 @@ type backupMetadata struct {
 //	                             of a vmbackup output, its files at the
 //	                             root or under one wrapping directory
 //	victoriametrics_backup     — path is one vmbackup output directory
-//	victoriametrics_backup_dir — path is a directory of them; the one
-//	                             whose own metadata claims the newest
-//	                             instant is restored
+//	victoriametrics_backup_dir — path is a directory of them;
+//	                             source.params.select picks one, newest
+//	                             by default (selection.go)
 //
 // Every fact used for ranking and for backup.created_at comes from what
 // the artifact states about itself, never from file times a copy would
 // reset.
-func resolveSource(kind, sourcePath string) (*resolvedSource, *protoError) {
+func resolveSource(kind, sourcePath string, params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "victoriametrics_backup_tar":
 		return resolveTar(sourcePath)
 	case "victoriametrics_backup":
 		return resolveBackupDir(sourcePath)
 	case "victoriametrics_backup_dir":
-		latest, perr := newestBackupIn(sourcePath)
+		chosen, perr := chooseBackupIn(sourcePath, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveBackupDir(latest)
+		return resolveBackupDir(chosen)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: victoriametrics_backup_tar, "+
@@ -390,12 +394,12 @@ type backupCandidate struct {
 	mtime       time.Time
 }
 
-// newestBackupIn picks the backup whose own metadata claims the newest
-// instant. A backup that can be dated from its own files wins over one
-// that cannot, and the chosen directory still faces every single-backup
-// fence, so a live copy or an unfinished backup that wins the ranking is
-// still refused by name.
-func newestBackupIn(dir string) (string, *protoError) {
+// chooseBackupIn picks the backup the policy asks for, out of what each
+// candidate states about itself. A backup that can be dated from its own
+// files wins over one that cannot under every policy, and the chosen
+// directory still faces every single-backup fence, so a live copy or an
+// unfinished backup that wins the ranking is still refused by name.
+func chooseBackupIn(dir string, policy selectPolicy) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -403,7 +407,7 @@ func newestBackupIn(dir string) (string, *protoError) {
 	case err != nil:
 		return "", protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var best *backupCandidate
+	candidates := make([]backupCandidate, 0, len(entries))
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -418,16 +422,13 @@ func newestBackupIn(dir string) (string, *protoError) {
 				candidate.createdAtMs = ms
 			}
 		}
-		if best == nil || candidate.beats(*best) {
-			c := candidate
-			best = &c
-		}
+		candidates = append(candidates, candidate)
 	}
-	if best == nil {
+	if len(candidates) == 0 {
 		return "", protoErr("source_not_found", false,
 			"backup directory %s contains no backup directories", dir)
 	}
-	return filepath.Join(dir, best.name), nil
+	return filepath.Join(dir, pick(candidates, policy).name), nil
 }
 
 // beats orders candidates: a dated backup outranks every undated one, a
@@ -444,6 +445,29 @@ func (c backupCandidate) beats(o backupCandidate) bool {
 		return c.mtime.After(o.mtime)
 	default:
 		return c.name > o.name
+	}
+}
+
+// precedes orders candidates for the oldest policy — and is not the
+// negation of beats, which is the whole reason it is written out. The
+// first rule does not invert: a backup that states its own instant
+// still outranks one that does not, because datedness is not a clock.
+// Reversing it would make "oldest" mean "prefer the candidate nothing can
+// be said about", and restoring an undatable backup in preference to a
+// dated one proves less, not more. Past that rule everything is turned
+// around: an older claimed instant wins, undated candidates fall back to
+// older directory time, and remaining ties break toward the
+// lexicographically smaller name so the choice is still deterministic.
+func (c backupCandidate) precedes(o backupCandidate) bool {
+	switch {
+	case (c.createdAtMs != 0) != (o.createdAtMs != 0):
+		return c.createdAtMs != 0
+	case c.createdAtMs != o.createdAtMs:
+		return c.createdAtMs < o.createdAtMs
+	case !c.mtime.Equal(o.mtime):
+		return c.mtime.Before(o.mtime)
+	default:
+		return c.name < o.name
 	}
 }
 

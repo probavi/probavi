@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "victoriametrics"
-	adapterVersion = "0.2.2"
+	adapterVersion = "0.3.0"
 
 	// workDirName is created under the provider's scratch directory — the
 	// one directory the provider guarantees writable.
@@ -162,7 +162,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		scratch = "/tmp"
 	}
 
-	src, perr := resolveSource(req.Source.Kind, req.Source.Path)
+	src, perr := resolveSource(req.Source.Kind, req.Source.Path, req.Source.Params)
 	if perr != nil {
 		return nil, perr
 	}
