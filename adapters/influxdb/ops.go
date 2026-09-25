@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "influxdb"
-	adapterVersion = "0.4.0"
+	adapterVersion = "0.5.0"
 
 	// Where the restored instance serves inside the sandbox. No TLS and
 	// no operator credentials: a Probavi sandbox is zero-ingress
@@ -177,7 +177,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		scratch = "/tmp"
 	}
 
-	src, perr := resolveSource(req.Source.Kind, req.Source.Path)
+	src, perr := resolveSource(req.Source.Kind, req.Source.Path, req.Source.Params)
 	if perr != nil {
 		return nil, perr
 	}

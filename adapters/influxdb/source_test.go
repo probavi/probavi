@@ -79,7 +79,7 @@ func singleOrg() map[string][]string {
 func TestResolveBackupDirHealthy(t *testing.T) {
 	{
 		dir := writeBackup(t, filepath.Join(t.TempDir(), "bak"), stemA, singleOrg())
-		src, perr := resolveSource("influx_backup", dir)
+		src, perr := resolveSource("influx_backup", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -115,7 +115,7 @@ func TestResolveBackupDirUnparsableStem(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "renamed.manifest"), []byte(manifest), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		src, perr := resolveSource("influx_backup", dir)
+		src, perr := resolveSource("influx_backup", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -132,7 +132,7 @@ func TestResolveBackupDirReusedTarget(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "bak")
 		writeBackup(t, dir, "20260810T000000Z", singleOrg())
 		writeBackup(t, dir, stemA, singleOrg())
-		src, perr := resolveSource("influx_backup", dir)
+		src, perr := resolveSource("influx_backup", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -216,7 +216,7 @@ func TestResolveBackupDirRefusals(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, perr := resolveSource("influx_backup", tt.path)
+			_, perr := resolveSource("influx_backup", tt.path, nil)
 			if perr == nil || perr.Code != tt.wantCode || !strings.Contains(perr.Message, tt.wantMsg) {
 				t.Fatalf("perr = %+v, want %s containing %q", perr, tt.wantCode, tt.wantMsg)
 			}
@@ -224,7 +224,7 @@ func TestResolveBackupDirRefusals(t *testing.T) {
 	}
 
 	t.Run("an unknown kind lists the supported ones", func(t *testing.T) {
-		_, perr := resolveSource("influx_snapshot", base)
+		_, perr := resolveSource("influx_snapshot", base, nil)
 		if perr == nil || perr.Code != "unsupported_source" || !strings.Contains(perr.Message, "influx_backup_dir") {
 			t.Fatalf("perr = %+v", perr)
 		}
@@ -241,7 +241,7 @@ func TestNewestBackupIn(t *testing.T) {
 		if err := os.Chtimes(filepath.Join(base, "b-new"), past, past); err != nil {
 			t.Fatal(err)
 		}
-		src, perr := resolveSource("influx_backup_dir", base)
+		src, perr := resolveSource("influx_backup_dir", base, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -255,7 +255,7 @@ func TestNewestBackupIn(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(base, "not-a-backup"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		_, perr := resolveSource("influx_backup_dir", base)
+		_, perr := resolveSource("influx_backup_dir", base, nil)
 		if perr == nil || perr.Code != "source_not_found" || !strings.Contains(perr.Message, "passed over") {
 			t.Fatalf("perr = %+v", perr)
 		}
@@ -264,7 +264,7 @@ func TestNewestBackupIn(t *testing.T) {
 
 func TestMemberChecksumMoves(t *testing.T) {
 	dir := writeBackup(t, filepath.Join(t.TempDir(), "bak"), stemA, singleOrg())
-	src, perr := resolveSource("influx_backup", dir)
+	src, perr := resolveSource("influx_backup", dir, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -274,7 +274,7 @@ func TestMemberChecksumMoves(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte("sums\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	again, perr := resolveSource("influx_backup", dir)
+	again, perr := resolveSource("influx_backup", dir, nil)
 	if perr != nil || again.checksum != first {
 		t.Errorf("checksum moved on a stray sidecar: %q vs %q (%+v)", again.checksum, first, perr)
 	}
@@ -283,7 +283,7 @@ func TestMemberChecksumMoves(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, stemA+".1.tar.gz"), []byte("changed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	moved, perr := resolveSource("influx_backup", dir)
+	moved, perr := resolveSource("influx_backup", dir, nil)
 	if perr != nil || moved.checksum == first {
 		t.Errorf("checksum did not move on a member change (%+v)", perr)
 	}
@@ -373,7 +373,7 @@ func backupTarEntries(wrap string) []tarEntry {
 func TestResolveTarLayouts(t *testing.T) {
 	t.Run("a plain archive with members at the root", func(t *testing.T) {
 		path := buildTar(t, filepath.Join(t.TempDir(), "bak.tar"), false, backupTarEntries(""))
-		src, perr := resolveSource("influx_backup_tar", path)
+		src, perr := resolveSource("influx_backup_tar", path, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -387,7 +387,7 @@ func TestResolveTarLayouts(t *testing.T) {
 
 	t.Run("a gzip archive with one wrapping directory", func(t *testing.T) {
 		path := buildTar(t, filepath.Join(t.TempDir(), "bak.tar.gz"), true, backupTarEntries("bak-20260817"))
-		src, perr := resolveSource("influx_backup_tar", path)
+		src, perr := resolveSource("influx_backup_tar", path, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -405,7 +405,7 @@ func TestResolveTarOpaque(t *testing.T) {
 		if err := os.WriteFile(path, bytes.Repeat([]byte{0xA5}, 4096), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		src, perr := resolveSource("influx_backup_tar", path)
+		src, perr := resolveSource("influx_backup_tar", path, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v — the sandbox extraction is the authority", perr)
 		}
@@ -422,7 +422,7 @@ func TestResolveTarRefusals(t *testing.T) {
 			{name: stemA + ".manifest", content: `{"meta":{"fileName":"` + stemA + `.meta","size":66},"limited":false,"files":null}`},
 			{name: stemA + ".meta", content: "meta bytes"},
 		})
-		_, perr := resolveSource("influx_backup_tar", path)
+		_, perr := resolveSource("influx_backup_tar", path, nil)
 		if perr == nil || perr.Code != "unsupported_source" || !strings.Contains(perr.Message, "migration") {
 			t.Fatalf("perr = %+v, want the migration fence", perr)
 		}
@@ -431,14 +431,14 @@ func TestResolveTarRefusals(t *testing.T) {
 	t.Run("an archive missing a named member is an incomplete copy", func(t *testing.T) {
 		entries := backupTarEntries("")[:4] // drop the last shard
 		path := buildTar(t, filepath.Join(t.TempDir(), "short.tar"), false, entries)
-		_, perr := resolveSource("influx_backup_tar", path)
+		_, perr := resolveSource("influx_backup_tar", path, nil)
 		if perr == nil || perr.Code != "source_corrupt" || !strings.Contains(perr.Message, ".2.tar.gz") {
 			t.Fatalf("perr = %+v, want the incomplete copy named", perr)
 		}
 	})
 
 	t.Run("a directory for the tar kind teaches the directory kinds", func(t *testing.T) {
-		_, perr := resolveSource("influx_backup_tar", t.TempDir())
+		_, perr := resolveSource("influx_backup_tar", t.TempDir(), nil)
 		if perr == nil || perr.Code != "invalid_request" || !strings.Contains(perr.Message, "influx_backup_dir") {
 			t.Fatalf("perr = %+v", perr)
 		}
@@ -455,7 +455,7 @@ func TestResolveTarPicksNewest(t *testing.T) {
 			tarEntry{name: "20260810T000000Z.bolt.gz", content: "kv"},
 			tarEntry{name: "20260810T000000Z.sqlite.gz", content: "sql"})
 		path := buildTar(t, filepath.Join(t.TempDir(), "two.tar"), false, entries)
-		src, perr := resolveSource("influx_backup_tar", path)
+		src, perr := resolveSource("influx_backup_tar", path, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}

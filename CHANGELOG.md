@@ -96,7 +96,24 @@ always called out explicitly.
   cannot be read is refused rather than ranked, under every policy — so
   `oldest` there really is `newest` turned around.
 
-  Fifteen `*_dir` kinds across thirteen adapters are still to come.
+  Then the last four whose artifacts state their own instant:
+  **`adapters/arangodb` 0.2.0** (a dump's own `dump.json`),
+  **`adapters/influxdb` 0.5.0** (the timestamp stem `influx backup` writes
+  into each manifest's file name), and **`adapters/redis` 0.6.0** and
+  **`adapters/valkey` 0.5.0** (the `ctime` field in an RDB header).
+  `oldest` is exactly as strong as `newest` on all four, because a copy's
+  file time cannot make an artifact look like either end of the window.
+  Three of them keep the rule that does not invert — a candidate that
+  states an instant outranks one that states none, under `oldest` too —
+  and `adapters/influxdb` needs no such rule at all, because a
+  subdirectory holding no timestamped manifest is not an `influx backup`
+  output and never became a candidate.
+
+  Ten `*_dir` kinds across eight adapters are still to come, all of them
+  ordering by file time. `adapters/aerospike`'s `asbackup_dir` is not one
+  of them: `asbackup -d` splits a single backup across the files of one
+  directory, so the directory is the artifact and there is nothing to
+  select.
 
 - **A release now runs the binaries it publishes.** Everything else in
   this repository proves the source tree: the unit suite, the integration

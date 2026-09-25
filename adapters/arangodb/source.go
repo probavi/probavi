@@ -30,26 +30,30 @@ type resolvedSource struct {
 //	arangodb_dump_tar — path is one tar archive (plain or gzip) of such a
 //	                    directory, its files at the root or under one
 //	                    wrapping directory
-//	arangodb_dump_dir — path is a directory of such dumps; the one whose
-//	                    own dump.json claims the newest instant is
-//	                    restored
+//	arangodb_dump_dir — path is a directory of such dumps;
+//	                    source.params.select picks one, newest by default
+//	                    (selection.go)
 //
 // dump.json states when the dump was taken, in RFC 3339 with a literal Z
 // (measured), so created_at and the directory ranking both come from what
 // the artifact states about itself — never from file times a copy would
 // reset.
-func resolveSource(kind, path string) (*resolvedSource, *protoError) {
+func resolveSource(kind, path string, params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "arangodb_dump":
 		return resolveDir(path)
 	case "arangodb_dump_tar":
 		return resolveTar(path)
 	case "arangodb_dump_dir":
-		latest, perr := newestDumpIn(path)
+		chosen, perr := chooseDumpIn(path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveDir(latest)
+		return resolveDir(chosen)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: arangodb_dump, arangodb_dump_tar, "+
@@ -113,13 +117,12 @@ type dumpCandidate struct {
 	mtime     time.Time
 }
 
-// newestDumpIn picks the dump whose own dump.json claims the newest
-// instant. A dump that can be dated from its own files wins over one that
-// cannot — the drill would rather restore the backup it can also say
-// something true about — and the chosen dump still faces every
-// single-dump gate, so a broken candidate that wins the ranking is
-// refused by name.
-func newestDumpIn(dir string) (string, *protoError) {
+// chooseDumpIn picks the dump the policy asks for, out of what each
+// candidate's own dump.json states. A dump that can be dated from its own
+// files wins over one that cannot under every policy, and the chosen dump
+// still faces every single-dump gate, so a broken candidate that wins the
+// ranking is refused by name.
+func chooseDumpIn(dir string, policy selectPolicy) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -127,7 +130,7 @@ func newestDumpIn(dir string) (string, *protoError) {
 	case err != nil:
 		return "", protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var best *dumpCandidate
+	candidates := make([]dumpCandidate, 0, len(entries))
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -140,16 +143,13 @@ func newestDumpIn(dir string) (string, *protoError) {
 		if census, perr := inspectDumpDir(filepath.Join(dir, e.Name())); perr == nil {
 			candidate.createdMs = census.createdMs
 		}
-		if best == nil || candidate.beats(*best) {
-			c := candidate
-			best = &c
-		}
+		candidates = append(candidates, candidate)
 	}
-	if best == nil {
+	if len(candidates) == 0 {
 		return "", protoErr("source_not_found", false,
 			"backup directory %s contains no dumps", dir)
 	}
-	return filepath.Join(dir, best.name), nil
+	return filepath.Join(dir, pick(candidates, policy).name), nil
 }
 
 // beats orders candidates: a dated dump outranks every undated one, a
@@ -166,6 +166,29 @@ func (c dumpCandidate) beats(o dumpCandidate) bool {
 		return c.mtime.After(o.mtime)
 	default:
 		return c.name > o.name
+	}
+}
+
+// precedes orders candidates for the oldest policy — and is not the
+// negation of beats, which is the whole reason it is written out. The
+// first rule does not invert: a dump that states its own instant still
+// outranks one that does not, because datedness is not a clock. Reversing
+// it would make "oldest" mean "prefer the candidate nothing can be said
+// about", and restoring an undatable dump in preference to a dated one
+// proves less, not more. Past that rule everything is turned around: an
+// older claimed instant wins, undated candidates fall back to older
+// directory time, and remaining ties break toward the lexicographically
+// smaller name so the choice is still deterministic.
+func (c dumpCandidate) precedes(o dumpCandidate) bool {
+	switch {
+	case (c.createdMs != 0) != (o.createdMs != 0):
+		return c.createdMs != 0
+	case c.createdMs != o.createdMs:
+		return c.createdMs < o.createdMs
+	case !c.mtime.Equal(o.mtime):
+		return c.mtime.Before(o.mtime)
+	default:
+		return c.name < o.name
 	}
 }
 

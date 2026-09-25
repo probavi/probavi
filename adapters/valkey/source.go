@@ -40,7 +40,12 @@ type resolvedSource struct {
 // head carries no readable ctime ranks below every file that does, by
 // file time among its like — an undatable artifact never outranks a dated
 // one.
-func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *protoError) {
+func resolveSource(ctx context.Context, kind, path string,
+	params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "valkey_rdb":
 		if perr := refuseDirectory(path); perr != nil {
@@ -48,11 +53,11 @@ func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *pr
 		}
 		return resolveFile(path)
 	case "valkey_rdb_dir":
-		latest, perr := latestRDBIn(ctx, path)
+		chosen, perr := chooseRDBIn(ctx, path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveFile(latest)
+		return resolveFile(chosen)
 	case "valkey_aof":
 		return resolveAOF(path)
 	default:
@@ -195,14 +200,15 @@ type rdbCandidate struct {
 	mtime time.Time
 }
 
-// latestRDBIn picks the directory's newest RDB by what each artifact
+// chooseRDBIn picks the RDB the policy asks for, by what each artifact
 // records about itself. Files without either RDB magic are skipped as
 // non-candidates (checksum sidecars, README files); a Redis-dialect
-// artifact is a candidate, so that when it is the newest it is refused by
-// name rather than silently passed over for an older neighbour — the same
-// not-a-filter principle as settle.go. If nothing qualifies, the skipped
-// names are counted so the refusal says what was passed over.
-func latestRDBIn(ctx context.Context, dir string) (string, *protoError) {
+// artifact is a candidate, so that when the policy picks it, it is refused
+// by name rather than silently passed over for a neighbour — the same
+// not-a-filter principle as settle.go, and it holds under every policy.
+// If nothing qualifies, the skipped names are counted so the refusal says
+// what was passed over.
+func chooseRDBIn(ctx context.Context, dir string, policy selectPolicy) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -210,7 +216,7 @@ func latestRDBIn(ctx context.Context, dir string) (string, *protoError) {
 	case err != nil:
 		return "", protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var best *rdbCandidate
+	candidates := make([]rdbCandidate, 0, len(entries))
 	skipped := 0
 	for _, e := range entries {
 		if !e.Type().IsRegular() {
@@ -226,13 +232,9 @@ func latestRDBIn(ctx context.Context, dir string) (string, *protoError) {
 		if err != nil {
 			return "", protoErr("source_unreadable", false, "stat %s: %v", e.Name(), err)
 		}
-		candidate := rdbCandidate{path: path, ctime: meta.ctime, mtime: info.ModTime()}
-		if best == nil || candidate.beats(*best) {
-			c := candidate
-			best = &c
-		}
+		candidates = append(candidates, rdbCandidate{path: path, ctime: meta.ctime, mtime: info.ModTime()})
 	}
-	if best == nil {
+	if len(candidates) == 0 {
 		if skipped > 0 {
 			return "", protoErr("source_not_found", false,
 				"backup directory %s holds no RDB files (%d files without an RDB header were passed over)",
@@ -240,12 +242,13 @@ func latestRDBIn(ctx context.Context, dir string) (string, *protoError) {
 		}
 		return "", protoErr("source_not_found", false, "backup directory %s contains no files", dir)
 	}
-	// The adapter chose this file, not the operator: make sure a backup
-	// job is not still writing it (see settle.go).
-	if perr := assertSettled(ctx, best.path, settleWindow); perr != nil {
+	chosen := pick(candidates, policy).path
+	// The adapter chose this file, not the operator — under every policy:
+	// make sure a backup job is not still writing it (see settle.go).
+	if perr := assertSettled(ctx, chosen, settleWindow); perr != nil {
 		return "", perr
 	}
-	return best.path, nil
+	return chosen, nil
 }
 
 // beats orders candidates: a dated artifact outranks every undated one, a
@@ -262,6 +265,29 @@ func (c rdbCandidate) beats(o rdbCandidate) bool {
 		return c.mtime.After(o.mtime)
 	default:
 		return filepath.Base(c.path) > filepath.Base(o.path)
+	}
+}
+
+// precedes orders candidates for the oldest policy — and is not the
+// negation of beats, which is the whole reason it is written out. The
+// first rule does not invert: an artifact that records its own save
+// instant still outranks one that does not, because datedness is not a
+// clock. Reversing it would make "oldest" mean "prefer the file nothing
+// can be said about", and restoring an undatable RDB in preference to a
+// dated one proves less, not more. Past that rule everything is turned
+// around: an older save instant wins, undated artifacts fall back to
+// older file time, and remaining ties break toward the lexicographically
+// smaller name so the choice is still deterministic.
+func (c rdbCandidate) precedes(o rdbCandidate) bool {
+	switch {
+	case (c.ctime != 0) != (o.ctime != 0):
+		return c.ctime != 0
+	case c.ctime != o.ctime:
+		return c.ctime < o.ctime
+	case !c.mtime.Equal(o.mtime):
+		return c.mtime.Before(o.mtime)
+	default:
+		return filepath.Base(c.path) < filepath.Base(o.path)
 	}
 }
 

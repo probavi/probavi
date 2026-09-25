@@ -196,7 +196,7 @@ func TestTheMessageNamesAFewCollectionsNotAll(t *testing.T) {
 			}
 		}
 	}
-	_, perr := resolveSource("arangodb_dump", dir)
+	_, perr := resolveSource("arangodb_dump", dir, nil)
 	if perr == nil {
 		t.Fatal("a dump with no data at all was accepted")
 	}

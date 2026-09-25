@@ -80,7 +80,7 @@
       "name": "ArangoDB",
       "status": "experimental",
       "since": "0.32.0",
-      "adapter_version": "0.1.0",
+      "adapter_version": "0.2.0",
       "engine": {
         "id": "arangodb",
         "name": "ArangoDB"
@@ -102,7 +102,7 @@
         },
         {
           "id": "arangodb_dump_dir",
-          "name": "A directory of `arangodump` outputs; the one whose own dump.json claims the newest instant is restored",
+          "name": "A directory of `arangodump` outputs; source.params.select picks which one is restored — newest by the instant each dump's own dump.json claims (the default), oldest, or random",
           "pitr": false
         },
         {
@@ -507,7 +507,7 @@
       "name": "InfluxDB",
       "status": "experimental",
       "since": "0.15.0",
-      "adapter_version": "0.4.0",
+      "adapter_version": "0.5.0",
       "engine": {
         "id": "influxdb",
         "name": "InfluxDB"
@@ -537,7 +537,7 @@
         },
         {
           "id": "influx_backup_dir",
-          "name": "A directory of them; the newest by the backups' own timestamp stems is restored",
+          "name": "A directory of them; source.params.select picks which one is restored — newest by the backups' own timestamp stems (the default), oldest, or random",
           "pitr": false
         },
         {
@@ -1131,7 +1131,7 @@
       "name": "Redis",
       "status": "experimental",
       "since": "0.8.0",
-      "adapter_version": "0.5.0",
+      "adapter_version": "0.6.0",
       "engine": {
         "id": "redis",
         "name": "Redis"
@@ -1170,7 +1170,7 @@
         },
         {
           "id": "redis_rdb_dir",
-          "name": "A directory of RDB files; the newest by the artifact's own save instant (the ctime header field) is restored",
+          "name": "A directory of RDB files; source.params.select picks which one is restored — newest by the artifact's own save instant, the ctime header field (the default), oldest, or random",
           "pitr": false
         }
       ],
@@ -1368,7 +1368,7 @@
       "name": "Valkey",
       "status": "experimental",
       "since": "0.9.0",
-      "adapter_version": "0.4.0",
+      "adapter_version": "0.5.0",
       "engine": {
         "id": "valkey",
         "name": "Valkey"
@@ -1411,7 +1411,7 @@
         },
         {
           "id": "valkey_rdb_dir",
-          "name": "A directory of RDB files; the newest by the artifact's own save instant (the ctime header field) is restored",
+          "name": "A directory of RDB files; source.params.select picks which one is restored — newest by the artifact's own save instant, the ctime header field (the default), oldest, or random",
           "pitr": false
         }
       ],

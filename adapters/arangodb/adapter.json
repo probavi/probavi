@@ -19,6 +19,6 @@
   "sources": {
     "arangodb_dump": "One `arangodump` output directory",
     "arangodb_dump_tar": "One tar archive (plain or gzip) of an `arangodump` output, its files at the root or under one wrapping directory",
-    "arangodb_dump_dir": "A directory of `arangodump` outputs; the one whose own dump.json claims the newest instant is restored"
+    "arangodb_dump_dir": "A directory of `arangodump` outputs; source.params.select picks which one is restored — newest by the instant each dump's own dump.json claims (the default), oldest, or random"
   }
 }

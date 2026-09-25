@@ -12,7 +12,7 @@ import (
 func TestResolveFileReadsItsOwnMetadata(t *testing.T) {
 	dir := t.TempDir()
 	path := writeRDB(t, dir, "dump.rdb", "7.2.5", "1786289869")
-	src, perr := resolveSource(context.Background(), "redis_rdb", path)
+	src, perr := resolveSource(context.Background(), "redis_rdb", path, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -37,7 +37,7 @@ func TestResolveFileWithoutDate(t *testing.T) {
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	src, perr := resolveSource(context.Background(), "redis_rdb", path)
+	src, perr := resolveSource(context.Background(), "redis_rdb", path, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %+v", perr)
 	}
@@ -71,7 +71,7 @@ func TestRefuseValkeyDialect(t *testing.T) {
 			if err := os.WriteFile(path, tt.head, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			_, perr := resolveSource(context.Background(), "redis_rdb", path)
+			_, perr := resolveSource(context.Background(), "redis_rdb", path, nil)
 			if (perr != nil) != tt.refused {
 				t.Fatalf("perr = %+v, refused=%v", perr, tt.refused)
 			}
@@ -103,7 +103,7 @@ func TestDirectoryRefusesTheNewestWhenItIsValkey(t *testing.T) {
 		[2]string{"valkey-ver", "8.0.10"}, [2]string{"ctime", "1786289869"}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, perr := resolveSource(context.Background(), "redis_rdb_dir", dir)
+	_, perr := resolveSource(context.Background(), "redis_rdb_dir", dir, nil)
 	if perr == nil || perr.Code != "unsupported_source" {
 		t.Fatalf("perr = %+v, want the chosen Valkey artifact refused, not skipped", perr)
 	}
@@ -123,7 +123,7 @@ func TestDirectoryRanking(t *testing.T) {
 		if err := os.Chtimes(newer, past, past); err != nil {
 			t.Fatal(err)
 		}
-		src, perr := resolveSource(context.Background(), "redis_rdb_dir", dir)
+		src, perr := resolveSource(context.Background(), "redis_rdb_dir", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -141,7 +141,7 @@ func TestDirectoryRanking(t *testing.T) {
 		if err := os.Chtimes(dated, past, past); err != nil {
 			t.Fatal(err)
 		}
-		src, perr := resolveSource(context.Background(), "redis_rdb_dir", dir)
+		src, perr := resolveSource(context.Background(), "redis_rdb_dir", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -160,7 +160,7 @@ func TestDirectoryRanking(t *testing.T) {
 			t.Fatal(err)
 		}
 		newest := writeRDB(t, dir, "b-new.rdb", "", "")
-		src, perr := resolveSource(context.Background(), "redis_rdb_dir", dir)
+		src, perr := resolveSource(context.Background(), "redis_rdb_dir", dir, nil)
 		if perr != nil {
 			t.Fatalf("resolveSource: %+v", perr)
 		}
@@ -179,21 +179,21 @@ func TestDirectoryRefusals(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		_, perr := resolveSource(context.Background(), "redis_rdb_dir", dir)
+		_, perr := resolveSource(context.Background(), "redis_rdb_dir", dir, nil)
 		if perr == nil || perr.Code != "source_not_found" || !strings.Contains(perr.Message, "2 files") {
 			t.Errorf("perr = %+v, want source_not_found counting the passed-over files", perr)
 		}
 	})
 
 	t.Run("an empty directory says so", func(t *testing.T) {
-		_, perr := resolveSource(context.Background(), "redis_rdb_dir", t.TempDir())
+		_, perr := resolveSource(context.Background(), "redis_rdb_dir", t.TempDir(), nil)
 		if perr == nil || perr.Code != "source_not_found" || !strings.Contains(perr.Message, "contains no files") {
 			t.Errorf("perr = %+v", perr)
 		}
 	})
 
 	t.Run("a missing directory says so", func(t *testing.T) {
-		_, perr := resolveSource(context.Background(), "redis_rdb_dir", filepath.Join(t.TempDir(), "gone"))
+		_, perr := resolveSource(context.Background(), "redis_rdb_dir", filepath.Join(t.TempDir(), "gone"), nil)
 		if perr == nil || perr.Code != "source_not_found" {
 			t.Errorf("perr = %+v", perr)
 		}
