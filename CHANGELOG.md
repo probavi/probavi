@@ -13,6 +13,43 @@ always called out explicitly.
 
 ### Added
 
+- **wal-g repositories, with point-in-time recovery**
+  (`adapters/postgres` 0.19.0, source kind `walg`). The Phase 2 promise was
+  WAL replay through wal-g *or* pgBackRest and shipped only the second;
+  `barman` followed, and this closes the item. A base backup is fetched and
+  PostgreSQL replays the archive — to `target.pitr` when the drill names
+  one, to the end of the archive when it does not.
+
+  **Only the filesystem backend, deliberately.** wal-g's home is object
+  storage, and a drill's sandbox starts with no network at all — the
+  isolation default, not a setting. Opening it to the internet to prove a
+  backup would trade the guarantee for the convenience, so
+  `WALG_FILE_PREFIX` is the backend that works on the terms a drill already
+  holds: the archive is staged on the drill host, the adapter moves it into
+  the sandbox, nothing reaches out.
+
+  **The image carries a pinned binary.** wal-g ships in no distribution, so
+  the sandbox image needs a release binary — the adapter refuses an image
+  without it by name rather than letting `command not found` surface from
+  inside a restore script, and the README gives the Dockerfile with the
+  digest checked in the build, because a pinned tag alone would still let
+  the bytes change under a re-tag.
+
+  The repository's own sentinels are the catalogue, measured against v3.0.9
+  and PostgreSQL 16: `FinishTime` orders the backups and answers a target,
+  and `PgVersion` is `server_version_num`, which is what lets the
+  major-version pairing a physical restore can never survive be refused
+  **before a byte moves**. A prefix without `wal_005/` is refused — base
+  backups with no archive cannot recover past the instant of a backup,
+  which is not what this kind declares — and a target before every backup
+  is refused naming the oldest backup's own finish time, because recovery
+  only rolls forward. A half-written sentinel is passed over rather than
+  refused: wal-g writes it last, so one is a backup still in progress.
+
+  The backup is chosen host-side rather than left to wal-g's `LATEST`, so
+  `state.backup_id` names what the drill proved rather than a word that
+  means something else tomorrow.
+
 - **A drill can prove a recovery to a point in time, not only to the
   backup** (`adapters/mysql` 0.16.0, source kind `xtrabackup_with_binlogs`).
   A full backup proves one moment. Everything written after it — the hours

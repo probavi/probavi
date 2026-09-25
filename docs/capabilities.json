@@ -915,7 +915,7 @@
       "name": "PostgreSQL",
       "status": "experimental",
       "since": "0.1.0",
-      "adapter_version": "0.18.0",
+      "adapter_version": "0.19.0",
       "engine": {
         "id": "postgresql",
         "name": "PostgreSQL"
@@ -997,6 +997,11 @@
           "id": "timescaledb_dump_with_globals",
           "name": "A directory holding a pg_dumpall --globals-only script and one TimescaleDB dump; the globals load first, then the framed restore",
           "pitr": false
+        },
+        {
+          "id": "walg",
+          "name": "A wal-g filesystem repository — the directory WALG_FILE_PREFIX names, holding basebackups_005 and wal_005 — restored by fetching a base backup and replaying the WAL archive; point-in-time recovery supported, and only the filesystem backend, because a drill's sandbox has no network",
+          "pitr": true
         }
       ],
       "pitr": true,

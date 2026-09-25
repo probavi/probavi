@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "postgres"
-	adapterVersion = "0.18.0"
+	adapterVersion = "0.19.0"
 
 	// psqlConnectionRefused is psql's exit code for a connection that could
 	// not be established — distinct from 1 (psql's own fatal error) and 3
@@ -45,6 +45,7 @@ func probePayload() any {
 			{"kind": "timescaledb_dump_with_globals", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "pgbackrest", "capabilities": map[string]bool{"pitr": true}},
 			{"kind": "barman", "capabilities": map[string]bool{"pitr": true}},
+			{"kind": "walg", "capabilities": map[string]bool{"pitr": true}},
 		},
 		"sql_runner": map[string]any{
 			"argv": []string{"psql", "-U", "{{user}}", "-d", "{{database}}",
@@ -58,7 +59,7 @@ func probePayload() any {
 // pitrKinds are the source kinds whose probe declares pitr. The gate
 // above and that declaration are the same fact, so they are written
 // once; TestProbeDeclaresEveryPITRKind holds them together.
-var pitrKinds = map[string]bool{"pgbackrest": true, "barman": true}
+var pitrKinds = map[string]bool{"pgbackrest": true, "barman": true, "walg": true}
 
 // provisionRequest is the §6.2 request payload.
 type provisionRequest struct {
@@ -87,7 +88,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	}
 	if req.PITR != nil && !pitrKinds[req.Source.Kind] {
 		return nil, protoErr("invalid_request", false,
-			"pitr is only supported by the pgbackrest and barman source kinds")
+			"pitr is only supported by the pgbackrest, barman and walg source kinds")
 	}
 	user := option(req.Options, "user", defaultUser)
 	database := option(req.Options, "database", defaultDatabase)
@@ -107,6 +108,8 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		return provisionPhysical(ctx, c, req, src, user, database, logger)
 	case "barman":
 		return provisionBarman(ctx, c, req, src, user, database, logger)
+	case "walg":
+		return provisionWalg(ctx, c, req, src, user, database, logger)
 	}
 
 	readySeconds, perr := awaitEngine(ctx, c, user)
