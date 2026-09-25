@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://probavi.dev/schemas/manifest/manifest.json",
-  "title": "probavi-manifest/1 — a backup tool's statement about what it wrote",
-  "description": "One JSON file written beside a backup at backup time and named by target.source.manifest. The core reads it before the sandbox is created and refuses the drill when the artifact disagrees. Normative document: ../../backup-manifest.md. Note that expected_checksum is computed under the rule in that document's §3 and is NOT the adapter-defined backup.checksum an evidence record carries: the two answer different questions and are not comparable (§4).",
+  "title": "probavi-manifest/1 — the backup manifest, a backup tool's statement about what it wrote",
+  "description": "The backup manifest: one JSON file written beside a backup at backup time and named by target.source.manifest. Not docs/capabilities.json, which is the capabilities manifest. The core reads it before the sandbox is created and refuses the drill when the artifact disagrees. Normative document: ../../backup-manifest.md. Note that expected_checksum is computed under the rule in that document's §3 and is NOT the adapter-defined backup.checksum an evidence record carries: the two answer different questions and are not comparable (§4).",
   "type": "object",
   "properties": {
     "schema": {
