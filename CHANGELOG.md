@@ -123,14 +123,20 @@ always called out explicitly.
   `adapters/weaviate` applies to its own newer-attempt refusal and for the
   same reason.
 
-  Six `*_dir` kinds across four adapters are still to come:
-  `adapters/h2` (two), `adapters/qdrant` (two) and `adapters/questdb`
-  order by file time; `adapters/tdengine` dates a dump from the start time
-  its own result file records and falls back to file time when it cannot,
-  which is the one shape this rollout has not yet decided.
-  `adapters/aerospike`'s `asbackup_dir` is not among them: `asbackup -d`
-  splits a single backup across the files of one directory, so the
-  directory is the artifact and there is nothing to select.
+  Then **`adapters/h2` 0.2.0** (both its directory kinds),
+  **`adapters/qdrant` 0.2.0** (both of its) and **`adapters/questdb`
+  0.2.0**, all three ordering by file time — directory time for
+  `adapters/questdb`, whose candidate is a data root rather than a file —
+  and each README saying so rather than leaving it to be discovered.
+
+  One `*_dir` kind is still to come, and it is a decision rather than a
+  copy: `adapters/tdengine`'s `taosdump_dir` dates a dump from the start
+  time its own result file records and falls back to file time when it
+  cannot, putting both into one comparison — which is exactly what
+  `adapters/clickhouse` refuses to do, because they are different clocks.
+  `adapters/aerospike`'s `asbackup_dir` is not among the remainder:
+  `asbackup -d` splits a single backup across the files of one directory,
+  so the directory is the artifact and there is nothing to select.
 
 - **A release now runs the binaries it publishes.** Everything else in
   this repository proves the source tree: the unit suite, the integration

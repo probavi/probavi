@@ -24,9 +24,9 @@ no `wget`, no `nc`, no `python3` (measured on 1.19.0). It does carry
 | `source.kind` | What `source.path` points at |
 | --- | --- |
 | `qdrant_snapshot` | one collection snapshot, from `POST /collections/<c>/snapshots` |
-| `qdrant_snapshot_dir` | a directory of them; the newest by file time is restored |
+| `qdrant_snapshot_dir` | a directory of them; `source.params.select` picks one — newest by file time (the default), oldest, or random |
 | `qdrant_full_snapshot` | one whole-storage snapshot, from `POST /snapshots` |
-| `qdrant_full_snapshot_dir` | a directory of them |
+| `qdrant_full_snapshot_dir` | a directory of them, chosen the same way |
 
 PITR does not exist for a Qdrant snapshot; the probe declares `pitr: false`
 so the core refuses a `target.pitr` drill before anything runs.
@@ -138,6 +138,41 @@ So this is the **guard** shape rather than the suspend one, and
 `TestTheRestoredPointCountDoesNotShrink` is the guard: suspending a
 mechanism that cannot subtract would be theatre, but leaving the property
 unchecked would be a guess.
+
+## Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: qdrant_snapshot_dir
+  path: /backups/qdrant
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one an
+incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum` and `backup.size_bytes` do, and a
+scheduled drill choosing randomly covers the whole window over time.
+
+**File time is all this adapter has to order a directory by**, so a
+backup copied in without its timestamps looks like the newest thing there
+under `newest` — and stops looking like the oldest under `oldest`. The
+policy is exactly as strong as the modification times in the directory
+are.
+
+The settle check does not change with the policy. The adapter chose the
+artifact under all three, so one a backup job is still writing still
+refuses the drill by name rather than quietly falling back to a neighbour.
+
+`select` on `qdrant_snapshot` or `qdrant_full_snapshot`, which restore what
+`source.path` names, is **refused** rather than ignored.
 
 ## Drill config options
 

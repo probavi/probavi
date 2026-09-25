@@ -68,7 +68,7 @@ func TestResolveSourceAcceptsEveryKind(t *testing.T) {
 		{"qdrant_full_snapshot_dir", nested, newest, formFullSnapshot},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
-			src, perr := resolveSource(context.Background(), tc.kind, tc.path)
+			src, perr := resolveSource(context.Background(), tc.kind, tc.path, nil)
 			if perr != nil {
 				t.Fatalf("resolve: %+v", perr)
 			}
@@ -108,7 +108,7 @@ func TestTheLeadingKindReadsNoMagicBytes(t *testing.T) {
 			b := append([]byte(nil), body...)
 			copy(b, head)
 			path := writeSnapshot(t, dir, name+".snapshot", b)
-			if _, perr := resolveSource(context.Background(), "qdrant_snapshot", path); perr != nil {
+			if _, perr := resolveSource(context.Background(), "qdrant_snapshot", path, nil); perr != nil {
 				t.Errorf("the leading kind refused an artifact on its content: %+v", perr)
 			}
 		})
@@ -127,7 +127,7 @@ func TestTheChecksumSidecarIsVerified(t *testing.T) {
 		dir := t.TempDir()
 		path := writeSnapshot(t, dir, "a.snapshot", body)
 		writeSidecar(t, path, digestOf(body))
-		src, perr := resolveSource(context.Background(), "qdrant_snapshot", path)
+		src, perr := resolveSource(context.Background(), "qdrant_snapshot", path, nil)
 		if perr != nil {
 			t.Fatalf("resolve: %+v", perr)
 		}
@@ -140,7 +140,7 @@ func TestTheChecksumSidecarIsVerified(t *testing.T) {
 		dir := t.TempDir()
 		path := writeSnapshot(t, dir, "b.snapshot", body)
 		writeSidecar(t, path, digestOf([]byte("something else entirely")))
-		_, perr := resolveSource(context.Background(), "qdrant_snapshot", path)
+		_, perr := resolveSource(context.Background(), "qdrant_snapshot", path, nil)
 		if perr == nil {
 			t.Fatal("an artifact that does not match its own checksum was accepted")
 		}
@@ -153,7 +153,7 @@ func TestTheChecksumSidecarIsVerified(t *testing.T) {
 		dir := t.TempDir()
 		path := writeSnapshot(t, dir, "c.snapshot", body)
 		writeSidecar(t, path, "not a digest")
-		_, perr := resolveSource(context.Background(), "qdrant_snapshot", path)
+		_, perr := resolveSource(context.Background(), "qdrant_snapshot", path, nil)
 		if perr == nil {
 			t.Fatal("a sidecar that states nothing was silently ignored")
 		}
@@ -165,7 +165,7 @@ func TestTheChecksumSidecarIsVerified(t *testing.T) {
 	t.Run("no sidecar leaves the engine as the only judge", func(t *testing.T) {
 		dir := t.TempDir()
 		path := writeSnapshot(t, dir, "d.snapshot", body)
-		src, perr := resolveSource(context.Background(), "qdrant_snapshot", path)
+		src, perr := resolveSource(context.Background(), "qdrant_snapshot", path, nil)
 		if perr != nil {
 			t.Fatalf("a snapshot copied without its sidecar must still be restorable: %+v", perr)
 		}
@@ -184,7 +184,7 @@ func TestTheSidecarIsNotItselfACandidate(t *testing.T) {
 	writeSidecar(t, snap, digestOf(body))
 	// The sidecar is the newer file, so a scan ranking by time alone
 	// would pick it.
-	src, perr := resolveSource(context.Background(), "qdrant_snapshot_dir", dir)
+	src, perr := resolveSource(context.Background(), "qdrant_snapshot_dir", dir, nil)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
@@ -222,7 +222,7 @@ func TestResolveSourceRefusals(t *testing.T) {
 		{"empty directory", "qdrant_snapshot_dir", emptyDir, "source_not_found", "no files"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, perr := resolveSource(context.Background(), tc.kind, tc.path)
+			_, perr := resolveSource(context.Background(), tc.kind, tc.path, nil)
 			if perr == nil {
 				t.Fatal("expected a refusal")
 			}
@@ -278,14 +278,14 @@ func TestWhatTheHostCannotReadIsUnreadable(t *testing.T) {
 			"qdrant_snapshot_dir":      "read backup directory",
 			"qdrant_full_snapshot_dir": "read backup directory",
 		} {
-			_, perr := resolveSource(context.Background(), kind, filepath.Join(snap, "drill.snapshot"))
+			_, perr := resolveSource(context.Background(), kind, filepath.Join(snap, "drill.snapshot"), nil)
 			wantUnreadable(t, perr, message)
 		}
 	})
 	t.Run("a snapshot the host may not open", func(t *testing.T) {
 		snap := snapshotFile(t, t.TempDir(), "drill.snapshot")
 		closedTo(t, snap, 0o600)
-		_, perr := resolveSource(context.Background(), "qdrant_snapshot", snap)
+		_, perr := resolveSource(context.Background(), "qdrant_snapshot", snap, nil)
 		wantUnreadable(t, perr, "open backup source")
 	})
 	t.Run("bytes that will not stream", func(t *testing.T) {
@@ -296,7 +296,7 @@ func TestWhatTheHostCannotReadIsUnreadable(t *testing.T) {
 		dir := t.TempDir()
 		snapshotFile(t, dir, "drill.snapshot")
 		closedTo(t, dir, 0o755)
-		_, perr := resolveSource(context.Background(), "qdrant_snapshot_dir", dir)
+		_, perr := resolveSource(context.Background(), "qdrant_snapshot_dir", dir, nil)
 		wantUnreadable(t, perr, "read backup directory")
 	})
 }
@@ -323,7 +323,7 @@ func TestTheDirectoryKindChoosesTheNewestSnapshotOnly(t *testing.T) {
 	if err := os.Chtimes(want, aged, aged); err != nil {
 		t.Fatal(err)
 	}
-	src, perr := resolveSource(context.Background(), "qdrant_snapshot_dir", dir)
+	src, perr := resolveSource(context.Background(), "qdrant_snapshot_dir", dir, nil)
 	if perr != nil {
 		t.Fatalf("resolve: %+v", perr)
 	}
@@ -335,7 +335,7 @@ func TestTheDirectoryKindChoosesTheNewestSnapshotOnly(t *testing.T) {
 	if err := os.Chtimes(tie, aged, aged); err != nil {
 		t.Fatal(err)
 	}
-	if src, perr = resolveSource(context.Background(), "qdrant_snapshot_dir", dir); perr != nil || src.path != tie {
+	if src, perr = resolveSource(context.Background(), "qdrant_snapshot_dir", dir, nil); perr != nil || src.path != tie {
 		t.Errorf("chose %+v (%+v), want the later name %s of two snapshots of one age", src, perr, tie)
 	}
 }

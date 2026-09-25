@@ -19,9 +19,9 @@ password prompt and no network.
 | `source.kind` | What `source.path` points at |
 | --- | --- |
 | `h2_backup` | one `BACKUP TO` archive — H2's own online backup |
-| `h2_backup_dir` | a directory of them; the newest by file time is restored |
+| `h2_backup_dir` | a directory of them; `source.params.select` picks one — newest by file time (the default), oldest, or random |
 | `h2_db` | one `<database>.mv.db` file, copied while the database was closed |
-| `h2_db_dir` | a directory of them, ranked the same way |
+| `h2_db_dir` | a directory of them, chosen the same way |
 
 PITR does not exist for an H2 file; the probe declares `pitr: false` so
 the core refuses a `target.pitr` drill before anything runs.
@@ -145,6 +145,41 @@ So this adapter says so rather than implying a fence it does not have.
 construction, and its archive is refused host-side the moment it is
 incomplete. If you must copy the file, copy it from a database that is
 closed.
+
+## Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: h2_db_dir
+  path: /backups/h2
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one an
+incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum` and `backup.size_bytes` do, and a
+scheduled drill choosing randomly covers the whole window over time.
+
+**File time is all this adapter has to order a directory by**, so a
+backup copied in without its timestamps looks like the newest thing there
+under `newest` — and stops looking like the oldest under `oldest`. The
+policy is exactly as strong as the modification times in the directory
+are.
+
+The settle check does not change with the policy. The adapter chose the
+artifact under all three, so one a backup job is still writing still
+refuses the drill by name rather than quietly falling back to a neighbour.
+
+`select` on `h2_db` or `h2_backup`, which restore what `source.path`
+names, is **refused** rather than ignored.
 
 ## Deliberately not here
 

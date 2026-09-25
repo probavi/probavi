@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 )
 
 // resolvedSource is a concrete backup artifact chosen for restore.
@@ -42,16 +41,21 @@ type resolvedSource struct {
 // RELEASE` leaves it. There is no archive kind: the verified images carry
 // no tar (measured), and an adapter may only place bytes that belong to
 // the configured source, so nothing could unpack one.
-func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *protoError) {
+func resolveSource(ctx context.Context, kind, path string,
+	params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "questdb_checkpoint":
 		return resolveRoot(path, true)
 	case "questdb_checkpoint_dir":
-		latest, perr := latestRootIn(ctx, path)
+		chosen, perr := chooseRootIn(ctx, path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveRoot(latest, true)
+		return resolveRoot(chosen, true)
 	case "questdb_data":
 		return resolveRoot(path, false)
 	default:
@@ -150,7 +154,7 @@ func countUserTables(root string) (int, *protoError) {
 // is 4 KiB of zeroes on an instance with no configured id, and no other
 // file in the artifact carries the instant (measured on 10.0.1) — so the
 // only date available is the one the filesystem kept.
-func latestRootIn(ctx context.Context, dir string) (string, *protoError) {
+func chooseRootIn(ctx context.Context, dir string, policy selectPolicy) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -158,8 +162,7 @@ func latestRootIn(ctx context.Context, dir string) (string, *protoError) {
 	case err != nil:
 		return "", protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var newest string
-	var newestAt time.Time
+	candidates := make([]dirCandidate, 0, len(entries))
 	for _, e := range entries {
 		if ctx.Err() != nil {
 			return "", protoErr("cancelled", true, "cancelled while choosing a backup")
@@ -167,17 +170,19 @@ func latestRootIn(ctx context.Context, dir string) (string, *protoError) {
 		if !e.IsDir() {
 			continue
 		}
-		candidate := filepath.Join(dir, e.Name())
-		if _, err := os.Stat(filepath.Join(candidate, "db")); err != nil {
+		root := filepath.Join(dir, e.Name())
+		if _, err := os.Stat(filepath.Join(root, "db")); err != nil {
 			continue
 		}
 		info, err := e.Info()
 		if err != nil {
 			continue
 		}
-		if newest == "" || info.ModTime().After(newestAt) {
-			newest, newestAt = candidate, info.ModTime()
-		}
+		candidates = append(candidates, dirCandidate{path: root, name: e.Name(), mtime: info.ModTime()})
+	}
+	newest := ""
+	if len(candidates) > 0 {
+		newest = pick(candidates, policy).path
 	}
 	if newest == "" {
 		return "", protoErr("source_not_found", false,

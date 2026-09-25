@@ -24,7 +24,7 @@
   ],
   "sources": {
     "questdb_checkpoint": "One data root copied while `CHECKPOINT CREATE` was in force",
-    "questdb_checkpoint_dir": "A directory of them; the newest by file time is restored",
+    "questdb_checkpoint_dir": "A directory of them; source.params.select picks which one is restored — newest by directory time (the default), oldest, or random",
     "questdb_data": "One data root copied with no checkpoint held — the copy makes no consistency claim"
   }
 }

@@ -456,7 +456,7 @@
       "name": "H2",
       "status": "experimental",
       "since": "0.22.0",
-      "adapter_version": "0.1.1",
+      "adapter_version": "0.2.0",
       "engine": {
         "id": "h2",
         "name": "H2"
@@ -484,7 +484,7 @@
         },
         {
           "id": "h2_backup_dir",
-          "name": "A directory of archives; the newest by file time is restored",
+          "name": "A directory of archives; source.params.select picks which one is restored — newest by file time (the default), oldest, or random",
           "pitr": false
         },
         {
@@ -494,7 +494,7 @@
         },
         {
           "id": "h2_db_dir",
-          "name": "A directory of database files; the newest by file time is restored (no H2 artifact records when it was taken)",
+          "name": "A directory of database files; source.params.select picks which one is restored — newest by file time (the default), oldest, or random, because no H2 artifact records when it was taken",
           "pitr": false
         }
       ],
@@ -1038,7 +1038,7 @@
       "name": "Qdrant",
       "status": "experimental",
       "since": "0.24.0",
-      "adapter_version": "0.1.0",
+      "adapter_version": "0.2.0",
       "engine": {
         "id": "qdrant",
         "name": "Qdrant"
@@ -1064,7 +1064,7 @@
         },
         {
           "id": "qdrant_full_snapshot_dir",
-          "name": "A directory of them; the newest by file time is restored",
+          "name": "A directory of them; source.params.select picks which one is restored — newest by file time (the default), oldest, or random",
           "pitr": false
         },
         {
@@ -1074,7 +1074,7 @@
         },
         {
           "id": "qdrant_snapshot_dir",
-          "name": "A directory of them; the newest by file time is restored (no Qdrant snapshot records when it was taken)",
+          "name": "A directory of them; source.params.select picks which one is restored — newest by file time (the default), oldest, or random, because no Qdrant snapshot records when it was taken",
           "pitr": false
         }
       ],
@@ -1087,7 +1087,7 @@
       "name": "QuestDB",
       "status": "experimental",
       "since": "0.27.0",
-      "adapter_version": "0.1.1",
+      "adapter_version": "0.2.0",
       "engine": {
         "id": "questdb",
         "name": "QuestDB"
@@ -1113,7 +1113,7 @@
         },
         {
           "id": "questdb_checkpoint_dir",
-          "name": "A directory of them; the newest by file time is restored",
+          "name": "A directory of them; source.params.select picks which one is restored — newest by directory time (the default), oldest, or random",
           "pitr": false
         },
         {

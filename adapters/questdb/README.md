@@ -31,7 +31,7 @@ Two things follow, and both are measured on `questdb:10.0.1`:
 | Kind | Artifact |
 | --- | --- |
 | `questdb_checkpoint` | One data root copied while a checkpoint was held |
-| `questdb_checkpoint_dir` | A directory of them; the newest by file time is restored |
+| `questdb_checkpoint_dir` | A directory of them; `source.params.select` picks one — newest by directory time (the default), oldest, or random |
 | `questdb_data` | One data root copied with no checkpoint held |
 
 `questdb_checkpoint` **refuses** a copy whose `.checkpoint` is empty, and
@@ -51,6 +51,37 @@ there is.
 There is no archive kind. The verified images carry no `tar` (measured),
 and an adapter may only place bytes belonging to the configured source, so
 nothing could unpack one inside the sandbox.
+
+## Which backup in the retention window
+
+`params.select` says which member the adapter takes: `newest` (the
+default, and what every drill written before this parameter existed
+does), `oldest`, or `random`.
+
+```yaml
+source:
+  kind: questdb_checkpoint_dir
+  path: /backups/questdb
+  params:
+    select: oldest        # newest (default) | oldest | random
+```
+
+`newest` proves last night. A drill that only ever does that says nothing
+whatever about the oldest backup still in the window — which is the one an
+incident reaches for, once it is clear the damage predates yesterday.
+`random` draws uniformly and is deliberately not reproducible: what was
+restored is still in the record, because `source.params` never enters an
+evidence record while `backup.checksum` and `backup.size_bytes` do, and a
+scheduled drill choosing randomly covers the whole window over time.
+
+**Directory time is all this adapter has to order a directory by**, so a
+backup copied in without its timestamps looks like the newest thing there
+under `newest` — and stops looking like the oldest under `oldest`. The
+policy is exactly as strong as the modification times in the directory
+are.
+
+`select` on `questdb_checkpoint` or `questdb_data`, which restore what
+`source.path` names, is **refused** rather than ignored.
 
 ## The sandbox must be idle
 
