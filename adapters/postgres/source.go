@@ -85,11 +85,13 @@ func resolveSource(ctx context.Context, kind, path string, params map[string]str
 		return resolveRepo(path, params["stanza"])
 	case "barman":
 		return resolveBarman(path)
+	case "walg":
+		return resolveWalg(path)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: pgdump, pgdump_dir, pgdump_with_globals, "+
 				"timescaledb_dump, timescaledb_dump_dir, timescaledb_dump_with_globals, "+
-				"pgbackrest, barman)", kind)
+				"pgbackrest, barman, walg)", kind)
 	}
 }
 

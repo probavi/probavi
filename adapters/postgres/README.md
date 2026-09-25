@@ -17,6 +17,7 @@ enough to build an adapter.
 | `timescaledb_dump_with_globals` | `pgdump_with_globals` for a TimescaleDB database: the cluster globals load first, then the framed restore. |
 | `pgbackrest`          | A pgBackRest repository directory (filesystem repo) — a physical restore. Declares the `pitr` capability. |
 | `barman`              | A Barman server directory — `base/`, `wals/` and `meta/`. The cluster is placed and PostgreSQL replays the archived WAL. Declares the `pitr` capability. |
+| `walg`                | A wal-g **filesystem** repository — the directory `WALG_FILE_PREFIX` names, holding `basebackups_005/` and `wal_005/`. A base backup is fetched and PostgreSQL replays the archive. Declares the `pitr` capability; needs a pinned wal-g binary in the image. |
 
 ## How a dump is stored (format and compression)
 
@@ -389,8 +390,10 @@ plain path.
 
 ## Point-in-time recovery (pitr)
 
-The `pgbackrest` kind accepts the protocol's `pitr.target_time` (sent by the
-core when the drill config has a `target.pitr` block):
+Three kinds accept the protocol's `pitr.target_time` (sent by the core when
+the drill config has a `target.pitr` block): `pgbackrest`, `barman` and
+`walg`. The example below uses `pgbackrest`; the `walg` section states what
+differs.
 
 ```yaml
 target:
@@ -417,6 +420,106 @@ knowing:
   state is "everything committed at or before `target_time`".
 - The logical kinds (`pgdump`, `pgdump_dir`) reject `pitr` — a dump is a
   single frozen snapshot.
+
+## The walg kind (filesystem repository, point-in-time recovery)
+
+This is the other half of the point-in-time promise `pgbackrest` kept
+alone: the same proof, through the other tool operators run.
+
+```yaml
+target:
+  source:
+    kind: walg
+    path: /backups/orders/walg   # the directory WALG_FILE_PREFIX names
+  pitr:
+    target_age: "6h"             # optional; without it, to the end of the archive
+```
+
+**Only the filesystem backend, and that is not an omission.** wal-g's home
+is object storage, and a drill's sandbox starts with **no network at all** —
+that is the isolation default, not a setting. The backends that reach S3,
+GCS or Azure cannot serve one, and opening the sandbox to the internet to
+prove a backup would trade the guarantee for the convenience.
+`WALG_FILE_PREFIX` works on the terms a drill already holds: the archive is
+staged on the drill host, the adapter moves it into the sandbox, nothing
+reaches out. Backups that live in a bucket wait on the object-storage
+question the ROADMAP keeps open, which is a core decision rather than this
+adapter's.
+
+**The image has to carry wal-g.** Unlike pgbackrest and Barman it ships in
+no distribution, so the sandbox image needs a pinned release binary — and
+the adapter refuses an image without it by name rather than letting
+`command not found` surface from inside a restore script. The integration
+suite builds exactly this, digest-checked:
+
+```dockerfile
+FROM debian:12-slim AS fetch
+RUN set -eux; \
+    apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && \
+    curl -fsSL -o /tmp/walg.tar.gz \
+      https://github.com/wal-g/wal-g/releases/download/v3.0.9/wal-g-pg-20.04-amd64.tar.gz && \
+    echo "51ec330530f98fc3eb4f008fa539d291a2cac51e7076b256472862e45ceff0bd  /tmp/walg.tar.gz" \
+      | sha256sum -c - && \
+    tar -xzf /tmp/walg.tar.gz -C /usr/local/bin && \
+    mv /usr/local/bin/wal-g-pg-20.04-amd64 /usr/local/bin/wal-g && \
+    chmod +x /usr/local/bin/wal-g
+
+FROM postgres:16
+COPY --from=fetch /usr/local/bin/wal-g /usr/local/bin/wal-g
+```
+
+Two things about that shape are deliberate. **The digest is checked**,
+because a pinned tag alone would still let the bytes change under a
+re-tag. And **the fetch happens in its own stage on a current base**: an
+engine image can be built on a distribution release whose own package
+suite has stopped being refreshed — measured, `postgis/postgis:17-3.5` is
+Debian 11 and installing `curl` into it exits 100 — and an image build is
+not where an operator should meet that. Nothing about wal-g or the engine
+changes; the clock does.
+
+The release is a glibc build, so an image on musl takes the `COPY` and
+then cannot run what it received.
+
+### What the adapter reads, and what it refuses
+
+The repository's own sentinels are the catalogue. Measured against wal-g
+v3.0.9 and PostgreSQL 16:
+
+```
+<prefix>/basebackups_005/base_<name>/                        the backup
+<prefix>/basebackups_005/base_<name>_backup_stop_sentinel.json
+<prefix>/wal_005/<segment>.lz4                               the archive
+```
+
+Each sentinel carries `FinishTime`, which orders the backups and answers a
+point-in-time target, and `PgVersion` — `server_version_num`, so `160015`
+is PostgreSQL 16 and `90624` is 9.6. That is what makes the
+major-version pre-check possible **before a byte moves**: a repository from
+one major handed to a sandbox running another is refused by name, not
+discovered by a server that will not start.
+
+- **A prefix without `wal_005/` is refused.** A repository with base backups
+  and no archive restores to the instant of a base backup and cannot
+  recover past it, which is not what this kind declares.
+- **A target before every backup is refused**, naming the oldest backup's
+  own finish time, because recovery only rolls forward.
+- **A half-written sentinel is passed over, not refused.** wal-g writes it
+  last, so one is a backup still in progress, and a catalogue is allowed to
+  contain one.
+
+### Which backup, and where recovery stops
+
+Without a target the newest backup is fetched and recovery runs to the end
+of the archive. With one, the newest backup that finished **at or before**
+the target — because recovery only rolls forward — and
+`recovery_target_time` stops there. Either way the name is resolved
+host-side rather than left to wal-g's `LATEST`, so the record can say which
+backup it proved rather than a word that means something else tomorrow;
+`state.backup_id` carries it.
+
+Recovery promotes rather than pausing, for the reason the `pgbackrest`
+section gives: the default would leave a drill waiting at the target until
+its wall-clock deadline killed it.
 
 ## Which backup a drill restores, and when it refuses
 
