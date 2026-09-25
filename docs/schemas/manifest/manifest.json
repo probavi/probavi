@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://probavi.dev/schemas/manifest/manifest.json",
-  "title": "probavi-manifest/1 — a backup tool's statement about what it wrote",
-  "description": "One JSON file written beside a backup at backup time and named by target.source.manifest. The core reads it before the sandbox is created and refuses the drill when the artifact disagrees. Normative document: ../../backup-manifest.md. Note that expected_checksum is computed under the rule in that document's §3 and is NOT the adapter-defined backup.checksum an evidence record carries: the two answer different questions and are not comparable (§4).",
+  "title": "probavi-manifest/1 — the backup manifest, a backup tool's statement about what it wrote",
+  "description": "The backup manifest: one JSON file written beside a backup at backup time and named by target.source.manifest. Not docs/capabilities.json, which is the capabilities manifest. The core reads it before the sandbox is created and refuses the drill when the artifact disagrees. Normative document: ../../backup-manifest.md. Note that expected_checksum is computed under the rule in that document's §3 and is NOT the adapter-defined backup.checksum an evidence record carries: the two answer different questions and are not comparable (§4).",
   "type": "object",
   "properties": {
     "schema": {
@@ -11,7 +11,7 @@
     },
     "expected_checksum": {
       "$ref": "#/$defs/sha256Ref",
-      "description": "The artifact's digest under backup-manifest.md §3: SHA-256 over a regular file's bytes, or the canonical tree hash for a directory. Not the adapter's backup.checksum."
+      "description": "The artifact's digest under backup-manifest.md §3, whose framing is stated to the byte there and reproduced by the shell recipe in §3.1: SHA-256 over a regular file's bytes, or the canonical tree hash for a directory. Not the adapter's backup.checksum."
     },
     "expected_size_bytes": {
       "$ref": "#/$defs/int53",
