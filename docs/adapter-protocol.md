@@ -1,14 +1,19 @@
-# Probavi Adapter Protocol — v0
+# Probavi Adapter Protocol — v1
 
-Status: **v0 — approved by the maintainer 2026-07-31; FROZEN 2026-08-01.
-NORMATIVE.** The core and all adapters implement this document. Any change
-requires a version bump here before any code changes. The key words MUST,
-MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119.
-Machine-readable JSON Schemas for every message and payload shape live in
-`docs/schemas/adapter/` (derived from this document; on any disagreement
-this document wins).
+Status: **v1 — NORMATIVE, specified 2026-09-25; not yet implemented (§11.2).**
+v0 was frozen 2026-08-01 and stays exactly as it was: v1 adds three
+optional `probe` declarations and changes no message, no verb, no error
+code and no required field (§8). The core and all adapters implement this
+document. Any change requires a version bump here before any code changes.
+The key words MUST, MUST NOT, SHOULD, and MAY are to be interpreted as
+described in RFC 2119. Machine-readable JSON Schemas for every message and
+payload shape live in `docs/schemas/adapter/` (derived from this document;
+on any disagreement this document wins).
 
-Protocol identifier: `probavi-adapter/0`.
+Protocol identifier: `probavi-adapter/1`. Adapters declare every version
+they speak and the core picks the highest common one, so **a v0 adapter
+keeps working against a v1 core, unchanged and forever** (§8). Migration is
+per adapter and opt-in; nothing in the catalogue is obliged to move.
 
 ---
 
@@ -289,6 +294,9 @@ Response payload:
 
 - `sources[].kind` values are adapter-defined identifiers; the drill config's
   `source.kind` must match one of them.
+- `sources[].capabilities` is an open map of named capabilities for that
+  kind. `pitr` is v0's; `select` is v1's (§6.1.2). An absent key means
+  *not declared*, which is not the same as false — see each capability.
 - `sql_runner` is how the core executes validation checks **without learning
   engine concepts**: it is a declarative template, run via the `exec` verb
   inside the sandbox. Placeholders `{{user}}`, `{{database}}`, `{{sql}}`,
@@ -298,6 +306,90 @@ Response payload:
   `sql_runner.env` values. The runner MUST print the result rows to stdout,
   one row per line, tab-separated columns, no decoration, and exit non-zero
   on SQL error.
+
+#### 6.1.1 `checks` — the statement, in the engine's own language (v1)
+
+Optional. Absent in v0, and optional in v1.
+
+```json
+"identifier": {"open": "\"", "close": "\"", "separator": "."},
+"checks": {
+  "table_exists": {"statement": "SELECT count(*) FROM {{table}} WHERE 1=0"},
+  "row_count":    {"statement": "SELECT count(*) FROM {{table}}"},
+  "freshness":    {"statement": "SELECT max({{column}}) FROM {{table}}"}
+}
+```
+
+**Why this exists.** Without it the core composes `SELECT count(*) …` and
+`SELECT max(…) …` as text and hands it to `sql_runner` — the core writing
+SQL for engines that have none, or have their own. Four built-ins written
+that way produced four engine-specific failures across the catalogue: an
+engine refusing SQL-standard quoted identifiers, another refusing `max()`
+over a timestamp, a third refusing the `WHERE 1=0` probe as not-CQL, a
+fourth carrying CRLF through a quoted value. The shape that scales is the
+inverse: the adapter declares the statement for a named built-in, and the
+core runs what it is given.
+
+Rules:
+
+- Keys MUST be built-in check kinds the core publishes
+  (`docs/capabilities.json`, `checks[]`). A core MUST ignore a key it does
+  not know — an adapter written against a newer core must not be
+  unrunnable on an older one — and the conformance suite MUST refuse one
+  (§10, check 16), so a typo is caught where it is cheap rather than at
+  3am as a check that silently kept composing.
+- `statement` is **not required to be SQL.** It is whatever `sql_runner`'s
+  argv takes for this engine, which for several engines in the catalogue
+  is not SQL at all. The core substitutes and runs; it does not parse.
+- Placeholders are `{{table}}` and `{{column}}`, and a statement MUST use
+  only those its kind declares as parameters. `{{sql}}` and `{{password}}`
+  are `sql_runner`'s and MUST NOT appear here.
+- Substitution is textual, into the statement, and the result is passed to
+  `sql_runner` as `{{sql}}` — one argv element, no shell, exactly as a
+  user-written check already is.
+- The kind's contract does not move. `row_count` still MUST return one
+  row of one column holding an integer; `freshness` still MUST return one
+  timestamp; `table_exists` still MUST succeed when the table is
+  queryable and fail when it is not. What the adapter chooses is how to
+  ask, never what the answer means — the core reads the answer the same
+  way for every engine, and an evidence record says the same thing.
+- An adapter MAY declare some kinds and not others. The core composes its
+  own statement for an undeclared kind exactly as in v0.
+
+**Identifier quoting moves with it.** `identifier` declares how this
+engine spells a name: `open` and `close` are the quoting characters
+(`""` for an engine that takes bare names, `"\""` and `"\""` for
+SQL-standard, `` "`" `` for MySQL's, `"["` and `"]"` for T-SQL's), and
+`separator` joins the parts of a qualified name. Absent — in v0 and in a
+v1 adapter that declares none — the core uses `"`, `"` and `.`, which is
+exactly what it does today, so no adapter changes behaviour by staying
+still.
+
+The core keeps the guarantee it already has and gives up the one it
+should never have had. It keeps validation: each part of an identifier
+MUST match `^[A-Za-z_][A-Za-z0-9_]*$`, at most one separator, refused
+before substitution — so a drill configuration cannot inject a statement,
+and no declared quoting rule can make it able to, because a validated
+part cannot contain any quoting character. It gives up deciding how an
+engine spells a quoted name, which was never core knowledge and produced
+the first of the four failures above.
+
+#### 6.1.2 `capabilities.select` (v1)
+
+Optional, per source kind. `true` means the kind chooses one backup out of
+a directory and honours `source.select` (`newest`, `oldest`, `random`);
+`false` means it restores what `path` names and MUST refuse `select` by
+name.
+
+Absent means **not declared**, and the core then behaves exactly as v0:
+it forwards `params.select` and lets the adapter's own refusal answer.
+Declared, it lets the core refuse the mistake at configuration time,
+where the message can name the kind before a sandbox is created. This is
+the one v1 declaration that changes what the core *rejects*, which is why
+it is a version and not a field: an absent declaration from a v1 adapter
+means "this kind has nothing to say", while an absent declaration from a
+v0 adapter means the adapter predates the question. Only a version tells
+those two apart.
 
 ### 6.2 `provision`
 
@@ -436,17 +528,41 @@ Rationale: lumping sandbox startup into "restore time" makes the RTO trend
 meaningless (measured in the Phase 0 PoC: 1.17 s of a 1.47 s "restore" was
 container startup). Each party measures what only it can see.
 
-## 8. Versioning
+## 8. Versioning and migration
 
 - The protocol identifier is `probavi-adapter/<major>`. Any
   backward-incompatible change — new required field, changed semantics, new
   error code, new verb — increments the major and is recorded in this
-  document's changelog section.
+  document's changelog section. A published version is frozen: **any**
+  further change to it is a bump (§11), and only a change with no effect on
+  the wire is recorded as a clarification within it.
 - Adapters declare every version they speak in `probe.protocol_versions`;
   the core picks the highest common one and uses it in all messages of a
   drill.
 - The protocol version is independent of the Probavi binary version and of
   each adapter's own `adapter_version`.
+
+Published versions:
+
+| Version | Shape difference | Migration |
+|---|---|---|
+| `probavi-adapter/0` | v1 without `probe.checks`, `probe.identifier` and `sources[].capabilities.select`. | None. A v0 adapter is conformant forever, and a v1 core drives it exactly as a v0 core did: it composes its own check statements and quotes identifiers SQL-standard, because that is what the absent declarations mean. |
+| `probavi-adapter/1` | Current (§6.1.1, §6.1.2). | Per adapter and opt-in. Declare `probavi-adapter/1` in `protocol_versions`, then add whichever declarations that engine needs; each is optional on its own, and declaring none is a valid v1 adapter that behaves precisely like its v0 self. |
+
+**Mixed fleets are the expected state, not a transition.** A single core
+drives adapters of both versions in the same estate, and no release
+deprecates v0 — the catalogue is thirty-odd external processes, several of
+which a third party may maintain, and a protocol that made them move
+together would be a protocol nobody outside this repository could afford
+to implement.
+
+**Why v1 is a version at all**, given that every addition is optional with
+a v0-identical default: because §11 freezes a published version against
+*any* wire change, and because an absent declaration has to mean two
+different things. From a v0 adapter it means the adapter predates the
+question; from a v1 adapter it means the adapter considered it and has
+nothing to declare. The core acts on that difference in §6.1.2, and only a
+version carries it.
 
 ## 9. Worked example: a complete fake adapter
 
@@ -541,8 +657,11 @@ sandbox**: every `exec` succeeds (exit 0, stdout `1`, empty stderr), every
 `put_file` succeeds. No container runtime is involved. A new adapter is
 "done" only when every check passes.
 
-The check list below is **frozen for protocol v0**; adding, removing, or
-changing a check is a protocol change (this section, then code). Checks:
+The check list below is **frozen per protocol version**; adding, removing,
+or changing a check is a protocol change (this section, then code). Checks
+1–15 are v0's and apply to every adapter; 16–18 apply only to an adapter
+that declares `probavi-adapter/1`, and an adapter that declares none of
+v1's optional fields passes them trivially. Checks:
 
 | # | Check | Asserts |
 |---|-------|---------|
@@ -562,6 +681,10 @@ changing a check is a protocol change (this section, then code). Checks:
 | 14 | `sigterm.cancels` | SIGTERM delivered while provision waits on an outstanding sandbox call: after the call is answered, the adapter issues no further sandbox calls, exits within the grace period, and its final response — if the operation did not complete — carries code `cancelled` (§2.4). |
 | 15 | `framing.discipline` | Aggregated over every operation driven: each stdout line is one well-formed protocol message within the 4 MiB frame limit, `request_id` is echoed on every message, exactly one final response is sent, and nothing follows it (§2.2, §3). |
 
+| 16 | `probe.checks_keys` (v1) | Every key of `probe.checks` is a built-in check kind the core publishes, and every statement uses only placeholders that kind declares — never `{{sql}}` or `{{password}}` (§6.1.1). A misspelled kind is refused here rather than silently ignored at drill time. |
+| 17 | `probe.identifier` (v1) | If `identifier` is present it carries `open`, `close` and `separator`; `open` and `close` are both empty or both non-empty; `separator` is exactly one character (§6.1.1). |
+| 18 | `checks.declared_statements_run` (v1) | For each declared kind, the harness substitutes a fixture identifier and asserts the statement reaches `sql_runner` as a single `{{sql}}` argument with the placeholders replaced and the declared quoting applied — the protocol discipline, not the engine's answer, which the simulated sandbox cannot give. |
+
 Checks 8–10 run against the source kind selected with `--source-kind`
 (default: the first kind the probe declares) plus any `--source-param
 k=v` repetitions. Kinds whose provision demands an idle engine (physical
@@ -569,7 +692,9 @@ restores) conflict with the simulated sandbox's always-succeeding `exec`;
 run conformance against a logical kind — the protocol-discipline checks
 cover the operations, not every engine flow.
 
-## 11. v0 freeze
+## 11. Freezes
+
+### 11.1 v0 freeze
 
 **v0 is frozen as of 2026-08-01** — every item below is complete. Any
 further change to this protocol is a version bump (§8).
@@ -581,8 +706,61 @@ further change to this protocol is a version bump (§8).
 - [x] Conformance suite: exact test list frozen alongside the Phase 2
       implementation (§10, 2026-08-01).
 
+### 11.2 v1, and what it still owes
+
+v1 is **specified and normative as of 2026-09-25**, and not yet
+implemented. It is frozen against wire changes on the same terms as v0
+from the day the list below is complete; until then a correction to this
+specification is a correction rather than a v2.
+
+- [x] JSON Schemas updated so `docs/schemas/adapter/probe-response.json`
+      accepts both versions — the v1 fields optional, so a v0 probe
+      response still validates and a v1 one is checked rather than merely
+      tolerated. Done 2026-09-25, with this specification.
+- [ ] `internal/adapter` reads the new declarations, `internal/checks`
+      runs a declared statement where one exists and composes its own
+      where none does, and `internal/config` refuses `select` against a
+      kind that declared `capabilities.select: false`.
+- [ ] Conformance checks 16–18 implemented, with an adapter declaring
+      each field and an adapter declaring none exercised in both
+      directions.
+- [ ] `adapter.ProtocolVersion` moved to `probavi-adapter/1`, in the same
+      pull request as the golden probe responses it changes and the
+      regenerated `docs/capabilities.json`.
+
+What v1 deliberately does **not** carry, each for a stated reason:
+
+- **New built-in check kinds.** `table_count` and `index_exists` become
+  possible under §6.1.1 — the second for a failure mode worth naming, a
+  logical restore that exits 0 having dropped every index — but a new
+  built-in is a core capability with its own configuration surface, and
+  it is a decision to take on demand rather than a consequence of this
+  bump. `role_exists` and `schema_exists` wait for someone to ask:
+  both concepts are absent from two thirds of the catalogue.
+- **A streaming transfer verb.** §4 names it as a future verb, and §5's
+  registry would grow with it. Nothing demands it today: the case that
+  would — backups that live in object storage — is an open door in
+  `docs/engine-catalog.md` whose cost falls on the evidence schema
+  (a measured `fetch` phase), not here. A verb added against no demand is
+  a verb every adapter author reads forever.
+- **New error codes.** §5's registry is unchanged, and that is deliberate:
+  everything v1 adds is refused with `invalid_request` or is a core-side
+  configuration refusal that never reaches an adapter.
+
 ## Changelog
 
+- v1 (2026-09-25): three optional `probe` declarations and nothing else.
+  `checks` lets an adapter declare the statement for a named built-in in
+  its own engine's language, replacing SQL the core composed for engines
+  that have none or have their own; `identifier` moves quoting from the
+  core to the adapter that knows the dialect, while the core keeps the
+  identifier validation that makes injection impossible; and
+  `sources[].capabilities.select` lets the core refuse a selection policy
+  against a kind that chooses no backup, at configuration time rather
+  than inside a sandbox. No message, verb, error code or required field
+  changes, and every v0 adapter remains conformant and drivable
+  unchanged (§8). Specified and normative from this date; §11.2 lists
+  what implementation still owes.
 - v0 (2026-07-31): initial complete draft — bidirectional core-mediated
   sandbox-verb model (`exec`, `put_file`), four operations fully specified,
   error registry, timing duties informed by the Phase 0 PoC findings.

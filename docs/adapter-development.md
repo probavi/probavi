@@ -109,8 +109,8 @@ ok   probe.sql_runner
 {"adapter":"...","passed":15,"failed":0,...}
 ```
 
-The command drives your adapter through the frozen check list of
-`adapter-protocol.md` §10 — framing discipline, handshake behavior, error
+The command drives your adapter through the check list of
+`adapter-protocol.md` §10, frozen per protocol version — framing discipline, handshake behavior, error
 registry mapping, timing plausibility, teardown idempotence, SIGTERM
 handling — against a simulated sandbox where every command succeeds. No
 container runtime is needed, so it belongs in your adapter's CI on every
