@@ -4,8 +4,11 @@ package main_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -363,6 +366,90 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDirectoryDrillProvesTheOldestSnapshot is this batch's end-to-end
+// proof that source.params.select reaches the drill: one directory, two
+// real snapshots holding different numbers of points, and the record
+// proves whichever end of the retention window the config named. File time
+// is all this adapter has to order by, so the fixtures set it explicitly.
+func TestDirectoryDrillProvesTheOldestSnapshot(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	buildAdapterOnPath(t, ctx)
+	image := verifiedImage(t)
+	provider := docker.New(nil)
+	dir := t.TempDir()
+
+	stale := makeSnapshot(t, ctx, provider, image, snapshotSpec{
+		collection: "orders", points: 200, withChecksum: true, destinationDir: dir,
+	})
+	fresh := makeSnapshot(t, ctx, provider, image, snapshotSpec{
+		collection: "orders", points: 1000, withChecksum: true, destinationDir: dir,
+	})
+	now := time.Now()
+	for path, when := range map[string]time.Time{
+		stale: now.Add(-48 * time.Hour),
+		fresh: now.Add(-24 * time.Hour),
+	} {
+		if err := os.Chtimes(path, when, when); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runner, probe := newProbe(t, ctx)
+
+	for _, tc := range []struct {
+		name   string
+		params map[string]string
+		want   string
+		points string
+	}{
+		{"the default proves last night", nil, fresh, "1000"},
+		{"select: oldest proves the far end", map[string]string{"select": "oldest"}, stale, "200"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sbx, err := provider.Create(ctx, sandboxParams(image))
+			if err != nil {
+				t.Fatalf("create drill sandbox: %v", err)
+			}
+			defer destroy(t, sbx)
+
+			res, err := runner.Provision(ctx, &adapter.ProvisionRequest{
+				Source: adapter.ProvisionSource{
+					Kind: "qdrant_snapshot_dir", Path: dir, Params: tc.params,
+				},
+				Sandbox: adapter.SandboxInfo{ScratchDir: sbx.ScratchDir()},
+				Options: map[string]string{"collection": "orders"},
+			}, sbx)
+			if err != nil {
+				t.Fatalf("provision: %v", err)
+			}
+			// What came back is the measurement; the record's own checksum
+			// has to name the same artifact.
+			assertCheck(t, ctx, sbx, probe, res, `points/count {"exact":true}`, tc.points)
+			if sum := hostSum(t, tc.want); res.SourceIdentity.Checksum != sum {
+				t.Errorf("checksum = %s, want %s's %s",
+					res.SourceIdentity.Checksum, filepath.Base(tc.want), sum)
+			}
+		})
+	}
+}
+
+// hostSum is the checksum the adapter reports, computed independently.
+func hostSum(t *testing.T, path string) string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		t.Fatal(err)
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 
 // TestADamagedSnapshotIsRefused is the fence this engine has and the h2

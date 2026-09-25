@@ -25,7 +25,7 @@ func TestResolveSourceReadsWhatTheArtifactIs(t *testing.T) {
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			src, perr := resolveSource(context.Background(), tc.kind, tc.path)
+			src, perr := resolveSource(context.Background(), tc.kind, tc.path, nil)
 			if perr != nil {
 				t.Fatalf("resolveSource: %s: %s", perr.Code, perr.Message)
 			}
@@ -61,7 +61,7 @@ func TestResolveSourceRefusals(t *testing.T) {
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			src, perr := resolveSource(context.Background(), tc.kind, tc.path)
+			src, perr := resolveSource(context.Background(), tc.kind, tc.path, nil)
 			if perr == nil {
 				t.Fatalf("resolveSource = %+v, want %s", src, tc.wantCode)
 			}
@@ -78,7 +78,7 @@ func TestResolveSourceRefusals(t *testing.T) {
 // a checkpointed backup.
 func TestCheckpointMarkerIsTheFilesNotTheDirectory(t *testing.T) {
 	root := writeDataRoot(t, dataRootOptions{checkpointed: true})
-	src, perr := resolveSource(context.Background(), "questdb_checkpoint", root)
+	src, perr := resolveSource(context.Background(), "questdb_checkpoint", root, nil)
 	if perr != nil || !src.checkpointed {
 		t.Fatalf("a held checkpoint must be recognised: %+v %+v", src, perr)
 	}
@@ -89,7 +89,7 @@ func TestCheckpointMarkerIsTheFilesNotTheDirectory(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".checkpoint", "db"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, perr := resolveSource(context.Background(), "questdb_checkpoint", root); perr == nil {
+	if _, perr := resolveSource(context.Background(), "questdb_checkpoint", root, nil); perr == nil {
 		t.Error("an emptied .checkpoint passed the fence — a released copy is not a checkpointed backup")
 	}
 }
@@ -119,7 +119,7 @@ func TestNewestDataRootIsChosen(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "empty"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	src, perr := resolveSource(context.Background(), "questdb_checkpoint_dir", dir)
+	src, perr := resolveSource(context.Background(), "questdb_checkpoint_dir", dir, nil)
 	if perr != nil {
 		t.Fatalf("resolveSource: %s", perr.Message)
 	}
@@ -131,7 +131,7 @@ func TestNewestDataRootIsChosen(t *testing.T) {
 // TestEmptyBackupDirectoryIsRefused keeps the directory kind from picking
 // nothing quietly.
 func TestEmptyBackupDirectoryIsRefused(t *testing.T) {
-	_, perr := resolveSource(context.Background(), "questdb_checkpoint_dir", t.TempDir())
+	_, perr := resolveSource(context.Background(), "questdb_checkpoint_dir", t.TempDir(), nil)
 	if perr == nil || perr.Code != "source_not_found" {
 		t.Fatalf("perr = %+v, want source_not_found", perr)
 	}
@@ -187,7 +187,7 @@ func TestDirectoryKindRefusalsNameWhatWasWrong(t *testing.T) {
 		"a drill cancelled while choosing": {cancelled, notRoots, "cancelled", "choosing a backup"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, perr := resolveSource(tc.ctx, "questdb_checkpoint_dir", tc.path)
+			_, perr := resolveSource(tc.ctx, "questdb_checkpoint_dir", tc.path, nil)
 			if perr == nil || perr.Code != tc.code || !strings.Contains(perr.Message, tc.message) {
 				t.Errorf("got %+v, want %s mentioning %q", perr, tc.code, tc.message)
 			}
@@ -248,7 +248,7 @@ func TestAnArtifactShapeTheHostCannotReadIsRefusedAsSuch(t *testing.T) {
 		"a data root holding no file at all": {bare, "source_not_found", "contains no files"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, perr := resolveSource(context.Background(), "questdb_data", tc.path)
+			_, perr := resolveSource(context.Background(), "questdb_data", tc.path, nil)
 			if perr == nil || perr.Code != tc.code || !strings.Contains(perr.Message, tc.message) {
 				t.Errorf("got %+v, want %s mentioning %q", perr, tc.code, tc.message)
 			}
@@ -263,13 +263,13 @@ func TestBytesTheHostCannotReadAreUnreadable(t *testing.T) {
 	t.Run("a checkpoint marker the host may not read", func(t *testing.T) {
 		root := writeDataRoot(t, dataRootOptions{checkpointed: true})
 		closedTo(t, filepath.Join(root, ".checkpoint", "db"), 0o755)
-		_, perr := resolveSource(context.Background(), "questdb_checkpoint", root)
+		_, perr := resolveSource(context.Background(), "questdb_checkpoint", root, nil)
 		wantUnreadable(t, perr, "read checkpoint marker")
 	})
 	t.Run("a column file the host may not open", func(t *testing.T) {
 		root := writeDataRoot(t, dataRootOptions{checkpointed: true})
 		closedTo(t, filepath.Join(root, "db", "orders~9", "2026-09-01", "id.d"), 0o600)
-		_, perr := resolveSource(context.Background(), "questdb_checkpoint", root)
+		_, perr := resolveSource(context.Background(), "questdb_checkpoint", root, nil)
 		wantUnreadable(t, perr, "open id.d")
 	})
 	t.Run("a directory the host may not walk", func(t *testing.T) {

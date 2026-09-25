@@ -25,8 +25,8 @@
   ],
   "sources": {
     "h2_db": "One `<database>.mv.db` file, copied while the database was closed",
-    "h2_db_dir": "A directory of database files; the newest by file time is restored (no H2 artifact records when it was taken)",
+    "h2_db_dir": "A directory of database files; source.params.select picks which one is restored — newest by file time (the default), oldest, or random, because no H2 artifact records when it was taken",
     "h2_backup": "One `BACKUP TO` archive — H2's own online backup, consistent by construction",
-    "h2_backup_dir": "A directory of archives; the newest by file time is restored"
+    "h2_backup_dir": "A directory of archives; source.params.select picks which one is restored — newest by file time (the default), oldest, or random"
   }
 }

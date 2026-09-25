@@ -11,7 +11,7 @@ import (
 
 const (
 	adapterName    = "h2"
-	adapterVersion = "0.1.1"
+	adapterVersion = "0.2.0"
 
 	// jarPath is where the sandbox image keeps the H2 jar. There is no
 	// official H2 image, so the drill runs a wrapper the operator builds —
@@ -143,7 +143,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		scratch = "/tmp"
 	}
 
-	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path)
+	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path, req.Source.Params)
 	if perr != nil {
 		return nil, perr
 	}

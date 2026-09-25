@@ -84,7 +84,7 @@ func TestResolveSourceAcceptsEveryKind(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.kind, func(t *testing.T) {
-			src, perr := resolveSource(ctx, tc.kind, tc.path)
+			src, perr := resolveSource(ctx, tc.kind, tc.path, nil)
 			if perr != nil {
 				t.Fatalf("resolveSource: %v", perr)
 			}
@@ -214,7 +214,7 @@ func TestResolveSourceRefusals(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, perr := resolveSource(ctx, tc.kind, tc.path(t))
+			_, perr := resolveSource(ctx, tc.kind, tc.path(t), nil)
 			if perr == nil {
 				t.Fatal("resolveSource accepted an artifact it must refuse")
 			}

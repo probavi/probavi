@@ -23,8 +23,8 @@
   ],
   "sources": {
     "qdrant_snapshot": "One collection snapshot, from `POST /collections/<c>/snapshots`",
-    "qdrant_snapshot_dir": "A directory of them; the newest by file time is restored (no Qdrant snapshot records when it was taken)",
+    "qdrant_snapshot_dir": "A directory of them; source.params.select picks which one is restored — newest by file time (the default), oldest, or random, because no Qdrant snapshot records when it was taken",
     "qdrant_full_snapshot": "One whole-storage snapshot, from `POST /snapshots`",
-    "qdrant_full_snapshot_dir": "A directory of them; the newest by file time is restored"
+    "qdrant_full_snapshot_dir": "A directory of them; source.params.select picks which one is restored — newest by file time (the default), oldest, or random"
   }
 }

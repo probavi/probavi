@@ -69,7 +69,12 @@ const (
 // lives in the API response that made it and in the file name, neither of
 // which survives a copy — so created_at is always null and directories
 // rank by modification time, the etcd adapter's precedent.
-func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *protoError) {
+func resolveSource(ctx context.Context, kind, path string,
+	params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "qdrant_snapshot":
 		if perr := refuseDirectory(path, "qdrant_snapshot_dir"); perr != nil {
@@ -77,22 +82,22 @@ func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *pr
 		}
 		return resolveSnapshot(path, formSnapshot)
 	case "qdrant_snapshot_dir":
-		latest, perr := latestIn(ctx, path)
+		chosen, perr := chooseIn(ctx, path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveSnapshot(latest, formSnapshot)
+		return resolveSnapshot(chosen, formSnapshot)
 	case "qdrant_full_snapshot":
 		if perr := refuseDirectory(path, "qdrant_full_snapshot_dir"); perr != nil {
 			return nil, perr
 		}
 		return resolveSnapshot(path, formFullSnapshot)
 	case "qdrant_full_snapshot_dir":
-		latest, perr := latestIn(ctx, path)
+		chosen, perr := chooseIn(ctx, path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveSnapshot(latest, formFullSnapshot)
+		return resolveSnapshot(chosen, formFullSnapshot)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: qdrant_snapshot, qdrant_snapshot_dir, "+
@@ -203,8 +208,8 @@ func verifyDeclaredChecksum(path, actual string) (string, *protoError) {
 // The check is not a filter. An artifact that wins the ranking and then
 // fails a gate is refused by name rather than silently passed over — the
 // same principle as settle.go.
-func latestIn(ctx context.Context, dir string) (string, *protoError) {
-	best, skipped, perr := newestSnapshot(dir)
+func chooseIn(ctx context.Context, dir string, policy selectPolicy) (string, *protoError) {
+	best, skipped, perr := chooseSnapshot(dir, policy)
 	if perr != nil {
 		return "", perr
 	}
@@ -226,7 +231,7 @@ func latestIn(ctx context.Context, dir string) (string, *protoError) {
 // newestSnapshot scans dir for the newest regular .snapshot file; ties
 // break toward the lexicographically larger name so the choice never
 // depends on directory iteration order.
-func newestSnapshot(dir string) (string, int, *protoError) {
+func chooseSnapshot(dir string, policy selectPolicy) (string, int, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -234,8 +239,7 @@ func newestSnapshot(dir string) (string, int, *protoError) {
 	case err != nil:
 		return "", 0, protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var best string
-	var bestInfo os.FileInfo
+	candidates := make([]dirCandidate, 0, len(entries))
 	skipped := 0
 	for _, e := range entries {
 		if !e.Type().IsRegular() {
@@ -249,22 +253,14 @@ func newestSnapshot(dir string) (string, int, *protoError) {
 		if err != nil {
 			return "", 0, protoErr("source_unreadable", false, "stat %s: %v", e.Name(), err)
 		}
-		if beats(info, e.Name(), bestInfo, filepath.Base(best)) {
-			best, bestInfo = filepath.Join(dir, e.Name()), info
-		}
+		candidates = append(candidates, dirCandidate{
+			path: filepath.Join(dir, e.Name()), name: e.Name(), mtime: info.ModTime(),
+		})
 	}
-	return best, skipped, nil
-}
-
-func beats(info os.FileInfo, name string, bestInfo os.FileInfo, bestName string) bool {
-	switch {
-	case bestInfo == nil:
-		return true
-	case !info.ModTime().Equal(bestInfo.ModTime()):
-		return info.ModTime().After(bestInfo.ModTime())
-	default:
-		return name > bestName
+	if len(candidates) == 0 {
+		return "", skipped, nil
 	}
+	return pick(candidates, policy).path, skipped, nil
 }
 
 // fileChecksum streams the artifact once. The hash feeds the evidence

@@ -39,7 +39,12 @@ type resolvedSource struct {
 // move when a backup is taken (measured) — so created_at is always null
 // and directories rank by modification time, the etcd adapter's
 // precedent.
-func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *protoError) {
+func resolveSource(ctx context.Context, kind, path string,
+	params map[string]string) (*resolvedSource, *protoError) {
+	policy, perr := backupSelection(kind, params)
+	if perr != nil {
+		return nil, perr
+	}
 	switch kind {
 	case "h2_backup":
 		if perr := refuseDirectory(path, "h2_backup_dir"); perr != nil {
@@ -47,22 +52,22 @@ func resolveSource(ctx context.Context, kind, path string) (*resolvedSource, *pr
 		}
 		return resolveArchive(path)
 	case "h2_backup_dir":
-		latest, perr := latestIn(ctx, path, candidateArchive)
+		chosen, perr := chooseIn(ctx, path, policy, candidateArchive)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveArchive(latest)
+		return resolveArchive(chosen)
 	case "h2_db":
 		if perr := refuseDirectory(path, "h2_db_dir"); perr != nil {
 			return nil, perr
 		}
 		return resolveDatabase(path)
 	case "h2_db_dir":
-		latest, perr := latestIn(ctx, path, candidateDatabase)
+		chosen, perr := chooseIn(ctx, path, policy, candidateDatabase)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveDatabase(latest)
+		return resolveDatabase(chosen)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: h2_backup, h2_backup_dir, h2_db, h2_db_dir)", kind)
@@ -233,15 +238,16 @@ func candidateDatabase(path string) (bool, *protoError) {
 	return hasMVStoreMagic(head), nil
 }
 
-// latestIn picks the directory's newest artifact of the given kind. No H2
-// artifact records when it was taken, so file modification time is the
-// only rank available — the etcd precedent, and the README says so. The
+// chooseIn picks the artifact of the given kind that the policy asks for.
+// No H2 artifact records when it was taken, so file modification time is
+// the only rank available — the etcd precedent, and the README says so. The
 // file the ranking chooses still faces every single-file gate, so an
 // artifact that wins the ranking and then fails a gate is refused by name
 // rather than silently passed over — the same not-a-filter principle as
 // settle.go.
-func latestIn(ctx context.Context, dir string, candidate func(string) (bool, *protoError)) (string, *protoError) {
-	best, skipped, perr := newestWhere(dir, candidate)
+func chooseIn(ctx context.Context, dir string, policy selectPolicy,
+	candidate func(string) (bool, *protoError)) (string, *protoError) {
+	best, skipped, perr := chooseWhere(dir, policy, candidate)
 	if perr != nil {
 		return "", perr
 	}
@@ -262,11 +268,11 @@ func latestIn(ctx context.Context, dir string, candidate func(string) (bool, *pr
 	return best, nil
 }
 
-// newestWhere scans dir for the newest regular file the candidate
-// predicate accepts; ties break toward the lexicographically larger name
-// so the choice never depends on directory iteration order. skipped
-// counts the regular files the predicate declined.
-func newestWhere(dir string, candidate func(path string) (bool, *protoError)) (string, int, *protoError) {
+// chooseWhere scans dir for the regular files the candidate predicate
+// accepts and returns the one the policy asks for; skipped counts the
+// regular files the predicate declined.
+func chooseWhere(dir string, policy selectPolicy,
+	candidate func(path string) (bool, *protoError)) (string, int, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -274,8 +280,7 @@ func newestWhere(dir string, candidate func(path string) (bool, *protoError)) (s
 	case err != nil:
 		return "", 0, protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var best string
-	var bestInfo os.FileInfo
+	candidates := make([]dirCandidate, 0, len(entries))
 	skipped := 0
 	for _, e := range entries {
 		if !e.Type().IsRegular() {
@@ -294,24 +299,12 @@ func newestWhere(dir string, candidate func(path string) (bool, *protoError)) (s
 		if err != nil {
 			return "", 0, protoErr("source_unreadable", false, "stat %s: %v", e.Name(), err)
 		}
-		if beats(info, e.Name(), bestInfo, filepath.Base(best)) {
-			best, bestInfo = path, info
-		}
+		candidates = append(candidates, dirCandidate{path: path, name: e.Name(), mtime: info.ModTime()})
 	}
-	return best, skipped, nil
-}
-
-// beats orders two directory candidates: newer modification time wins,
-// then the lexicographically larger name.
-func beats(info os.FileInfo, name string, bestInfo os.FileInfo, bestName string) bool {
-	switch {
-	case bestInfo == nil:
-		return true
-	case !info.ModTime().Equal(bestInfo.ModTime()):
-		return info.ModTime().After(bestInfo.ModTime())
-	default:
-		return name > bestName
+	if len(candidates) == 0 {
+		return "", skipped, nil
 	}
+	return pick(candidates, policy).path, skipped, nil
 }
 
 // fileChecksum streams the artifact once. The hash feeds the evidence
