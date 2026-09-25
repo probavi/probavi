@@ -15,6 +15,8 @@ import (
 
 	"github.com/probavi/probavi/internal/adapter"
 	"github.com/probavi/probavi/internal/capabilities"
+	"github.com/probavi/probavi/internal/checks"
+	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/sandbox"
 	"github.com/probavi/probavi/internal/sandbox/docker"
 )
@@ -174,6 +176,11 @@ type backupSpec struct {
 
 // objectsBody builds a deterministic batch: n objects with a small vector
 // and properties the checks can filter on.
+// seedBase anchors the fixture's timestamps. It is fixed rather than
+// relative to now so the window a freshness check is given can be
+// computed from it exactly.
+var seedBase = time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+
 func objectsBody(n int) string {
 	objects := make([]map[string]any, 0, n)
 	for i := 1; i <= n; i++ {
@@ -183,6 +190,9 @@ func objectsBody(n int) string {
 			"properties": map[string]any{
 				"idx":    i,
 				"region": []string{"us", "eu"}[i%2],
+				// ts runs backwards against idx, so the maximum is on the
+				// first object rather than the last.
+				"ts": seedBase.Add(-time.Duration(i) * time.Minute).Format(time.RFC3339),
 			},
 		})
 	}
@@ -210,7 +220,8 @@ func makeBackup(t *testing.T, ctx context.Context, provider *docker.Provider, im
 
 	postJSON(t, ctx, seedBox, "/v1/schema", `{"class":"Books","vectorizer":"none",
 		"vectorIndexConfig":{"cleanupIntervalSeconds":2},
-		"properties":[{"name":"idx","dataType":["int"]},{"name":"region","dataType":["text"]}]}`)
+		"properties":[{"name":"idx","dataType":["int"]},{"name":"region","dataType":["text"]},
+			{"name":"ts","dataType":["date"]}]}`)
 	if spec.objects > 0 {
 		postJSON(t, ctx, seedBox, "/v1/batch/objects", objectsBody(spec.objects))
 	}
@@ -383,6 +394,50 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 				`{Aggregate{Books(where:{path:["region"],operator:Equal,valueText:"eu"}){meta{count}}}}`, "500")
 			assertCheck(t, ctx, sbx, probe, res,
 				`/v1/graphql {"query":"{Aggregate{Books(where:{path:[\"idx\"],operator:LessThanEqual,valueInt:10}){meta{count}}}}"}`, "10")
+
+			// The generating built-ins, run the way the core runs them —
+			// through internal/checks, carrying the declarations this
+			// adapter makes. They did not apply to Weaviate at all before
+			// it declared them: the core composed SQL for an engine that
+			// has none. Without the Dialect line the core composes that
+			// SQL again, which is what makes it the assertion.
+			t.Run("the generating built-ins work", func(t *testing.T) {
+				deps := checks.Deps{
+					Exec:    sbx,
+					Runner:  checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
+					Target:  checks.Target{User: res.Connection.User, Database: res.Connection.Database},
+					Dialect: checks.DialectFrom(probe),
+				}
+				min1, tooMany := int64(1), int64(10000)
+				// The fixture's timestamps are seedBase-1min down to
+				// seedBase-1000min, so a window of ninety seconds past
+				// the base admits exactly one of the thousand — the
+				// maximum — and rejects the second-newest by thirty
+				// seconds. That tests max() rather than "some instant
+				// came back".
+				admitsOnlyTheMaximum := config.Duration(time.Since(seedBase) + 90*time.Second)
+				results, err := checks.Run(ctx, []config.Check{
+					{Builtin: config.CheckTableExists, Table: "Books"},
+					{Builtin: config.CheckTableExists, Table: "Nosuch"},
+					{Builtin: config.CheckRowCount, Table: "Books", Min: &min1},
+					{Builtin: config.CheckRowCount, Table: "Books", Min: &tooMany},
+					{Builtin: config.CheckFreshness, Table: "Books", Column: "ts",
+						MaxAge: admitsOnlyTheMaximum},
+					{Builtin: config.CheckFreshness, Table: "Books", Column: "ts",
+						MaxAge: config.Duration(time.Millisecond)},
+				}, deps)
+				if err != nil {
+					t.Fatalf("checks.Run: %v", err)
+				}
+				// Each asked once so it must pass and once so it must
+				// fail: a check that cannot fail proves nothing.
+				for i, want := range []bool{true, false, true, false, true, false} {
+					if results[i].OK != want {
+						t.Errorf("check %d (%s) = %v (%s), want %v",
+							i, results[i].Name, results[i].OK, results[i].Detail, want)
+					}
+				}
+			})
 
 			// Nothing left the sandbox: without DISABLE_TELEMETRY=true
 			// the engine POSTs home at startup (measured), so the
