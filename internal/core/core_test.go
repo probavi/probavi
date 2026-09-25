@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -872,4 +873,151 @@ func TestSourceParamsFoldsInTheSelectPolicy(t *testing.T) {
 			t.Errorf("params = %v, want just the policy", got)
 		}
 	})
+}
+
+// --- backup manifest ---------------------------------------------------------
+
+// manifestFixture writes an artifact and a backup manifest beside it, and
+// points the drill config at both.
+func manifestFixture(t *testing.T, cfg *config.Config, content, manifestBody string) (artifact, manifestPath string) {
+	t.Helper()
+	dir := t.TempDir()
+	artifact = filepath.Join(dir, "nightly.dump")
+	if err := os.WriteFile(artifact, []byte(content), 0o600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	manifestPath = filepath.Join(dir, "nightly.manifest.json")
+	if err := os.WriteFile(manifestPath, []byte(manifestBody), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	cfg.Target.Source.Path = artifact
+	cfg.Target.Source.Manifest = manifestPath
+	return artifact, manifestPath
+}
+
+// TestBackupManifestIsCheckedBeforeASandboxExists is the exit condition of
+// the feature: a backup altered between the backup run and the drill fails
+// *before* the restore, and the record names the value that disagreed.
+func TestBackupManifestIsCheckedBeforeASandboxExists(t *testing.T) {
+	fa := &fakeAdapter{probe: testProbe(), provRes: testProvision(), healthy: true}
+	fp := &fakeProvider{sbx: &fakeSandbox{execValue: "1"}}
+	d, _ := newDrill(t, fa, fp)
+	expected := "sha256:" + strings.Repeat("ab", 32)
+	artifact, manifestPath := manifestFixture(t, d.Config, "the bytes that actually arrived",
+		`{"schema":"probavi-manifest/1","expected_checksum":"`+expected+`"}`)
+
+	rec, err := d.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rec.Outcome != evidence.OutcomeFail {
+		t.Errorf("outcome = %q, want %q — a mismatch is a verdict about the backup",
+			rec.Outcome, evidence.OutcomeFail)
+	}
+	if rec.Error == nil || rec.Error.Code != evidence.CodeSourceCorrupt {
+		t.Fatalf("error = %+v, want %s", rec.Error, evidence.CodeSourceCorrupt)
+	}
+	for _, want := range []string{artifact, manifestPath, expected} {
+		if !strings.Contains(rec.Error.Message, want) {
+			t.Errorf("message does not name %q: %s", want, rec.Error.Message)
+		}
+	}
+	if fp.created != 0 {
+		t.Errorf("sandboxes created = %d, want 0 — the check must answer before one exists", fp.created)
+	}
+	if rec.Backup.Checksum != nil {
+		t.Errorf("backup.checksum = %v, want null — no adapter measured the artifact", *rec.Backup.Checksum)
+	}
+}
+
+// TestBrokenBackupManifestIsNotAVerdictAboutTheBackup: the §5 line. A
+// manifest the core cannot use is the config's problem, and the record
+// must not say the backup was.
+func TestBrokenBackupManifestIsNotAVerdictAboutTheBackup(t *testing.T) {
+	tests := []struct{ name, body string }{
+		{"asserts nothing", `{"schema":"probavi-manifest/1"}`},
+		{"unknown schema", `{"schema":"probavi-manifest/9","expected_size_bytes":3}`},
+		{"not json", `{`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fa := &fakeAdapter{probe: testProbe(), provRes: testProvision(), healthy: true}
+			fp := &fakeProvider{sbx: &fakeSandbox{execValue: "1"}}
+			d, _ := newDrill(t, fa, fp)
+			manifestFixture(t, d.Config, "bytes", tc.body)
+
+			rec, err := d.Run(context.Background())
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if rec.Outcome != evidence.OutcomeError {
+				t.Errorf("outcome = %q, want %q", rec.Outcome, evidence.OutcomeError)
+			}
+			if rec.Error == nil || rec.Error.Code != evidence.CodeInvalidRequest {
+				t.Fatalf("error = %+v, want %s", rec.Error, evidence.CodeInvalidRequest)
+			}
+			if fp.created != 0 {
+				t.Errorf("sandboxes created = %d, want 0", fp.created)
+			}
+		})
+	}
+}
+
+// TestAgreeingBackupManifestLetsTheDrillProceed: the feature is a gate,
+// not a detour — a manifest that matches changes nothing else.
+func TestAgreeingBackupManifestLetsTheDrillProceed(t *testing.T) {
+	fa := &fakeAdapter{probe: testProbe(), provRes: testProvision(), healthy: true}
+	fp := &fakeProvider{sbx: &fakeSandbox{execValue: "1"}}
+	d, _ := newDrill(t, fa, fp)
+	content := "the bytes the backup tool wrote"
+	sum := sha256.Sum256([]byte(content))
+	manifestFixture(t, d.Config, content, fmt.Sprintf(
+		`{"schema":"probavi-manifest/1","expected_checksum":"sha256:%x","expected_size_bytes":%d}`,
+		sum, len(content)))
+
+	rec, err := d.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rec.Outcome != evidence.OutcomePass {
+		t.Fatalf("outcome = %q (%+v), want %q", rec.Outcome, rec.Error, evidence.OutcomePass)
+	}
+	if fp.created != 1 {
+		t.Errorf("sandboxes created = %d, want 1", fp.created)
+	}
+}
+
+// TestNoBackupManifestChangesNothing: every drill written before the key
+// existed must behave exactly as it did.
+func TestNoBackupManifestChangesNothing(t *testing.T) {
+	fa := &fakeAdapter{probe: testProbe(), provRes: testProvision(), healthy: true}
+	fp := &fakeProvider{sbx: &fakeSandbox{execValue: "1"}}
+	d, _ := newDrill(t, fa, fp)
+	d.Config.Target.Source.Path = filepath.Join(t.TempDir(), "never-read.dump")
+
+	rec, err := d.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rec.Outcome != evidence.OutcomePass {
+		t.Fatalf("outcome = %q (%+v), want %q — the core read a source no manifest asked about",
+			rec.Outcome, rec.Error, evidence.OutcomePass)
+	}
+}
+
+// TestTheManifestPathNeverReachesTheAdapter: params is a namespace
+// adapters own, and at least one engine's own backup carries a file called
+// manifest.json. The core's key must not collide with it.
+func TestTheManifestPathNeverReachesTheAdapter(t *testing.T) {
+	got := sourceParams(config.Source{
+		Manifest: "/backups/nightly.manifest.json",
+		Select:   "oldest",
+		Params:   map[string]string{"stanza": "main"},
+	})
+	if _, ok := got["manifest"]; ok {
+		t.Errorf("params = %v, want no manifest key: the check has already happened", got)
+	}
+	if got["select"] != "oldest" || got["stanza"] != "main" {
+		t.Errorf("params = %v, want the policy and the operator's own untouched", got)
+	}
 }

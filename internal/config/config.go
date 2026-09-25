@@ -79,9 +79,17 @@ type PITR struct {
 // params.select, so the promotion cost no protocol change and no adapter
 // change; which *kinds* choose a backup at all stays the adapter's
 // knowledge, and its refusal (drill-config.md §3.2).
+//
+// Manifest is the one source setting the core reads and acts on by itself:
+// the backup manifest beside the backup, which the core checks against the
+// artifact before a sandbox exists (docs/backup-manifest.md). It is
+// deliberately *not* forwarded to the adapter — the check has happened by
+// the time an adapter runs, and params is a namespace adapters own, where
+// a key named "manifest" may already mean an engine's own file.
 type Source struct {
 	Kind          string            `yaml:"kind"`
 	Path          string            `yaml:"path"`
+	Manifest      string            `yaml:"manifest"`
 	Select        string            `yaml:"select"`
 	Params        map[string]string `yaml:"params"`
 	CredentialEnv []string          `yaml:"credential_env"`

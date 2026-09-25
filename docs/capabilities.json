@@ -33,6 +33,11 @@
       "version": "probavi-evidence-push/1",
       "spec": "docs/evidence-push.md",
       "schema": "docs/schemas/evidence/record.json"
+    },
+    "backup_manifest": {
+      "version": "probavi-manifest/1",
+      "spec": "docs/backup-manifest.md",
+      "schema": "docs/schemas/manifest/manifest.json"
     }
   },
   "adapters": [

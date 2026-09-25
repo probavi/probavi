@@ -11,6 +11,7 @@ import (
 	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/evidence"
 	"github.com/probavi/probavi/internal/i18n"
+	"github.com/probavi/probavi/internal/manifest"
 	"github.com/probavi/probavi/internal/notify"
 	"github.com/probavi/probavi/internal/push"
 	"github.com/probavi/probavi/internal/sandbox"
@@ -115,6 +116,14 @@ func buildContracts(root string) (Contracts, error) {
 			Spec:    "docs/evidence-push.md",
 			Schema:  "docs/schemas/evidence/record.json",
 		},
+		// The second party is a backup job outside this repository, so the
+		// specification is the whole contract: there is nothing here to
+		// negotiate a version with, only a `schema` value to read or refuse.
+		BackupManifest: Contract{
+			Version: manifest.SchemaID,
+			Spec:    "docs/backup-manifest.md",
+			Schema:  "docs/schemas/manifest/manifest.json",
+		},
 	}
 	refs := []struct{ what, path string }{
 		{"adapter protocol spec", c.AdapterProtocol.Spec},
@@ -126,6 +135,8 @@ func buildContracts(root string) (Contracts, error) {
 		{"notification payload schema", c.NotificationPayload.Schema},
 		{"evidence push spec", c.EvidencePush.Spec},
 		{"evidence push body schema", c.EvidencePush.Schema},
+		{"backup manifest spec", c.BackupManifest.Spec},
+		{"backup manifest schema", c.BackupManifest.Schema},
 	}
 	for _, r := range refs {
 		if err := requireFile(root, r.path, r.what); err != nil {

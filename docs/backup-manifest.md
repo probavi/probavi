@@ -1,11 +1,12 @@
 # Backup manifest — design spec
 
-Status: **Design-normative.** The two decisions §9 held open were taken on
-2026-09-25 and are recorded there with the alternatives they beat; code
-follows this document, not the other way round (AGENTS.md §5.1, and the
-ROADMAP item that asked for this document by name). Nothing is left
-open: the contract identifier reached the canonical list on 2026-09-25
-(§10), which was the one thing this repository could not close itself.
+Status: **Normative, and implemented** — `target.source.manifest`,
+`internal/manifest`, shipped 2026-09-25. The two decisions §9 held open
+were taken the same day and are recorded there with the alternatives they
+beat; the code followed this document rather than the other way round
+(AGENTS.md §5.1). One part of §8 is deliberately not built yet and says
+so where it is specified: the two record fields ride on the single
+`probavi-evidence/3` bump the ROADMAP gathers four items into.
 
 ## 1. The gap this closes
 
@@ -129,9 +130,12 @@ prefix is part of the field, not decoration, and §2's pattern requires
 it.
 
 **The implementation carries a test that runs the recipe above** against a
-fixture tree — nested directories, a symlink, and a file whose name sorts
-before a sibling directory's — and fails if its digest differs from the
-core's. The recipe is therefore a gate and not an illustration: the rule
+fixture tree — nested directories, a symlink, an empty file, and a file
+whose name sorts before a sibling directory's — and fails if its digest
+differs from the core's. It is
+`TestThePublishedRecipeAgreesWithTheRule`, and it reads the recipe out of
+this document rather than carrying a copy, so editing the block above
+without editing the rule fails the build. The recipe is therefore a gate and not an illustration: the rule
 and the published way to satisfy it cannot drift apart without CI saying
 so. A specification that asserts reproducibility without ever executing
 the reproduction is asserting the one thing it is least able to check.
@@ -275,7 +279,11 @@ from the artifact itself.
 ## 8. The record
 
 Two nullable fields, arriving with the single `probavi-evidence/3` bump
-the ROADMAP gathers four items into — not a bump of their own:
+the ROADMAP gathers four items into — not a bump of their own, and
+therefore **not yet shipped**: the check runs and refuses, and the fields
+that will describe it in a passing record wait for that bump. What a
+refusal records is complete without them, because the code and the
+message carry the finding (§5):
 
 | Field | Meaning |
 |---|---|
@@ -400,4 +408,7 @@ this repository will write:
 ## 11. Exit
 
 A backup altered between the backup run and the drill fails **before the
-restore**, and the record names the value that disagreed.
+restore**, and the record names the value that disagreed. Met 2026-09-25:
+the drill stops at `execute`, before the sandbox provider is asked for
+anything, and the signed record carries `source_corrupt` with a message
+naming the artifact's digest and the backup manifest's.
