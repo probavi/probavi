@@ -64,8 +64,12 @@ func TestInRepoAdaptersAreConformant(t *testing.T) {
 					t.Errorf("FAIL %s: %s", c.Name, c.Detail)
 				}
 			}
-			if report.Failed != 0 || report.Passed != 15 {
-				t.Fatalf("report: %d passed / %d failed", report.Passed, report.Failed)
+			// The count comes from frozenList, which is §10's order in one
+			// place. It used to be written here as a literal too, and the
+			// two drifted the moment the suite grew a check.
+			if report.Failed != 0 || report.Passed != len(frozenList) {
+				t.Fatalf("report: %d passed / %d failed, want %d passed",
+					report.Passed, report.Failed, len(frozenList))
 			}
 		})
 	}

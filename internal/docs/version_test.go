@@ -112,7 +112,7 @@ func currentVersion(t *testing.T) string {
 // The list is deliberately narrow. A blanket search for version-shaped
 // tokens would flag the things that must NOT move: the adapters' own
 // adapterVersion numbers (postgres is at 0.3.0 quite independently), the
-// contract versions probavi-adapter/0 and probavi-evidence/2, and the
+// contract versions probavi-adapter/1 and probavi-evidence/2, and the
 // historical notes about v0.1.0's module path. Those are not claims about
 // this release, and rewriting them would turn accurate history into a
 // lie. What is listed here is only what goes stale.
