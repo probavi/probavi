@@ -203,7 +203,7 @@
       "name": "ClickHouse",
       "status": "experimental",
       "since": "0.7.0",
-      "adapter_version": "0.3.1",
+      "adapter_version": "0.4.0",
       "engine": {
         "id": "clickhouse",
         "name": "ClickHouse"
@@ -229,7 +229,7 @@
         },
         {
           "id": "clickhouse_backup_dir",
-          "name": "A directory of backup archives; the one whose own manifest records the newest backup time is restored",
+          "name": "A directory of backup archives; source.params.select picks which one is restored — newest by the backup time each archive's own manifest records (the default), oldest, or random",
           "pitr": false
         }
       ],
@@ -242,7 +242,7 @@
       "name": "CouchDB",
       "status": "experimental",
       "since": "0.23.0",
-      "adapter_version": "0.1.0",
+      "adapter_version": "0.2.0",
       "engine": {
         "id": "couchdb",
         "name": "Apache CouchDB"
@@ -268,7 +268,7 @@
         },
         {
           "id": "couchbackup_dir",
-          "name": "A directory of them; the newest by file time is restored (no CouchDB artifact records when it was taken)",
+          "name": "A directory of them; source.params.select picks which one is restored — newest by file time (the default), oldest, or random, because no CouchDB artifact records when it was taken",
           "pitr": false
         },
         {
@@ -417,7 +417,7 @@
       "name": "Firebird",
       "status": "experimental",
       "since": "0.21.0",
-      "adapter_version": "0.1.0",
+      "adapter_version": "0.2.0",
       "engine": {
         "id": "firebird",
         "name": "Firebird"
@@ -443,7 +443,7 @@
         },
         {
           "id": "firebird_gbak_dir",
-          "name": "A directory of gbak backups; the newest is restored",
+          "name": "A directory of gbak backups; source.params.select picks which one is restored — newest by file time (the default), oldest, or random",
           "pitr": false
         }
       ],
@@ -801,7 +801,7 @@
       "name": "Neo4j",
       "status": "experimental",
       "since": "0.19.0",
-      "adapter_version": "0.1.0",
+      "adapter_version": "0.2.0",
       "engine": {
         "id": "neo4j",
         "name": "Neo4j"
@@ -823,7 +823,7 @@
         },
         {
           "id": "neo4j_dump_dir",
-          "name": "A directory of dump archives; the newest file is restored (an archive carries no timestamp of its own)",
+          "name": "A directory of dump archives; source.params.select picks which one is restored — newest by file time (the default), oldest, or random, because an archive carries no timestamp of its own",
           "pitr": false
         }
       ],

@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "neo4j"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.2.0"
 
 	// defaultDatabase is the database a Neo4j server serves unless its
 	// image configures another one, and the only one Community Edition
@@ -139,7 +139,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if perr != nil {
 		return nil, perr
 	}
-	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path)
+	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path, req.Source.Params)
 	if perr != nil {
 		return nil, perr
 	}

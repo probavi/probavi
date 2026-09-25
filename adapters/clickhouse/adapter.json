@@ -23,6 +23,6 @@
   ],
   "sources": {
     "clickhouse_backup": "One native ClickHouse backup archive (BACKUP … TO File('name.zip'))",
-    "clickhouse_backup_dir": "A directory of backup archives; the one whose own manifest records the newest backup time is restored"
+    "clickhouse_backup_dir": "A directory of backup archives; source.params.select picks which one is restored — newest by the backup time each archive's own manifest records (the default), oldest, or random"
   }
 }

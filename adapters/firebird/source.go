@@ -26,9 +26,14 @@ type resolvedSource struct {
 // resolveSource maps a source kind to one restorable artifact.
 //
 //	firebird_gbak     — path is one gbak transportable backup file
-//	firebird_gbak_dir — path is a directory of them; the newest is chosen
+//	firebird_gbak_dir — path is a directory of them; source.params.select
+//	                    picks one, newest by default (selection.go)
 func resolveSource(ctx context.Context, kind, path string, params map[string]string) (*resolvedSource, *protoError) {
 	loc, perr := backupLocation(params)
+	if perr != nil {
+		return nil, perr
+	}
+	policy, perr := backupSelection(kind, params)
 	if perr != nil {
 		return nil, perr
 	}
@@ -36,11 +41,11 @@ func resolveSource(ctx context.Context, kind, path string, params map[string]str
 	case "firebird_gbak":
 		return resolveBackup(path, loc)
 	case "firebird_gbak_dir":
-		latest, perr := latestBackupIn(ctx, path)
+		chosen, perr := chooseBackupIn(ctx, path, policy)
 		if perr != nil {
 			return nil, perr
 		}
-		return resolveBackup(latest, loc)
+		return resolveBackup(chosen, loc)
 	default:
 		return nil, protoErr("unsupported_source", false,
 			"unsupported source kind: %s (supported: firebird_gbak, firebird_gbak_dir)", kind)
@@ -98,9 +103,9 @@ func fileChecksum(path string) (string, *protoError) {
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// latestBackupIn picks the newest regular file in dir; ties break toward
-// the lexicographically larger name so the choice is deterministic.
-func latestBackupIn(ctx context.Context, dir string) (string, *protoError) {
+// chooseBackupIn picks the backup the policy asks for, ordered by file
+// time (selection.go says why that is all there is).
+func chooseBackupIn(ctx context.Context, dir string, policy selectPolicy) (string, *protoError) {
 	entries, err := os.ReadDir(dir)
 	switch {
 	case os.IsNotExist(err):
@@ -108,10 +113,7 @@ func latestBackupIn(ctx context.Context, dir string) (string, *protoError) {
 	case err != nil:
 		return "", protoErr("source_unreadable", false, "read backup directory: %v", err)
 	}
-	var (
-		best     string
-		bestTime time.Time
-	)
+	candidates := make([]dirCandidate, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -120,21 +122,20 @@ func latestBackupIn(ctx context.Context, dir string) (string, *protoError) {
 		if ierr != nil {
 			return "", protoErr("source_unreadable", false, "stat %s: %v", e.Name(), ierr)
 		}
-		if best == "" || info.ModTime().After(bestTime) ||
-			(info.ModTime().Equal(bestTime) && e.Name() > filepath.Base(best)) {
-			best = filepath.Join(dir, e.Name())
-			bestTime = info.ModTime()
-		}
+		candidates = append(candidates, dirCandidate{
+			path: filepath.Join(dir, e.Name()), name: e.Name(), mtime: info.ModTime(),
+		})
 	}
-	if best == "" {
+	if len(candidates) == 0 {
 		return "", protoErr("source_not_found", false, "backup directory %s contains no backups", dir)
 	}
-	// The adapter chose this backup, not the operator: make sure a backup
-	// job is not still writing it (see settle.go).
-	if perr := assertSettled(ctx, best, settleWindow); perr != nil {
+	chosen := pick(candidates, policy).path
+	// The adapter chose this backup, not the operator — under every policy:
+	// make sure a backup job is not still writing it (see settle.go).
+	if perr := assertSettled(ctx, chosen, settleWindow); perr != nil {
 		return "", perr
 	}
-	return best, nil
+	return chosen, nil
 }
 
 // backupTimezoneParam names the IANA zone the backup host was in.

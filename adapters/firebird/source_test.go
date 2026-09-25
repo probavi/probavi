@@ -184,9 +184,9 @@ func TestLatestBackupInPicksTheNewest(t *testing.T) {
 		t.Fatalf("chtimes: %v", err)
 	}
 	// Both now share an mtime: the tie must break toward the larger name.
-	got, perr := latestBackupIn(context.Background(), dir)
+	got, perr := chooseBackupIn(context.Background(), dir, selectNewest)
 	if perr != nil {
-		t.Fatalf("latestBackupIn: %v", perr)
+		t.Fatalf("chooseBackupIn: %v", perr)
 	}
 	if filepath.Base(got) != "b.fbk" {
 		t.Errorf("chose %s, want b.fbk", filepath.Base(got))
@@ -194,7 +194,7 @@ func TestLatestBackupInPicksTheNewest(t *testing.T) {
 }
 
 func TestLatestBackupInRefusesAnEmptyDirectory(t *testing.T) {
-	_, perr := latestBackupIn(context.Background(), t.TempDir())
+	_, perr := chooseBackupIn(context.Background(), t.TempDir(), selectNewest)
 	if perr == nil || perr.Code != "source_not_found" {
 		t.Fatalf("perr = %v, want source_not_found", perr)
 	}

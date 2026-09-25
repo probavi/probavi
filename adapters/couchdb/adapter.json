@@ -25,6 +25,6 @@
     "couchdb_data_tar": "A tar of CouchDB's data directory",
     "couchdb_data": "One copy of CouchDB's data directory — the tree holding `_dbs.couch`, `_nodes.couch` and `shards/`",
     "couchbackup": "One `couchbackup` file: its header line, then one JSON batch of documents per line",
-    "couchbackup_dir": "A directory of them; the newest by file time is restored (no CouchDB artifact records when it was taken)"
+    "couchbackup_dir": "A directory of them; source.params.select picks which one is restored — newest by file time (the default), oldest, or random, because no CouchDB artifact records when it was taken"
   }
 }

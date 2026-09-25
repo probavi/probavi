@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "couchdb"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.2.0"
 
 	// dataDir is where CouchDB keeps its databases inside the official
 	// image, and where a data-directory restore must land.
@@ -145,7 +145,7 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		scratch = "/tmp"
 	}
 
-	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path)
+	src, perr := resolveSource(ctx, req.Source.Kind, req.Source.Path, req.Source.Params)
 	if perr != nil {
 		return nil, perr
 	}

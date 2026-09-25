@@ -109,11 +109,28 @@ always called out explicitly.
   subdirectory holding no timestamped manifest is not an `influx backup`
   output and never became a candidate.
 
-  Ten `*_dir` kinds across eight adapters are still to come, all of them
-  ordering by file time. `adapters/aerospike`'s `asbackup_dir` is not one
-  of them: `asbackup -d` splits a single backup across the files of one
-  directory, so the directory is the artifact and there is nothing to
-  select.
+  Then **`adapters/clickhouse` 0.4.0**, **`adapters/couchdb` 0.2.0**,
+  **`adapters/firebird` 0.2.0** and **`adapters/neo4j` 0.2.0**. Three of
+  those order by file time, and each README says so rather than leaving it
+  to be discovered — for `adapters/firebird` that is a decision rather
+  than an absence: a gbak header carries the wall clock of the host that
+  took it with no offset, so it is not an instant two artifacts may be
+  ranked by, and the ordering must not depend on a zone being declared.
+  `adapters/clickhouse` is the one that dates itself, by the backup time
+  each archive's own manifest records, so `oldest` there is as strong as
+  `newest` already was; its refusal of a newer *unreadable* archive guards
+  `newest` and does not apply under `oldest` or `random`, the same scoping
+  `adapters/weaviate` applies to its own newer-attempt refusal and for the
+  same reason.
+
+  Six `*_dir` kinds across four adapters are still to come:
+  `adapters/h2` (two), `adapters/qdrant` (two) and `adapters/questdb`
+  order by file time; `adapters/tdengine` dates a dump from the start time
+  its own result file records and falls back to file time when it cannot,
+  which is the one shape this rollout has not yet decided.
+  `adapters/aerospike`'s `asbackup_dir` is not among them: `asbackup -d`
+  splits a single backup across the files of one directory, so the
+  directory is the artifact and there is nothing to select.
 
 - **A release now runs the binaries it publishes.** Everything else in
   this repository proves the source tree: the unit suite, the integration

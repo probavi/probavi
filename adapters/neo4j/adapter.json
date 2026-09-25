@@ -18,6 +18,6 @@
   ],
   "sources": {
     "neo4j_dump": "One `neo4j-admin database dump` archive, under any file name",
-    "neo4j_dump_dir": "A directory of dump archives; the newest file is restored (an archive carries no timestamp of its own)"
+    "neo4j_dump_dir": "A directory of dump archives; source.params.select picks which one is restored — newest by file time (the default), oldest, or random, because an archive carries no timestamp of its own"
   }
 }

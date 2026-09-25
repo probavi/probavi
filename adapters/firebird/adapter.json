@@ -23,6 +23,6 @@
   ],
   "sources": {
     "firebird_gbak": "One gbak transportable backup file",
-    "firebird_gbak_dir": "A directory of gbak backups; the newest is restored"
+    "firebird_gbak_dir": "A directory of gbak backups; source.params.select picks which one is restored — newest by file time (the default), oldest, or random"
   }
 }
