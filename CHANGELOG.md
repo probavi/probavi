@@ -13,6 +13,38 @@ always called out explicitly.
 
 ### Added
 
+- **`row_count` and `freshness` now work against Neo4j**
+  (`adapters/neo4j` 0.3.0), declared as Cypher. They did not apply to this
+  adapter at all before: the core composed SQL and Neo4j has none, so an
+  operator wrote raw Cypher for questions every other adapter answers
+  with a built-in. `table` names a **node label**.
+
+  The adapter also declares the backtick quoting Cypher takes, rather
+  than the SQL-standard double quote the core applies by default.
+
+  **`table_exists` is deliberately not declared, and the reason is the
+  engine.** Cypher has no construct for raising a condition: an absent
+  label makes `MATCH` return zero rows rather than an error, and the only
+  expression that does fail is integer division by zero — which would put
+  *"/ by zero"* in front of an operator who asked whether a label exists.
+  Nor is one needed: a label exists only while some node carries it, so
+  *is this label present* and *did this data restore* are the same
+  question, and `row_count` with a `min` answers it and says by how much.
+
+### Fixed
+
+- **A `freshness` check could fail on a round minute and pass every other
+  time.** Neo4j renders a datetime as ISO 8601 and omits components that
+  are zero, so an instant landing on a whole minute prints as
+  `2026-09-24T18:30Z` while every other instant prints with seconds
+  (measured on 5.26). The core's timestamp list read only the second
+  form, so the check would have passed for weeks and then failed —
+  worse than one that never works. Both minute-precision spellings are
+  now in the list, which is where a rendering of a timestamp belongs; an
+  adapter reformatting its engine's output to suit the core would be the
+  core's gap moved rather than closed. A test also holds the widening
+  narrow: a bare date is still not an instant.
+
 - **The generating built-in checks now work against MongoDB**
   (`adapters/mongodb` 0.7.0) — `table_exists`, `row_count` and
   `freshness`, which did not apply to this adapter **at all** until now.

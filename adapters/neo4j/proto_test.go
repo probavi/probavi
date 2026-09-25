@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,7 +27,9 @@ import (
 func harnessCore(input string, out io.Writer) *core {
 	sc := bufio.NewScanner(strings.NewReader(input))
 	sc.Buffer(make([]byte, 64*1024), maxLineBytes)
-	return &core{in: sc, out: out, requestID: "r-test"}
+	// The floor, because that is what the core probes at and what these
+	// tests frame their fixtures in; every message back echoes it.
+	return &core{in: sc, out: out, requestID: "r-test", protocol: protocolFloor}
 }
 
 // sandboxResultLine is one sandbox_result message carrying result.
@@ -73,8 +76,15 @@ func TestProtoAnotherVersionIsRefusedByName(t *testing.T) {
 	if perr == nil || perr.Code != "unsupported_protocol" {
 		t.Fatalf("perr = %+v, want unsupported_protocol", perr)
 	}
-	if supported, ok := perr.Detail["supported"].([]string); !ok || len(supported) != 1 || supported[0] != protocolVersion {
-		t.Errorf("detail.supported = %v, want [%s]", perr.Detail["supported"], protocolVersion)
+	supported, ok := perr.Detail["supported"].([]string)
+	if !ok || !slices.Equal(supported, protocolVersions) {
+		t.Errorf("detail.supported = %v, want every version this adapter speaks %v",
+			perr.Detail["supported"], protocolVersions)
+	}
+	// The refusal itself must be readable: it is framed at the floor,
+	// never at the version that was asked for and refused.
+	if c.protocol != protocolFloor {
+		t.Errorf("refusal framed at %q, want the floor %q", c.protocol, protocolFloor)
 	}
 }
 
@@ -118,7 +128,9 @@ func assertCalls(t *testing.T, written string, verbs ...string) {
 			t.Fatalf("line %d is not JSON: %s", i+1, lines[i])
 		}
 		id := "c" + strconv.Itoa(i+1)
-		if msg.Protocol != protocolVersion || msg.RequestID != "r-test" ||
+		// Echoing, not asserting a constant: the fixture core was handed
+		// the floor, and every message back must carry what it was sent.
+		if msg.Protocol != protocolFloor || msg.RequestID != "r-test" ||
 			msg.SandboxCall.CallID != id || msg.SandboxCall.Verb != verb || len(msg.SandboxCall.Args) == 0 {
 			t.Errorf("line %d = %s, want call %s of %s echoing the request", i+1, lines[i], id, verb)
 		}

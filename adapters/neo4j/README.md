@@ -164,9 +164,42 @@ checks:
     expect: "100"
 ```
 
-Builtin checks that generate SQL (`row_count`, `table_exists`,
-`freshness`) do not apply — use raw Cypher. `service_healthy` works
-unchanged.
+**`row_count` and `freshness` work here now**, and until this adapter
+declared them they did not apply at all — the core composed SQL and Neo4j
+has none. The adapter declares each as Cypher (adapter protocol §6.1.1,
+`probavi-adapter/1`), along with the backtick quoting Cypher takes:
+
+```yaml
+checks:
+  - builtin: row_count
+    table: Order          # a node label
+    min: 1
+  - builtin: freshness
+    table: Order
+    column: ts
+    max_age: 24h
+```
+
+`table` names a **node label**, and `row_count` counts the nodes carrying
+it. `freshness` takes `max()` of a property, which is that property's
+maximum rather than the value on the newest node.
+
+**`table_exists` is deliberately not declared**, and the reason is the
+engine rather than the effort. Cypher has no construct for raising a
+condition: an absent label makes `MATCH` return zero rows rather than an
+error, and the only expression that does fail is integer division by
+zero — which would put *"/ by zero"* in front of an operator who asked
+whether a label exists. Nor is one needed: a label exists only while some
+node carries it, so *is this label present* and *did this data restore*
+are the same question, and `row_count` with a `min` answers it and says by
+how much.
+
+A label is not qualified. Qualify the *database* with `options.database`,
+not half of a label — a qualified name is substituted as `` `a`.`b` `` and
+fails as a syntax error.
+
+`service_healthy` works unchanged, and raw Cypher remains the way to ask
+anything the built-ins do not cover.
 
 Output is the undecorated rows the runner contract requires, and the
 adapter does the undecorating: `cypher-shell --format plain` still prints

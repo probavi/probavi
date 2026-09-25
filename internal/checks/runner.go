@@ -109,6 +109,13 @@ func mask(s, secret string) string {
 // the runner had delivered correctly (issue #277). This list is where a
 // rendering of a timestamp belongs; an adapter rewriting its engine's
 // offset to suit the core would be the core's gap moved, not closed.
+//
+// The last two are the same lesson in the other direction: **precision**
+// rather than offset. Neo4j omits components that are zero, so a value on
+// a whole minute prints as 2026-09-24T18:30Z and everything else prints
+// with seconds (measured on 5.26). A list without them would read most
+// instants correctly and fail on the round ones — a check that passes for
+// weeks and then does not, which is worse than one that never works.
 var timestampFormats = []string{
 	"2006-01-02 15:04:05.999999999-07:00",
 	"2006-01-02 15:04:05.999999999-0700",
@@ -116,6 +123,8 @@ var timestampFormats = []string{
 	"2006-01-02 15:04:05.999999999",
 	time.RFC3339Nano,
 	"2006-01-02T15:04:05.999999999",
+	"2006-01-02T15:04Z07:00",
+	"2006-01-02T15:04",
 }
 
 func parseTimestamp(s string) (time.Time, error) {

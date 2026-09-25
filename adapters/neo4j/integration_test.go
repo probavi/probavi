@@ -16,6 +16,8 @@ import (
 
 	"github.com/probavi/probavi/internal/adapter"
 	"github.com/probavi/probavi/internal/capabilities"
+	"github.com/probavi/probavi/internal/checks"
+	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/sandbox"
 	"github.com/probavi/probavi/internal/sandbox/docker"
 )
@@ -120,7 +122,7 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 	// exactly how internal/checks runs checks without engine knowledge.
 	// The check text is Cypher: that is this adapter's documented check
 	// dialect.
-	checks := map[string]struct{ cypher, want string }{
+	cypherChecks := map[string]struct{ cypher, want string }{
 		"node count": {
 			"MATCH (n) RETURN count(n)", fmt.Sprint(orders + customers)},
 		"relationships survived": {
@@ -134,7 +136,7 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 		"a value holding the column separator stays one column": {
 			"RETURN 'Budapest, Hungary' AS place", "Budapest, Hungary"},
 	}
-	for name, tt := range checks {
+	for name, tt := range cypherChecks {
 		t.Run(name, func(t *testing.T) {
 			out, exit := runCheck(t, ctx, sbx, probe, &res.Connection, tt.cypher)
 			if exit != 0 {
@@ -145,6 +147,61 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 			}
 		})
 	}
+
+	// The generating built-ins, run the way the core runs them — through
+	// internal/checks, carrying the declarations this adapter makes.
+	// They did not apply to Neo4j at all before it declared them: the
+	// core composed SQL for an engine that has none. Without the Dialect
+	// line the core composes that SQL again, which is what makes it the
+	// assertion.
+	t.Run("the generating built-ins work", func(t *testing.T) {
+		deps := checks.Deps{
+			Exec:   sbx,
+			Runner: checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
+			// No password: this adapter's declared env carries the
+			// documented sandbox constant literally rather than through
+			// {{password}}, so there is nothing for the core to render.
+			Target:  checks.Target{User: res.Connection.User, Database: res.Connection.Database},
+			Dialect: checks.DialectFrom(probe),
+		}
+		min1, tooMany := int64(1), int64(orders*10)
+		// The fixture's timestamps are base-1min down to base-500min, so
+		// a value's age is time.Since(base) plus its own minute. A window
+		// of ninety seconds past the base therefore admits exactly one of
+		// the five hundred — the maximum — and rejects the second-newest
+		// by thirty seconds. That is what makes this a test of max()
+		// rather than of "some instant came back".
+		base := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+		admitsOnlyTheMaximum := config.Duration(time.Since(base) + 90*time.Second)
+		results, err := checks.Run(ctx, []config.Check{
+			{Builtin: config.CheckRowCount, Table: "Order", Min: &min1},
+			{Builtin: config.CheckRowCount, Table: "Order", Min: &tooMany},
+			{Builtin: config.CheckFreshness, Table: "Order", Column: "ts",
+				MaxAge: admitsOnlyTheMaximum},
+			{Builtin: config.CheckFreshness, Table: "Order", Column: "ts",
+				MaxAge: config.Duration(time.Millisecond)},
+		}, deps)
+		if err != nil {
+			t.Fatalf("checks.Run: %v", err)
+		}
+		// Each asked once so it must pass and once so it must fail: a
+		// check that cannot fail proves nothing.
+		for i, want := range []bool{true, false, true, false} {
+			if results[i].OK != want {
+				t.Errorf("check %d (%s) = %v (%s), want %v",
+					i, results[i].Name, results[i].OK, results[i].Detail, want)
+			}
+		}
+		if !strings.Contains(results[0].Detail, fmt.Sprint(orders)) {
+			t.Errorf("row_count detail = %q, want the count read and compared", results[0].Detail)
+		}
+		// The detail reports an age rather than an instant, so what it
+		// has to show is that one was read and compared at all — the
+		// window above is what proves *which* one.
+		if !strings.Contains(results[2].Detail, "newest row is") {
+			t.Errorf("freshness detail = %q, want the age read and compared", results[2].Detail)
+		}
+	})
 
 	// A check reads what the drill restored; it may not change it.
 	t.Run("a check that writes is refused", func(t *testing.T) {
@@ -387,7 +444,7 @@ neo4j start >/dev/null`, "bash", seedPassword)
 	awaitReady(t, ctx, seed, seedPassword)
 
 	seedCypher := fmt.Sprintf(`CREATE CONSTRAINT order_id IF NOT EXISTS FOR (o:Order) REQUIRE o.id IS UNIQUE;
-UNWIND range(1, %d) AS i CREATE (:Order {id: i, sku: 'SKU-' + right('000' + toString(i), 4), total: i * 1.5});
+UNWIND range(1, %d) AS i CREATE (:Order {id: i, sku: 'SKU-' + right('000' + toString(i), 4), total: i * 1.5, ts: datetime('2026-09-20T00:00:00Z') - duration({minutes: i})});
 MATCH (o:Order) WHERE o.id <= %d CREATE (:Customer {id: o.id})-[:PLACED]->(o);`, orders, customers)
 	mustCypher(t, ctx, seed, seedPassword, seedCypher)
 
