@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "mongodb"
-	adapterVersion = "0.6.0"
+	adapterVersion = "0.7.0"
 
 	// defaultDatabase is the connection database when the drill config
 	// does not name one: admin always exists, so healthchecks and the
@@ -49,7 +49,7 @@ func probePayload() any {
 	return map[string]any{
 		"name":              adapterName,
 		"adapter_version":   adapterVersion,
-		"protocol_versions": []string{protocolVersion},
+		"protocol_versions": protocolVersions,
 		"engine":            map[string]string{"name": "mongodb"},
 		"sources": []map[string]any{
 			{"kind": "mongodump", "capabilities": map[string]bool{"pitr": false}},
@@ -57,11 +57,56 @@ func probePayload() any {
 			{"kind": "mongodump_with_users", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "mongodump_with_oplog", "capabilities": map[string]bool{"pitr": false}},
 		},
+		// The generating built-ins, in this engine's own language. They did
+		// not apply to this adapter at all until now: the core composed
+		// SQL and MongoDB has none, so an operator could only write raw
+		// mongosh expressions and the three built-ins every other adapter
+		// offers were simply absent here.
+		//
+		// §6.1.1 says a declared statement need not be SQL, and this is
+		// what that is for. What the adapter chooses is how to ask; what
+		// the answer means stays the core's, so a record from a MongoDB
+		// drill says the same thing as a record from any other.
+		//
+		// Measured against MongoDB 7.0, in both directions:
+		//
+		//   - row_count prints a bare number, which is what the core parses.
+		//   - table_exists exits 0 for a collection that is there and 1 for
+		//     one that is not — Mongo answers a query against a missing
+		//     collection with null rather than an error, so the statement
+		//     has to raise one, and it names what was missing.
+		//   - freshness sorts by the field and takes the first, which is
+		//     that field's maximum rather than the value in the newest
+		//     document — the distinction the cassandra adapter paid for.
+		//     toISOString() renders RFC 3339, which the core's timestamp
+		//     list already accepts, and print() writes it raw.
+		//
+		// The two ways freshness can be asked wrongly both fail loudly
+		// rather than quietly: an empty collection and a field that is not
+		// a date each raise a TypeError and exit non-zero, so a number is
+		// never turned into an instant.
+		//
+		// table names a collection in the connected database. A qualified
+		// name would be substituted as "a"."b" and raise a syntax error,
+		// which is the right outcome: the database a check runs against is
+		// options.database, not half of a table name.
+		"checks": map[string]any{
+			"table_exists": map[string]string{
+				"statement": `if (!db.getCollectionNames().includes({{table}})) { throw new Error("no such collection: " + {{table}}) }`,
+			},
+			"row_count": map[string]string{
+				"statement": `db.getCollection({{table}}).countDocuments({})`,
+			},
+			"freshness": map[string]string{
+				"statement": `print(db.getCollection({{table}}).find({}, {_id: 0, [{{column}}]: 1}).sort({[{{column}}]: -1}).limit(1).toArray()[0][{{column}}].toISOString())`,
+			},
+		},
 		"sql_runner": map[string]any{
 			// MongoDB has no SQL: the check text the core passes through
 			// {{sql}} is a mongosh --eval expression (documented in the
 			// adapter README). The engine dialect is absorbed here,
-			// declaratively — the core never learns it (§6.1).
+			// declaratively — the core never learns it (§6.1), and the
+			// built-ins above are the same mechanism one level up.
 			"argv": []string{"mongosh", "--quiet", "--norc",
 				"--host", "127.0.0.1", "--port", "27017", "{{database}}", "--eval", "{{sql}}"},
 			"env": map[string]string{},

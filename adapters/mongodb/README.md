@@ -270,10 +270,52 @@ checks:
 
 The expression's result is printed as the row output (a number prints as a
 bare number). For multi-column rows, `print()` tab-separated values.
-Builtin checks that generate SQL (`row_count`, etc.) do not apply to this
-adapter — use raw expressions. This is the protocol's design working as
-intended: the engine dialect is absorbed by the adapter's declared
-template, and the core never learns it (§6.1).
+
+**The generating built-ins work here now** — `table_exists`, `row_count`
+and `freshness` — and until this adapter declared them they did not apply
+at all, because the core composed SQL and MongoDB has none. The adapter
+declares each one as a mongosh expression (adapter protocol §6.1.1,
+`probavi-adapter/1`), and §6.1.1 is explicit that a declared statement
+need not be SQL. What the adapter chooses is *how to ask*; what the answer
+means stays the core's, so a record from a MongoDB drill says the same
+thing as a record from any other.
+
+```yaml
+checks:
+  - builtin: table_exists
+    table: orders
+  - builtin: row_count
+    table: orders
+    min: 1
+  - builtin: freshness
+    table: orders
+    column: ts
+    max_age: 24h
+```
+
+Three things worth knowing, each measured against MongoDB 7.0:
+
+- `table_exists` **raises** rather than returns. Mongo answers a query
+  against a missing collection with null instead of an error, so the
+  declared statement checks the collection list and throws, naming what
+  was missing.
+- `freshness` sorts by the field and takes the first, which is that
+  field's **maximum** — not the value in the newest document, which is a
+  different instant and the distinction another adapter in this repository
+  paid for. `toISOString()` renders RFC 3339, which the core already
+  reads.
+- The two ways `freshness` can be asked wrongly both fail **loudly**: an
+  empty collection and a field that is not a date each raise a TypeError
+  and exit non-zero. A number is never turned into an instant.
+
+`table` names a collection in the connected database. Qualify the
+*database* with `options.database`, not half of a table name — a
+qualified name is substituted as `"a"."b"` and raises a syntax error.
+
+Raw `sql` expressions still work exactly as before, and remain the way to
+ask anything the built-ins do not cover. This is the protocol's design
+working as intended: the engine dialect is absorbed by the adapter's
+declarations, and the core never learns it (§6.1).
 
 ### When the backup was taken
 
