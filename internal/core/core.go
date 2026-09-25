@@ -396,7 +396,7 @@ func (d *Drill) checkDeps(probe *adapter.ProbeResult, provRes *adapter.Provision
 			return res.Healthy, res.Detail, nil
 		},
 		Runner:  checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
-		Dialect: dialectFrom(probe),
+		Dialect: checks.DialectFrom(probe),
 		Target: checks.Target{
 			User:     provRes.Connection.User,
 			Database: provRes.Connection.Database,
@@ -589,23 +589,6 @@ func selectsABackup(probe *adapter.ProbeResult, kind string) bool {
 		}
 	}
 	return true
-}
-
-// dialectFrom carries the adapter's §6.1.1 declarations into the check
-// runner. Nothing declared yields the zero Dialect, which is the core
-// composing its own statements and quoting SQL-standard.
-func dialectFrom(probe *adapter.ProbeResult) checks.Dialect {
-	d := checks.Dialect{}
-	if probe.Identifier != nil {
-		d.Open, d.Close, d.Separator = probe.Identifier.Open, probe.Identifier.Close, probe.Identifier.Separator
-	}
-	for kind, declared := range probe.Checks {
-		if d.Statements == nil {
-			d.Statements = make(map[string]string, len(probe.Checks))
-		}
-		d.Statements[kind] = declared.Statement
-	}
-	return d
 }
 
 func supportsPITR(probe *adapter.ProbeResult, kind string) bool {

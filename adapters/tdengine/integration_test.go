@@ -122,6 +122,11 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 			Exec:   sbx,
 			Runner: checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
 			Target: checks.Target{User: res.Connection.User, Database: res.Connection.Database},
+			// The same conversion the core does, from the same function:
+			// this adapter declares its quoting, and without carrying that
+			// declaration the core would compose the SQL-standard form the
+			// engine refuses — which is the whole of issue #276 again.
+			Dialect: checks.DialectFrom(probe),
 		}
 		min1, tooMany := int64(1), int64(documents*2)
 		// The newest seen is seedBase and the newest ts is a little over two

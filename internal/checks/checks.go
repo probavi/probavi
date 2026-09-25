@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/probavi/probavi/internal/adapter"
 	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/evidence"
 	"github.com/probavi/probavi/internal/sandbox"
@@ -82,6 +83,31 @@ type Dialect struct {
 	// applies — a declared Identifier always carries one, while Open and
 	// Close are legitimately empty for an engine that takes bare names.
 	Open, Close, Separator string
+}
+
+// DialectFrom carries an adapter's §6.1.1 declarations into this package.
+// It lives here rather than in the caller because the declarations are
+// consumed here, and because more than one caller drives checks against a
+// probe — two conversions would be two chances to forget one.
+//
+// Nothing declared yields the zero Dialect: the core composes its own
+// statements and quotes SQL-standard, which is what every v0 adapter
+// means.
+func DialectFrom(probe *adapter.ProbeResult) Dialect {
+	d := Dialect{}
+	if probe == nil {
+		return d
+	}
+	if probe.Identifier != nil {
+		d.Open, d.Close, d.Separator = probe.Identifier.Open, probe.Identifier.Close, probe.Identifier.Separator
+	}
+	for kind, declared := range probe.Checks {
+		if d.Statements == nil {
+			d.Statements = make(map[string]string, len(probe.Checks))
+		}
+		d.Statements[kind] = declared.Statement
+	}
+	return d
 }
 
 // statement is what to run for a built-in kind: the adapter's declaration
