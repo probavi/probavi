@@ -11,6 +11,8 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-09-26
+
 ### Added
 
 - **Records are `probavi-evidence/3`**, carrying six nullable fields the
