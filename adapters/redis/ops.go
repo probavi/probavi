@@ -14,7 +14,7 @@ import (
 
 const (
 	adapterName    = "redis"
-	adapterVersion = "0.6.0"
+	adapterVersion = "0.7.0"
 
 	// Where the restored server serves inside the sandbox. No TLS and no
 	// auth: a Probavi sandbox is zero-ingress (--network none, no ports
@@ -80,12 +80,54 @@ func probePayload() any {
 	return map[string]any{
 		"name":              adapterName,
 		"adapter_version":   adapterVersion,
-		"protocol_versions": []string{protocolVersion},
+		"protocol_versions": protocolVersions,
 		"engine":            map[string]string{"name": "redis"},
 		"sources": []map[string]any{
 			{"kind": "redis_rdb", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "redis_rdb_dir", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "redis_aof", "capabilities": map[string]bool{"pitr": false}},
+		},
+		// A key prefix is not quoted, and the core must not wrap it in
+		// the SQL-standard quotes it applies by default (§6.1.1). Empty
+		// open and close are a declaration, not an omission.
+		"identifier": map[string]string{"open": "", "close": "", "separator": "."},
+		// Two of the three generating built-ins, with table read as a key
+		// prefix: the check asks about the keys under `<table>:`, which is
+		// the naming convention Redis itself documents. Neither applied to
+		// this adapter before, because the core composed SQL and Redis has
+		// none.
+		//
+		// **Every statement here is free of spaces on purpose.** The
+		// runner expands the check text by word splitting, so a Lua script
+		// carrying a space arrives as several arguments and the engine
+		// answers `ERR value is not an integer or out of range` (measured).
+		// That is why the count is written `return#redis.call(...)` and the
+		// message `no_keys_under_this_prefix`: not style, but the only
+		// shape that survives the runner this adapter has always had.
+		//
+		// Measured on 7.2.15, in both directions. row_count answers a bare
+		// number, and answers 0 for a prefix holding nothing rather than
+		// failing — a count of zero is a legitimate answer to compare
+		// against a bound. table_exists cannot use the same statement for
+		// exactly that reason, so it asserts the first key and fails with
+		// its own message when there is none, which reaches the drill
+		// host's log rather than a bare "attempt to index a nil value".
+		//
+		// **KEYS reads the whole keyspace.** Redis says so itself, and on
+		// a large restore this is the expensive check in the set. It is
+		// the only form the runner can carry: SCAN needs a loop, and a
+		// loop needs spaces.
+		//
+		// freshness is not declared. Redis dates nothing per key — a TTL
+		// says when a key will go, not when its value arrived — so there
+		// is no newest instant for the check to read.
+		"checks": map[string]any{
+			"table_exists": map[string]string{
+				"statement": `EVAL assert(redis.call('keys',ARGV[1])[1],'no_keys_under_this_prefix') 0 {{table}}:*`,
+			},
+			"row_count": map[string]string{
+				"statement": `EVAL return#redis.call('keys',ARGV[1]) 0 {{table}}:*`,
+			},
 		},
 		"sql_runner": map[string]any{
 			// Redis has no SQL: the check text the core passes through

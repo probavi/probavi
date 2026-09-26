@@ -667,8 +667,13 @@ func TestRejectsWrongProtocolAndOp(t *testing.T) {
 			t.Errorf("exit=%d final=%+v", exit, f)
 		}
 		supported, ok := f.Error.Detail["supported"].([]any)
-		if !ok || len(supported) == 0 || supported[0] != "probavi-adapter/0" {
-			t.Errorf("detail.supported = %v, want the spoken versions (§3.1)", f.Error.Detail)
+		if !ok || len(supported) != len(protocolVersions) {
+			t.Fatalf("detail.supported = %v, want every spoken version (§3.1)", f.Error.Detail)
+		}
+		for i, want := range protocolVersions {
+			if supported[i] != want {
+				t.Errorf("detail.supported[%d] = %v, want %s", i, supported[i], want)
+			}
 		}
 	})
 	t.Run("unknown op", func(t *testing.T) {

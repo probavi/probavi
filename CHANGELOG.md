@@ -11,6 +11,39 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **`table_exists` and `row_count` now work against Redis**
+  (`adapters/redis` 0.7.0), declared as Lua, with `table` read as a **key
+  prefix** — the check asks about the keys under `<table>:`, which is the
+  naming convention Redis itself documents. Neither applied before: the
+  core composed SQL and Redis has none.
+
+  ```yaml
+  checks:
+    - builtin: row_count
+      table: probavi      # the keys under probavi:
+      min: 1
+  ```
+
+  **Every declared statement is free of spaces, and that is not style.**
+  The runner expands a check's text by word splitting, so a Lua script
+  carrying a space arrives as several arguments and the engine answers
+  `ERR value is not an integer or out of range` (measured on 7.2.15).
+  That is why the count reads `return#redis.call(...)` and the failure
+  message is `no_keys_under_this_prefix`. The same constraint applies to
+  a raw check written by hand, which the README now says.
+
+  `row_count` answers **0** for a prefix holding nothing rather than
+  failing — a count of zero is a legitimate answer to compare against a
+  bound — which is why `table_exists` is a different statement: it
+  asserts the first key and fails with its own message when there is
+  none. **`KEYS` reads the whole keyspace**, so on a large restore this
+  is the expensive check in the set; `SCAN` needs a loop and a loop needs
+  spaces, so it is the only form the runner can carry. `freshness` is not
+  declared: Redis dates nothing per key — a TTL says when a key will go,
+  not when its value arrived.
+
 ### Fixed
 
 - **The etcd README gave the wrong reason for its built-ins not
