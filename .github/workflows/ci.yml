@@ -89,7 +89,7 @@ jobs:
         # not decide whether a change merges (.github/codecov.yml pins that
         # down on their side too). Runs after the ratchet, so a report is
         # never published for a run that already failed the standard.
-        uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v7.1.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: cover.out
           token: ${{ secrets.CODECOV_TOKEN }}
