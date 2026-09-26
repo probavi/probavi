@@ -127,12 +127,43 @@ is the only arrangement that proves anything.
 
 ## Checks: lines of valkey-cli arguments
 
-Valkey has no SQL, so the generating built-in checks (`row_count`,
-`table_exists`, `freshness`) do not apply. Having no SQL is no longer the
-whole reason — an adapter may declare its own statement for a built-in
-(`probavi-adapter/1`, adapter protocol §6.1.1), and several engines
-without SQL now do. This one does not, because a key-value store has
-nothing for `table` to name. A check's text is one line of
+**`table_exists` and `row_count` work here now** — declared as Lua, with
+`table` read as a **key prefix**: the check asks about the keys under
+`<table>:`, the naming convention this engine inherits from its ancestor.
+Neither applied before, because the core composed SQL and Valkey has
+none.
+
+```yaml
+checks:
+  - builtin: row_count
+    table: probavi        # the keys under probavi:
+    min: 1
+```
+
+Four things worth knowing, each measured on **both ends of the verified
+range**, 7.2.14 and 9.1.1:
+
+- The statements use `redis.call`, which is the portable spelling.
+  Valkey also exposes `server`, but `redis` works on every version this
+  adapter is verified against — 9.1.1's own `redis_version` still reads
+  7.2.4.
+- **`KEYS` reads the whole keyspace**, so on a large restore this is the
+  expensive check in the set. It is the only form the runner can carry:
+  `SCAN` needs a loop, and a loop needs spaces.
+- `row_count` answers **0** for a prefix holding nothing rather than
+  failing. A count of zero is a legitimate answer to compare against a
+  bound, which is why `table_exists` is a different statement: it asserts
+  the first key and fails with its own message when there is none.
+- **`freshness` is not declared.** Valkey dates nothing per key — a TTL
+  says when a key will go, not when its value arrived — so there is no
+  newest instant to read.
+
+**Every declared statement is free of spaces, and that is not style.** The
+runner expands a check's text by word splitting, so a Lua script carrying
+a space arrives as several arguments and the engine refuses it. That is
+why the count reads `return#redis.call(...)` and the failure message is
+`no_keys_under_this_prefix`. The same constraint applies to a raw check
+you write yourself. A check's text is one line of
 `valkey-cli` arguments, run through the probe-declared template:
 
 ```yaml
