@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -115,21 +116,144 @@ func TestSchemasCompile(t *testing.T) {
 	}
 }
 
-// TestEvidenceGoldenLogsValidate holds the evidence record schema to the
-// byte-frozen golden logs of both published schema versions.
+// examplesDir holds the published worked-example logs, one per schema
+// version, that evidence-schema.md §11 promises a third party.
+const examplesDir = "../../docs/schemas/evidence/examples"
+
+// publishedRecordVersions reads the schema versions record.json admits out
+// of the file itself: every `oneOf` branch is a version, and each pins its
+// own `schema` const.
+//
+// Derived rather than listed, because a list is what failed. The v3
+// branch was published with no caller here changing, so the vector
+// carrying it went unvalidated against the very schema that had just
+// grown to accept it — the one direction of that change nothing was
+// watching. A version that arrives now brings its own test case with it.
+//
+// spec/evidence derives the same set for its own purpose, and the
+// duplication is deliberate: it is a separate module that shares no code
+// with anything here, which is what makes it an independent verifier
+// rather than a second caller of the same helper.
+func publishedRecordVersions(t *testing.T) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(schemasDir, "evidence", "record.json"))
+	if err != nil {
+		t.Fatalf("read record schema: %v", err)
+	}
+	var doc struct {
+		OneOf []struct {
+			Ref string `json:"$ref"`
+		} `json:"oneOf"`
+		Defs map[string]struct {
+			Properties struct {
+				Schema struct {
+					Const string `json:"const"`
+				} `json:"schema"`
+			} `json:"properties"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("decode record schema: %v", err)
+	}
+	versions := make([]string, 0, len(doc.OneOf))
+	for _, branch := range doc.OneOf {
+		name := strings.TrimPrefix(branch.Ref, "#/$defs/")
+		def, ok := doc.Defs[name]
+		if !ok {
+			t.Fatalf("record.json oneOf references %s, which $defs does not define", branch.Ref)
+		}
+		if def.Properties.Schema.Const == "" {
+			t.Fatalf("record.json $defs/%s pins no schema const — this gate cannot tell which "+
+				"version it publishes", name)
+		}
+		versions = append(versions, def.Properties.Schema.Const)
+	}
+	if len(versions) == 0 {
+		t.Fatal("record.json publishes no schema version — this gate would pass vacuously")
+	}
+	return versions
+}
+
+// goldenForVersion maps probavi-evidence/N to the published vector
+// carrying it.
+func goldenForVersion(t *testing.T, version string) string {
+	t.Helper()
+	n, ok := strings.CutPrefix(version, "probavi-evidence/")
+	if !ok {
+		t.Fatalf("record.json publishes %q, which is not a probavi-evidence version", version)
+	}
+	return filepath.Join(examplesDir, "log_v"+n+".jsonl")
+}
+
+// TestEveryPublishedVersionHasAGoldenLog is the obligation a published
+// version carries here, stated as a test rather than as a habit.
+//
+// §11 of evidence-schema.md promises a byte-exact worked example for
+// each version, and the reason is not symmetry: the vector is what a
+// third party writing an independent verifier reads, and the one
+// artifact proving the writer, the schema and the specification agree on
+// the same bytes. A version published without one leaves each of the
+// three free to drift alone.
+func TestEveryPublishedVersionHasAGoldenLog(t *testing.T) {
+	for _, version := range publishedRecordVersions(t) {
+		t.Run(version, func(t *testing.T) {
+			golden := goldenForVersion(t, version)
+			if _, err := os.Stat(golden); err != nil {
+				t.Errorf("record.json publishes %s but %s is not there — a published version "+
+					"owes a worked example in the same change (evidence-schema.md §11)",
+					version, golden)
+			}
+		})
+	}
+}
+
+// TestEvidenceGoldenLogsValidate holds the record schema to the
+// byte-frozen golden log of every published version.
 func TestEvidenceGoldenLogsValidate(t *testing.T) {
 	c, _ := newCompiler(t)
 	record := compile(t, c, "evidence/record.json")
-	for _, golden := range []string{
-		"../../docs/schemas/evidence/examples/log_v0.jsonl",
-		"../../docs/schemas/evidence/examples/log_v1.jsonl",
-		"../../docs/schemas/evidence/examples/log_v2.jsonl",
-	} {
-		for i, line := range goldenLines(t, golden) {
-			if err := record.Validate(parseJSON(t, line)); err != nil {
-				t.Errorf("%s line %d does not validate: %v", golden, i+1, err)
+	for _, version := range publishedRecordVersions(t) {
+		t.Run(version, func(t *testing.T) {
+			golden := goldenForVersion(t, version)
+			for i, line := range goldenLines(t, golden) {
+				if err := record.Validate(parseJSON(t, line)); err != nil {
+					t.Errorf("%s line %d does not validate: %v", golden, i+1, err)
+				}
 			}
+		})
+	}
+}
+
+// TestUnpublishedVersionIsRejected proves the record schema refuses a
+// version it does not publish — the half that keeps `oneOf` meaningful.
+//
+// The version it tries is derived, not written down: the case used to
+// name probavi-evidence/3, and publishing v3 turned the case's own name
+// into a false statement while it went on passing for an unrelated
+// reason (a v1 record relabelled v3 lacks v3's required fields).
+func TestUnpublishedVersionIsRejected(t *testing.T) {
+	c, _ := newCompiler(t)
+	record := compile(t, c, "evidence/record.json")
+	published := publishedRecordVersions(t)
+	next := "probavi-evidence/" + strconv.Itoa(len(published))
+	for _, v := range published {
+		if v == next {
+			t.Fatalf("%s is published; the versions are not the contiguous run this gate assumes", next)
 		}
+	}
+	for _, version := range published {
+		t.Run("a "+version+" record relabelled "+next, func(t *testing.T) {
+			line := goldenLines(t, goldenForVersion(t, version))[0]
+			doc := parseJSON(t, line)
+			m, ok := doc.(map[string]any)
+			if !ok {
+				t.Fatal("golden line is not an object")
+			}
+			m["schema"] = next
+			if err := record.Validate(doc); err == nil {
+				t.Errorf("record schema accepts %s, which it does not publish", next)
+			}
+		})
 	}
 }
 
@@ -171,7 +295,6 @@ func TestEvidenceRecordViolations(t *testing.T) {
 		line   int
 		mutate func(t *testing.T, m map[string]any)
 	}{
-		{"unpublished schema version", 0, func(_ *testing.T, m map[string]any) { m["schema"] = "probavi-evidence/3" }},
 		{"unknown top-level field", 0, func(_ *testing.T, m map[string]any) { m["comment"] = "forged" }},
 		{"missing env", 0, func(_ *testing.T, m map[string]any) { delete(m, "env") }},
 		{"v1 drill without pitr_target", 0, func(t *testing.T, m map[string]any) {
