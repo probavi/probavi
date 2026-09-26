@@ -128,8 +128,11 @@ is the only arrangement that proves anything.
 ## Checks: lines of valkey-cli arguments
 
 Valkey has no SQL, so the generating built-in checks (`row_count`,
-`table_exists`, `freshness`) do not apply — the same consequence the
-Redis, MongoDB, and etcd adapters document. A check's text is one line of
+`table_exists`, `freshness`) do not apply. Having no SQL is no longer the
+whole reason — an adapter may declare its own statement for a built-in
+(`probavi-adapter/1`, adapter protocol §6.1.1), and several engines
+without SQL now do. This one does not, because a key-value store has
+nothing for `table` to name. A check's text is one line of
 `valkey-cli` arguments, run through the probe-declared template:
 
 ```yaml

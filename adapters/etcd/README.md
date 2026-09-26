@@ -149,8 +149,11 @@ The expansion is word splitting only, never shell parsing: a POSIX shell
 does not re-read expansions as syntax, so `;`, `|`, `$()` and friends in
 a check stay literal arguments (unit-tested), and globbing is disabled.
 Built-in checks that generate SQL (`row_count`, `table_exists`,
-`freshness`) do not apply to this adapter — the same trade the mongodb
-adapter documents, and the protocol's design working as intended (§6.1).
+`freshness`) do not apply to this adapter. An adapter may declare its own
+statement for a built-in instead of letting the core compose one
+(`probavi-adapter/1`, adapter protocol §6.1.1), and several in this
+catalogue now do — this one does not, and the reason is the engine: etcd
+is a key-value store, so there is nothing for `table` to name.
 
 ## When the backup was taken
 
