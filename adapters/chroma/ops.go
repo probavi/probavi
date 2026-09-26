@@ -11,7 +11,7 @@ import (
 
 const (
 	adapterName    = "chroma"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 
 	// readinessBudget bounds waiting for the engine to answer. Chroma
 	// rebuilds any HNSW segment the write queue still covers at startup,
@@ -71,7 +71,7 @@ func probePayload() any {
 	return map[string]any{
 		"name":              adapterName,
 		"adapter_version":   adapterVersion,
-		"protocol_versions": []string{protocolVersion},
+		"protocol_versions": protocolVersions,
 		"engine":            map[string]string{"name": "chroma"},
 		"sources": []map[string]any{
 			// The archive kind leads because the §10 conformance suite
@@ -85,6 +85,33 @@ func probePayload() any {
 			// an operator reaches for most (the qdrant precedent).
 			{"kind": kindDataTar, "capabilities": map[string]bool{"pitr": false}},
 			{"kind": kindData, "capabilities": map[string]bool{"pitr": false}},
+		},
+		// A collection is a path segment, so the core must not wrap it in
+		// the SQL-standard quotes it applies by default (§6.1.1). Empty
+		// open and close are a declaration, not an omission.
+		"identifier": map[string]string{"open": "", "close": "", "separator": "."},
+		// Two of the three generating built-ins. They did not apply to
+		// this adapter at all before: the core composed SQL and Chroma has
+		// none, so an operator wrote request paths for questions every
+		// other adapter answers with a built-in. table names a collection.
+		//
+		// Both are the same request, because the engine answers both from
+		// it. A collection that exists resolves to its id and answers a
+		// bare number, which row_count reads; one that does not fails the
+		// resolution with "no collection named X in the restored
+		// database" and a non-zero exit, which is exactly what
+		// table_exists reads — and that message says more than a status
+		// code would.
+		//
+		// freshness is not declared, and the reason is the engine.
+		// Chroma stores documents, embeddings and metadata; it has no
+		// aggregation over a dated field, so there is no request that
+		// answers "the newest instant in this collection". A check that
+		// needs one is a filtered query written by hand, which is what
+		// the raw form is for.
+		"checks": map[string]any{
+			"table_exists": map[string]string{"statement": "{{table}}/count"},
+			"row_count":    map[string]string{"statement": "{{table}}/count"},
 		},
 		"sql_runner": map[string]any{
 			// Chroma has no SQL, so the check text is an API path with an

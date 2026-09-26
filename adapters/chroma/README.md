@@ -93,9 +93,36 @@ sandbox:
 
 ## Checks
 
-Chroma has no SQL, so the generating built-ins (`table_exists`, `row_count`,
-`freshness`) do not apply — the MongoDB precedent. `service_healthy` works,
-and everything else is written as a request:
+**`table_exists` and `row_count` work here now**, and until this adapter
+declared them they did not apply at all, because the core composed SQL and
+Chroma has none. Both are declared as the same request (adapter protocol
+§6.1.1, `probavi-adapter/1`), because the engine answers both from it, and
+`table` names a **collection**:
+
+```yaml
+checks:
+  - builtin: row_count
+    table: drills
+    min: 1
+```
+
+A collection that exists resolves to its id and answers a bare number,
+which `row_count` reads. One that does not fails the resolution with *"no
+collection named X in the restored database"* and a non-zero exit, which
+is what `table_exists` reads — and that message says more than a status
+code would.
+
+**`freshness` is not declared, and the reason is the engine.** Chroma
+stores documents, embeddings and metadata; it has no aggregation over a
+dated field, so no request answers *the newest instant in this
+collection*. A check that needs one is a filtered query written by hand,
+which is what the raw form below is for.
+
+The adapter also declares **no quoting at all** — a declaration rather
+than an omission, since a collection is a path segment and the core must
+not wrap it in the SQL-standard quotes it applies by default.
+
+`service_healthy` works, and everything else is written as a request:
 
 ```yaml
 checks:

@@ -11,6 +11,30 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **`table_exists` and `row_count` now work against Chroma**
+  (`adapters/chroma` 0.3.0). Neither applied before: the core composed SQL
+  and Chroma has none, so an operator wrote request paths for questions
+  every other adapter answers with a built-in. `table` names a
+  **collection**.
+
+  Both are declared as the same request, because the engine answers both
+  from it. A collection that exists resolves to its id and answers a bare
+  number, which `row_count` reads; one that does not fails the resolution
+  with *"no collection named X in the restored database"* and a non-zero
+  exit, which is what `table_exists` reads — and that message says more
+  than a status code would.
+
+  **`freshness` is deliberately not declared.** Chroma stores documents,
+  embeddings and metadata and has no aggregation over a dated field, so
+  no request answers *the newest instant in this collection*. A check
+  that needs one is a filtered query written by hand, which is what the
+  raw form is for.
+
+  The adapter declares no quoting at all — a declaration rather than an
+  omission, since a collection is a path segment.
+
 ### Fixed
 
 - **`docs/capabilities.json` said `table` meant "Table, optionally
