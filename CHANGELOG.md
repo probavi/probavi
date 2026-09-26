@@ -13,6 +13,20 @@ always called out explicitly.
 
 ### Fixed
 
+- **The etcd README gave the wrong reason for its built-ins not
+  applying.** Yesterday's wording said a key-value store has nothing for
+  `table` to name. Measuring says otherwise: a key prefix serves
+  perfectly well, and the redis adapter reads one. The reason is
+  `etcdctl`, and it is now stated with what was measured on 3.5.21 —
+  `--count-only` is accepted only with `--write-out=fields`, which prints
+  six header lines before the count, so no invocation answers the bare
+  number `row_count` parses; and a prefix holding nothing answers
+  `"Count" : 0` and **exits 0**, so a declared `table_exists` would pass
+  for every prefix, asserting *the table exists* on the strength of a
+  command that cannot fail.
+
+### Fixed
+
 - **Five adapter READMEs cited MongoDB as an engine whose generating
   built-ins do not apply.** They have applied there since it declared its
   own statements, so `couchdb`, `etcd`, `redis`, `valkey` and `influxdb`
