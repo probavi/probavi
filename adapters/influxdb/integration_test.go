@@ -17,6 +17,8 @@ import (
 
 	"github.com/probavi/probavi/internal/adapter"
 	"github.com/probavi/probavi/internal/capabilities"
+	"github.com/probavi/probavi/internal/checks"
+	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/sandbox"
 	"github.com/probavi/probavi/internal/sandbox/docker"
 )
@@ -113,6 +115,59 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 		`from(bucket:"metrics") |> range(start:0) |> group() |> count() |> keep(columns:["_value"])`, "500")
 	assertCheck(t, ctx, sbx, probe, res.Connection.Database,
 		`from(bucket:"events") |> range(start:0) |> group() |> count() |> keep(columns:["_value"])`, "1")
+
+	// The generating built-ins, run the way the core runs them — through
+	// internal/checks, carrying the declarations this adapter makes.
+	// They did not apply to InfluxDB at all before it declared them: the
+	// core composed SQL for an engine that has none. Without the Dialect
+	// line the core composes that SQL again, which is what makes it the
+	// assertion.
+	t.Run("the generating built-ins work", func(t *testing.T) {
+		deps := checks.Deps{
+			Exec:    sbx,
+			Runner:  checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
+			Target:  checks.Target{User: res.Connection.User, Database: res.Connection.Database},
+			Dialect: checks.DialectFrom(probe),
+		}
+		min1, tooMany, none := int64(1), int64(5000), int64(0)
+		results, cerr := checks.Run(ctx, []config.Check{
+			{Builtin: config.CheckTableExists, Table: "metrics"},
+			{Builtin: config.CheckTableExists, Table: "nosuch"},
+			{Builtin: config.CheckRowCount, Table: "metrics", Min: &min1},
+			{Builtin: config.CheckRowCount, Table: "metrics", Min: &tooMany},
+			// A bucket that exists and holds one point is not empty, so
+			// max:0 must fail — and it must fail on the count rather than
+			// on output the core could not read, which is what the zero
+			// floor in the declared query is for.
+			{Builtin: config.CheckRowCount, Table: "events", Max: &none},
+			// The fixture writes its points at i seconds past the Unix
+			// epoch, so the newest is decades old: a century-wide window
+			// admits it and a millisecond does not.
+			{Builtin: config.CheckFreshness, Table: "metrics", Column: "usage",
+				MaxAge: config.Duration(24 * 365 * 100 * time.Hour)},
+			{Builtin: config.CheckFreshness, Table: "metrics", Column: "usage",
+				MaxAge: config.Duration(time.Millisecond)},
+		}, deps)
+		if cerr != nil {
+			t.Fatalf("checks.Run: %v", cerr)
+		}
+		// Each asked once so it must pass and once so it must fail: a
+		// check that cannot fail proves nothing.
+		for i, want := range []bool{true, false, true, false, false, true, false} {
+			if results[i].OK != want {
+				t.Errorf("check %d (%s) = %v (%s), want %v",
+					i, results[i].Name, results[i].OK, results[i].Detail, want)
+			}
+		}
+		if !strings.Contains(results[2].Detail, "500") {
+			t.Errorf("row_count detail = %q, want the 500 points read and compared", results[2].Detail)
+		}
+		// The max:0 refusal must name the count it read, not complain
+		// that it could not read one.
+		if !strings.Contains(results[4].Detail, "1 rows") {
+			t.Errorf("max:0 detail = %q, want the count rather than unreadable output", results[4].Detail)
+		}
+	})
 
 	teardown, err := runner.Teardown(ctx, res.State, "completed", sbx)
 	if err != nil || !teardown.Released {
