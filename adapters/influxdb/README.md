@@ -77,8 +77,10 @@ checks should target: set `options.database` in the drill config.
 ## Checks: one Flux query
 
 InfluxDB 2.x has no SQL, so the generating built-in checks
-(`row_count`, `table_exists`, `freshness`) do not apply — the same
-consequence the MongoDB, Redis, and etcd adapters document. A check's
+(`row_count`, `table_exists`, `freshness`) do not apply. Having no SQL is
+no longer the whole reason — an adapter may declare its own statement for
+a built-in (`probavi-adapter/1`, adapter protocol §6.1.1), and several
+engines without SQL now do. This one has not yet. A check's
 text is one Flux query, delivered as a single argument (no shell
 anywhere):
 

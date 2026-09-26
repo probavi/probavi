@@ -116,9 +116,18 @@ and for the data-directory kinds the adapter refuses if that database is not
 there after the restore.
 
 The core's generating built-ins (`row_count`, `table_exists`, `freshness`)
-do **not** apply here — they compose SQL, and this runner takes a path — the
-same trade the mongodb, redis and etcd adapters document, and the protocol's
-design working as intended (§6.1).
+do **not** apply here, and the reason is structural rather than a matter of
+dialect. An adapter may declare its own statement for a built-in instead of
+letting the core compose SQL (`probavi-adapter/1`, adapter protocol §6.1.1),
+and several engines without SQL now do. **This one cannot, because `table`
+would have nothing to name.** A CouchDB database is already the unit a check
+reads — `options.database` names it, and the runner puts it in the path — and
+below a database the engine has only documents by id and, on a database
+created `partitioned=true`, partitions. Declaring `table` as a partition
+would answer 400 `database is not partitioned` on every ordinary one
+(measured on 3.5.2), which is a trap rather than a mapping.
+
+Assert the count with a raw check instead, as the forms above do.
 
 ## Compaction is suspended for the drill's duration
 

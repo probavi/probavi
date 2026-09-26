@@ -11,6 +11,29 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Five adapter READMEs cited MongoDB as an engine whose generating
+  built-ins do not apply.** They have applied there since it declared its
+  own statements, so `couchdb`, `etcd`, `redis`, `valkey` and `influxdb`
+  were each pointing at a sibling for a property it no longer has — a
+  claim my own change made false, in five files at once.
+
+  Each now says what is still true of itself. Having no SQL stopped being
+  the reason when `probavi-adapter/1` let an adapter declare its own
+  statement; for the key-value stores the reason is that there is nothing
+  for `table` to name, and `influxdb` simply has not declared any yet.
+
+- **CouchDB's README said the built-ins did not apply because "this
+  runner takes a path".** That was the dialect argument, which the
+  protocol bump answered. The real reason is structural and is now stated
+  with what was measured: a database is already the unit a check reads,
+  and below it CouchDB has only documents by id and — on a database
+  created `partitioned=true` — partitions. Declaring `table` as a
+  partition would answer 400 `database is not partitioned` on every
+  ordinary database (measured on 3.5.2), which is a trap rather than a
+  mapping.
+
 ### Added
 
 - **`table_exists` and `row_count` now work against Chroma**
