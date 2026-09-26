@@ -77,7 +77,7 @@ func CheckKinds() []CheckKind {
 			Name:    "Table exists and is queryable",
 			Builtin: true,
 			Params: []CheckParam{
-				{Name: "table", Type: ParamIdentifier, Required: true, Doc: "Table, optionally schema-qualified."},
+				{Name: "table", Type: ParamIdentifier, Required: true, Doc: "What the check is about: a table, collection, class, label or key prefix, depending on the engine. The adapter decides what it names, and its README says which."},
 			},
 		},
 		{
@@ -86,7 +86,7 @@ func CheckKinds() []CheckKind {
 			Name:    "Row count within bounds",
 			Builtin: true,
 			Params: []CheckParam{
-				{Name: "table", Type: ParamIdentifier, Required: true, Doc: "Table, optionally schema-qualified."},
+				{Name: "table", Type: ParamIdentifier, Required: true, Doc: "What the check is about: a table, collection, class, label or key prefix, depending on the engine. The adapter decides what it names, and its README says which."},
 				{Name: "min", Type: ParamInteger, Doc: "Lower bound, inclusive."},
 				{Name: "max", Type: ParamInteger, Doc: "Upper bound, inclusive."},
 			},
@@ -98,8 +98,8 @@ func CheckKinds() []CheckKind {
 			Name:    "Newest row younger than a maximum age",
 			Builtin: true,
 			Params: []CheckParam{
-				{Name: "table", Type: ParamIdentifier, Required: true, Doc: "Table, optionally schema-qualified."},
-				{Name: "column", Type: ParamIdentifier, Required: true, Doc: "Timestamp column to take the maximum of."},
+				{Name: "table", Type: ParamIdentifier, Required: true, Doc: "What the check is about: a table, collection, class, label or key prefix, depending on the engine. The adapter decides what it names, and its README says which."},
+				{Name: "column", Type: ParamIdentifier, Required: true, Doc: "The dated field to take the maximum of — a column, property or attribute, named the way the engine names one."},
 				{Name: "max_age", Type: ParamDuration, Required: true, Doc: "Maximum age of the newest row."},
 			},
 		},
