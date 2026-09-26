@@ -1,18 +1,27 @@
-# Probavi Evidence Schema — v2
+# Probavi Evidence Schema — v3
 
-Status: **v2 — approved by the maintainer 2026-08-05. NORMATIVE.** v1 was
-frozen 2026-08-01; v2 adds two nullable fields and changes nothing else
-(§10). The evidence format is the product's core trust artifact; treat
-every field and byte here as a public API. Any change requires a schema
-version bump in this document before any code changes. The key words MUST,
-MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119.
-A machine-readable JSON Schema covering every published version lives at
+Status: **v3 — NORMATIVE, specified 2026-09-26; not yet implemented
+(§11.3).** v2 was frozen 2026-08-05 and stays exactly as it was; v3 adds
+six nullable fields and changes nothing else (§10). The evidence format is
+the product's core trust artifact; treat every field and byte here as a
+public API. Any change requires a schema version bump in this document
+before any code changes. The key words MUST, MUST NOT, SHOULD, and MAY are
+to be interpreted as described in RFC 2119. A machine-readable JSON Schema
+covering every published version lives at
 `docs/schemas/evidence/record.json` (derived from this document; on any
 disagreement this document wins).
 
-Schema identifier: `probavi-evidence/2`. Writers emit v2; verifiers MUST
-accept every published version — `probavi-evidence/0`, `/1` and `/2`
-(§10).
+Schema identifier: `probavi-evidence/3`. Writers emit v3 once §11.3 is
+complete; verifiers MUST accept every published version —
+`probavi-evidence/0`, `/1`, `/2` and `/3` (§10).
+
+**Why one bump rather than four.** The six fields answer four separate
+questions, and each would have cost the same set on its own: this
+document, the JSON Schema, a byte-exact golden log, support in the
+independent verifier that shares no code with the writer, and a test
+pinning the supported versions in both directions. Paying that once is
+discipline; paying it four times is waste, and a reader of the log would
+have four shapes to tell apart instead of one.
 
 ---
 
@@ -68,7 +77,7 @@ only:
 
 ```json
 {
-  "schema": "probavi-evidence/2",
+  "schema": "probavi-evidence/3",
   "seq": 1042,
   "prev_hash": "sha256:b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c",
   "ts": "2026-07-31T02:00:11.482Z",
@@ -81,7 +90,10 @@ only:
     "kind": "pgdump",
     "checksum": "sha256:9f2a11a6a9e1a76f7e4c62b9b2b0a3f2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6",
     "size_bytes": 565248,
-    "created_at": "2026-07-30T01:58:02.000Z"
+    "created_at": "2026-07-30T01:58:02.000Z",
+    "manifest_hash": "sha256:3b7daaa5c4a1e6e0e7d3f2a1b0c9d8e7f6a5b4c3d2e1f0091827364554637281",
+    "manifest_match": true,
+    "newest_data_at": "2026-07-30T01:57:44.000Z"
   },
   "adapter": {
     "name": "postgres",
@@ -89,7 +101,12 @@ only:
     "protocol": "probavi-adapter/0",
     "digest": "sha256:05f3b8f6ec13d17858d1b7ec47108f519f2c86d9a013bacb90b44f14577d6795"
   },
-  "sandbox": {"provider": "docker", "params": {"image": "postgres:16", "memory": "2GiB"}},
+  "sandbox": {
+    "provider": "docker",
+    "params": {"image": "postgres:16", "memory": "2GiB"},
+    "image_digest": "sha256:9f2c86d9a013bacb90b44f14577d679505f3b8f6ec13d17858d1b7ec47108f51",
+    "resources": {"memory_bytes": 2147483648, "cpus_milli": 1500}
+  },
   "timings_ms": {
     "provision": 1170,
     "engine_ready": 1166,
@@ -109,7 +126,8 @@ only:
     "os": "linux",
     "arch": "amd64",
     "host_id": "3f7a9c2e5b1d8e04",
-    "probavi_digest": "sha256:1d2c3b4a5968778695a4b3c2d1e0f00112233445566778899aabbccddeeff001"
+    "probavi_digest": "sha256:1d2c3b4a5968778695a4b3c2d1e0f00112233445566778899aabbccddeeff001",
+    "clock_synchronised": true
   },
   "sig": {
     "alg": "ed25519",
@@ -134,11 +152,18 @@ Field reference:
 | `backup.checksum` | string | yes | `sha256:` over source bytes, from the adapter's `source_identity`. Null if provisioning never got that far. |
 | `backup.size_bytes` | integer | yes | Source size. |
 | `backup.created_at` | string | yes | Backup's own creation time if derivable (RFC 3339 UTC, ms, `Z`). Normalized by the core from the adapter's `source_identity.created_at`, which may carry any RFC 3339 precision or offset: converted to UTC and truncated — never rounded — to milliseconds (adapter protocol §6.2). |
+| `backup.manifest_hash` | string | yes | `sha256:` of the backup manifest's bytes, pinning *which* manifest was believed, the way `drill.config_hash` pins the configuration (v3). Null when the configuration named none. |
+| `backup.manifest_match` | boolean | yes | Whether the artifact agreed with that manifest (v3). Null when the configuration named none. It is a field rather than something a reader derives, because the derivation does not work: `source_corrupt` is also what an adapter reports on a damaged artifact during provision, so a failed record carrying a manifest hash does not say which of the two happened. The expectation itself is deliberately absent — it is not comparable to `backup.checksum` beside it (`docs/backup-manifest.md` §4, §9.2), and a mismatch names both values in `error.message`, which is the one place they inform rather than mislead. |
+| `backup.newest_data_at` | string | yes | The newest instant found **in the restored data**, read from the engine after the restore (RFC 3339 UTC, ms, `Z`) (v3). Null when the drill did not measure one, which is every drill whose adapter declares no statement for it. **It is a measurement, never a claim:** `backup.created_at` is the backup's self-report and a backup manifest's `created_at` is the backup job's, and neither may populate this. What it is for is the question an auditor asks first and no other field answers — how much data a recovery from this backup would have lost. The gap is `ts` minus this instant, both of which are in the record. |
 | `adapter.name` / `.version` / `.protocol` | string | version: yes | Adapter identity; protocol version actually spoken. |
 | `adapter.digest` | string | yes | `sha256:` of the adapter executable the core resolved and launched (v2). Build identity, which `adapter.version` is not: the version is a semantic number the adapter reports about itself, so two different builds can share one. Null when the file could not be read — a digest is never worth failing a drill for. **What it attests:** the bytes of the file the core selected at the path `probavi-adapter-<name>` resolved to, hashed before launch. It does not prove those bytes are the instructions that ran: a file replaced between hashing and `exec` would go unnoticed. Closing that window would mean reading `/proc/<pid>/exe`, which does not exist on every platform Probavi supports, so the narrower claim is the one this field makes. |
 | `env.probavi_digest` | string | yes | `sha256:` of the `probavi` executable that wrote the record (v2), obtained from the running program's own path. Same rationale and the same attestation limit as `adapter.digest`: the core chooses the sandbox, runs the checks and signs the record, so "which bytes produced this proof" is unanswered without it. Null when the path could not be read. |
 | `sandbox.provider` | string | no | Provider name (`docker`, …). |
 | `sandbox.params` | object (string→string) | no | Provider parameters from config, values as written. Never tokens/handles. |
+| `sandbox.image_digest` | string | yes | `sha256:` of the engine image the sandbox actually ran (v3). Null where there is no image, as on a bare host, or where the provider cannot answer. This completes a set v2 began: `adapter.digest` and `env.probavi_digest` exist because a version is a claim a build makes about itself, so a record can say which bytes wrote it and which adapter ran — while `sandbox.params.image` holds a **tag**, which points at different bytes over time. Nothing else identifies the engine that performed the restore. |
+| `sandbox.resources` | object | no | What the provider **applied**, not what the configuration asked for (v3). Both members are nullable and are null wherever a provider cannot answer — a Kubernetes Job without limits takes what the node has, and a provider that cannot read back what it set says so rather than echoing the request. Without them a duration in this record is a number with no scale beside it. |
+| `sandbox.resources.memory_bytes` | integer | yes | Applied memory limit in bytes. |
+| `sandbox.resources.cpus_milli` | integer | yes | Applied CPU limit in thousandths of a CPU: `1500` is one and a half. Thousandths because §4 admits no other kind of number, and because a CPU limit is routinely fractional. |
 | `timings_ms.*` | integer | yes (per phase) | Per-phase durations in milliseconds (§3.1). Phases that never ran are null. |
 | `checks[]` | array | no (may be empty) | Executed checks in execution order. |
 | `checks[].name` | string | no | Builtin: `<builtin>[:<target>]`; custom SQL: `sql:<user-given name or index>`. Never the SQL text. |
@@ -149,6 +174,7 @@ Field reference:
 | `env.probavi_version` | string | no | Core version. |
 | `env.os` / `env.arch` | string | no | Runtime platform. |
 | `env.host_id` | string | no | First 16 hex chars of SHA-256 of the hostname. The raw hostname MUST NOT appear (v0). |
+| `env.clock_synchronised` | boolean | yes | Whether the host **believed** its clock was synchronised when the record was written (v3), read from `timedatectl` or `chronyc` where either answers. Null is the ordinary outcome outside systemd, and null is also what a failed read records. **What it attests is a belief, not a time.** A lying or manipulated time source produces the same `true`, so this field narrows its own claim the way `adapter.digest` does. Nearly everything else here rests on the host clock — `ts`, `backup.created_at`, `drill.pitr_target`, every duration — and a log whose whole value is *this happened on this date* rested that value on a fact it never attested. It is the cheap partial form of the outside witness on the ROADMAP, and MUST NOT be described as doing that one's work: an external timestamp is evidence of time because someone other than the host asserts it. |
 | `sig.alg` | string | no | `ed25519`. |
 | `sig.key_id` | string | no | First 16 hex chars of SHA-256 of the 32-byte public key. |
 | `sig.sig_b64` | string | no | RFC 4648 base64 (with padding) of the 64-byte signature (§6). |
@@ -514,7 +540,28 @@ Published versions and migration notes:
 |---------|------------------|-----------|
 | `probavi-evidence/0` | v1 without `drill.pitr_target`. | None — v0 records lack the field entirely (fixed shape per version) and remain valid forever under v0. Writers emit v1 from 2026-08-01. |
 | `probavi-evidence/1` | v2 without `adapter.digest` and `env.probavi_digest`. | None — v1 records lack both fields entirely and remain valid forever under v1. |
-| `probavi-evidence/2` | Current (§3). | None — both new fields are nullable, so a writer that cannot read an executable still emits a conforming record, and v1 records lack them entirely. Writers emit v2 from 2026-08-05. |
+| `probavi-evidence/2` | v3 without the six fields below. | None — both of v2's new fields are nullable, so a writer that cannot read an executable still emits a conforming record, and v1 records lack them entirely. Writers emitted v2 from 2026-08-05. |
+| `probavi-evidence/3` | Current (§3). Adds `backup.manifest_hash`, `backup.manifest_match`, `backup.newest_data_at`, `sandbox.image_digest`, `sandbox.resources` and `env.clock_synchronised`. | None — every one is nullable (`sandbox.resources` is an object whose two members are), so a drill that names no backup manifest, runs on a provider that cannot read back its own limits, or sits on a host with no time daemon still emits a conforming record. v2 records lack all six entirely and remain valid forever under v2. |
+
+**Three departures from the plan this bump was recorded under
+(`ROADMAP.md`), each argued here rather than made quietly.**
+
+The age of the restored data is recorded as an **instant**,
+`backup.newest_data_at`, where the plan said to record the difference
+against the drill's clock. The record already carries `ts`, so the
+difference is one subtraction away, while the instant does not go stale
+and does not depend on when it is read. A measurement belongs in a record;
+an interpretation is what a reader does with it.
+
+The applied CPU limit is `cpus_milli`, an integer, where the plan said
+`cpus`. §4 admits no number that is not an integer, and a CPU limit is
+routinely fractional — so either the field is thousandths or the
+canonicalization rule bends, and the rule is older and load-bearing.
+
+The clock field is `env.clock_synchronised`, a boolean, where the plan
+said `env.clock`. Every other member of `env` is a flat value named for
+what it holds, and what this one holds is a belief about synchronisation
+rather than a clock.
 
 ## 11. v1 freeze
 
@@ -564,6 +611,45 @@ further change to this schema is a version bump (§10).
       executable the protocol client resolved, hashed before launch;
       `env.probavi_digest` from the running program's own path. A read
       failure records null and never fails the drill. Done 2026-08-05.
+
+### 11.3 v3, and what it still owes
+
+v3 is **specified and normative as of 2026-09-26**, and not yet
+implemented. It is frozen against further change on the same terms as v1
+and v2 from the day the list below is complete; until then a correction to
+this specification is a correction rather than a v4.
+
+- [x] Machine-readable JSON Schema: `recordV3` in
+      `docs/schemas/evidence/record.json`, with the §3 example validating
+      against it so the document and its derived schema cannot drift, and
+      with v0/v1/v2 records still rejected if they carry a v3 field.
+      Done 2026-09-26, with this specification.
+- [x] `docs/sandbox-providers.md` §6.1 states what a provider must answer
+      about the image it ran and the limits it applied, since two of the
+      six fields are a question providers were not asked before. That
+      document is normative, so it moved with this one and before the
+      code that reads it. Done 2026-09-26.
+- [ ] The core populates all six. A read failure records null and never
+      fails a drill — the rule v2 set for the digests, applied to a
+      clock, an image and a pair of limits.
+- [ ] `spec/evidence` accepts `probavi-evidence/3`, with a v3 record
+      verified against the committed public key, a v2→v3 chain shown to
+      run straight through, and `probavi-evidence/4` still refused. The
+      test pinning the verifier's supported set in both directions moves
+      with it.
+- [ ] Worked example: a byte-exact signed `log_v3.jsonl` beside the
+      earlier vectors (§12), verified offline in CI by this repository's
+      writer *and* by the independent verifier. It carries both shapes:
+      a record with all six populated, and one where they are null
+      because nothing measured them. `log_v0.jsonl`, `log_v1.jsonl` and
+      `log_v2.jsonl` stay byte-frozen and MUST never be regenerated.
+
+What v3 deliberately does **not** carry, for the reason `ROADMAP.md`
+already records: a `timings_ms.fetch` phase. The core downloads nothing
+today, and whether it ever will is an open question rather than a settled
+plan — a fixed-shape schema would carry that field as null in every
+record forever if the door stays shut. If it opens, the phase is part of
+that decision and gets its own bump.
 
 ## 12. Independent verification
 

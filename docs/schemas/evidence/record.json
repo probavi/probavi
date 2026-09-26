@@ -1,185 +1,512 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://probavi.dev/schemas/evidence/record.json",
-  "title": "Probavi evidence record — every published schema version",
-  "description": "One evidence record as stored on a log line (evidence-schema.md §3), i.e. including sig. The message that is signed is the same record with the sig member removed entirely (§6). Each record validates against exactly one published version branch; verifiers MUST support every published version (§10). This schema checks shape only — canonical byte form, hash chaining, and signatures are defined in §4–§6 and cannot be expressed in JSON Schema.",
+  "title": "Probavi evidence record \u2014 every published schema version",
+  "description": "One evidence record as stored on a log line (evidence-schema.md \u00a73), i.e. including sig. The message that is signed is the same record with the sig member removed entirely (\u00a76). Each record validates against exactly one published version branch; verifiers MUST support every published version (\u00a710). This schema checks shape only \u2014 canonical byte form, hash chaining, and signatures are defined in \u00a74\u2013\u00a76 and cannot be expressed in JSON Schema.",
   "$comment": "Derived from docs/evidence-schema.md, which is normative; on any disagreement the markdown document wins. Timestamp patterns are structural approximations (they do not reject e.g. month 13); conforming implementations fully parse RFC 3339.",
   "oneOf": [
-    { "$ref": "#/$defs/recordV0" },
-    { "$ref": "#/$defs/recordV1" },
-    { "$ref": "#/$defs/recordV2" }
+    {
+      "$ref": "#/$defs/recordV0"
+    },
+    {
+      "$ref": "#/$defs/recordV1"
+    },
+    {
+      "$ref": "#/$defs/recordV2"
+    },
+    {
+      "$ref": "#/$defs/recordV3"
+    }
   ],
   "$defs": {
     "recordV2": {
-      "title": "probavi-evidence/2 — v1 plus adapter.digest and env.probavi_digest",
+      "title": "probavi-evidence/2 \u2014 v1 plus adapter.digest and env.probavi_digest",
       "type": "object",
       "properties": {
-        "schema": { "const": "probavi-evidence/2" },
-        "seq": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
-        "prev_hash": { "$ref": "#/$defs/sha256Ref" },
-        "ts": { "$ref": "#/$defs/tsMilliZ" },
+        "schema": {
+          "const": "probavi-evidence/2"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "prev_hash": {
+          "$ref": "#/$defs/sha256Ref"
+        },
+        "ts": {
+          "$ref": "#/$defs/tsMilliZ"
+        },
         "drill": {
           "type": "object",
           "properties": {
-            "name": { "type": "string", "minLength": 1 },
-            "config_hash": { "$ref": "#/$defs/sha256Ref" },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "config_hash": {
+              "$ref": "#/$defs/sha256Ref"
+            },
             "pitr_target": {
-              "oneOf": [{ "$ref": "#/$defs/tsMilliZ" }, { "type": "null" }],
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/tsMilliZ"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "description": "The resolved absolute PITR target the drill demanded of the adapter; null when the drill did not request PITR."
             }
           },
-          "required": ["name", "config_hash", "pitr_target"],
+          "required": [
+            "name",
+            "config_hash",
+            "pitr_target"
+          ],
           "additionalProperties": false
         },
-        "backup": { "$ref": "#/$defs/backup" },
-        "adapter": { "$ref": "#/$defs/adapterV2" },
-        "sandbox": { "$ref": "#/$defs/sandbox" },
-        "timings_ms": { "$ref": "#/$defs/timings" },
-        "checks": { "$ref": "#/$defs/checks" },
-        "outcome": { "enum": ["pass", "fail", "error", "cancelled"] },
-        "error": { "oneOf": [{ "$ref": "#/$defs/drillError" }, { "type": "null" }] },
-        "env": { "$ref": "#/$defs/envV2" },
-        "sig": { "$ref": "#/$defs/sig" }
+        "backup": {
+          "$ref": "#/$defs/backup"
+        },
+        "adapter": {
+          "$ref": "#/$defs/adapterV2"
+        },
+        "sandbox": {
+          "$ref": "#/$defs/sandbox"
+        },
+        "timings_ms": {
+          "$ref": "#/$defs/timings"
+        },
+        "checks": {
+          "$ref": "#/$defs/checks"
+        },
+        "outcome": {
+          "enum": [
+            "pass",
+            "fail",
+            "error",
+            "cancelled"
+          ]
+        },
+        "error": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/drillError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "env": {
+          "$ref": "#/$defs/envV2"
+        },
+        "sig": {
+          "$ref": "#/$defs/sig"
+        }
       },
       "required": [
-        "schema", "seq", "prev_hash", "ts", "drill", "backup", "adapter",
-        "sandbox", "timings_ms", "checks", "outcome", "error", "env", "sig"
+        "schema",
+        "seq",
+        "prev_hash",
+        "ts",
+        "drill",
+        "backup",
+        "adapter",
+        "sandbox",
+        "timings_ms",
+        "checks",
+        "outcome",
+        "error",
+        "env",
+        "sig"
       ],
       "additionalProperties": false,
-      "allOf": [{ "$ref": "#/$defs/errorIffNotPass" }]
+      "allOf": [
+        {
+          "$ref": "#/$defs/errorIffNotPass"
+        }
+      ]
     },
     "recordV1": {
-      "title": "probavi-evidence/1 — v2 without the digest fields",
+      "title": "probavi-evidence/1 \u2014 v2 without the digest fields",
       "type": "object",
       "properties": {
-        "schema": { "const": "probavi-evidence/1" },
-        "seq": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
-        "prev_hash": { "$ref": "#/$defs/sha256Ref" },
-        "ts": { "$ref": "#/$defs/tsMilliZ" },
+        "schema": {
+          "const": "probavi-evidence/1"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "prev_hash": {
+          "$ref": "#/$defs/sha256Ref"
+        },
+        "ts": {
+          "$ref": "#/$defs/tsMilliZ"
+        },
         "drill": {
           "type": "object",
           "properties": {
-            "name": { "type": "string", "minLength": 1 },
-            "config_hash": { "$ref": "#/$defs/sha256Ref" },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "config_hash": {
+              "$ref": "#/$defs/sha256Ref"
+            },
             "pitr_target": {
-              "oneOf": [{ "$ref": "#/$defs/tsMilliZ" }, { "type": "null" }],
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/tsMilliZ"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "description": "The resolved absolute PITR target the drill demanded of the adapter; null when the drill did not request PITR."
             }
           },
-          "required": ["name", "config_hash", "pitr_target"],
+          "required": [
+            "name",
+            "config_hash",
+            "pitr_target"
+          ],
           "additionalProperties": false
         },
-        "backup": { "$ref": "#/$defs/backup" },
-        "adapter": { "$ref": "#/$defs/adapter" },
-        "sandbox": { "$ref": "#/$defs/sandbox" },
-        "timings_ms": { "$ref": "#/$defs/timings" },
-        "checks": { "$ref": "#/$defs/checks" },
-        "outcome": { "enum": ["pass", "fail", "error", "cancelled"] },
-        "error": { "oneOf": [{ "$ref": "#/$defs/drillError" }, { "type": "null" }] },
-        "env": { "$ref": "#/$defs/env" },
-        "sig": { "$ref": "#/$defs/sig" }
+        "backup": {
+          "$ref": "#/$defs/backup"
+        },
+        "adapter": {
+          "$ref": "#/$defs/adapter"
+        },
+        "sandbox": {
+          "$ref": "#/$defs/sandbox"
+        },
+        "timings_ms": {
+          "$ref": "#/$defs/timings"
+        },
+        "checks": {
+          "$ref": "#/$defs/checks"
+        },
+        "outcome": {
+          "enum": [
+            "pass",
+            "fail",
+            "error",
+            "cancelled"
+          ]
+        },
+        "error": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/drillError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "env": {
+          "$ref": "#/$defs/env"
+        },
+        "sig": {
+          "$ref": "#/$defs/sig"
+        }
       },
       "required": [
-        "schema", "seq", "prev_hash", "ts", "drill", "backup", "adapter",
-        "sandbox", "timings_ms", "checks", "outcome", "error", "env", "sig"
+        "schema",
+        "seq",
+        "prev_hash",
+        "ts",
+        "drill",
+        "backup",
+        "adapter",
+        "sandbox",
+        "timings_ms",
+        "checks",
+        "outcome",
+        "error",
+        "env",
+        "sig"
       ],
       "additionalProperties": false,
-      "allOf": [{ "$ref": "#/$defs/errorIffNotPass" }]
+      "allOf": [
+        {
+          "$ref": "#/$defs/errorIffNotPass"
+        }
+      ]
     },
     "recordV0": {
       "title": "probavi-evidence/0 (v1 without drill.pitr_target)",
       "type": "object",
       "properties": {
-        "schema": { "const": "probavi-evidence/0" },
-        "seq": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
-        "prev_hash": { "$ref": "#/$defs/sha256Ref" },
-        "ts": { "$ref": "#/$defs/tsMilliZ" },
+        "schema": {
+          "const": "probavi-evidence/0"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "prev_hash": {
+          "$ref": "#/$defs/sha256Ref"
+        },
+        "ts": {
+          "$ref": "#/$defs/tsMilliZ"
+        },
         "drill": {
           "type": "object",
           "properties": {
-            "name": { "type": "string", "minLength": 1 },
-            "config_hash": { "$ref": "#/$defs/sha256Ref" }
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "config_hash": {
+              "$ref": "#/$defs/sha256Ref"
+            }
           },
-          "required": ["name", "config_hash"],
+          "required": [
+            "name",
+            "config_hash"
+          ],
           "additionalProperties": false
         },
-        "backup": { "$ref": "#/$defs/backup" },
-        "adapter": { "$ref": "#/$defs/adapter" },
-        "sandbox": { "$ref": "#/$defs/sandbox" },
-        "timings_ms": { "$ref": "#/$defs/timings" },
-        "checks": { "$ref": "#/$defs/checks" },
-        "outcome": { "enum": ["pass", "fail", "error", "cancelled"] },
-        "error": { "oneOf": [{ "$ref": "#/$defs/drillError" }, { "type": "null" }] },
-        "env": { "$ref": "#/$defs/env" },
-        "sig": { "$ref": "#/$defs/sig" }
+        "backup": {
+          "$ref": "#/$defs/backup"
+        },
+        "adapter": {
+          "$ref": "#/$defs/adapter"
+        },
+        "sandbox": {
+          "$ref": "#/$defs/sandbox"
+        },
+        "timings_ms": {
+          "$ref": "#/$defs/timings"
+        },
+        "checks": {
+          "$ref": "#/$defs/checks"
+        },
+        "outcome": {
+          "enum": [
+            "pass",
+            "fail",
+            "error",
+            "cancelled"
+          ]
+        },
+        "error": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/drillError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "env": {
+          "$ref": "#/$defs/env"
+        },
+        "sig": {
+          "$ref": "#/$defs/sig"
+        }
       },
       "required": [
-        "schema", "seq", "prev_hash", "ts", "drill", "backup", "adapter",
-        "sandbox", "timings_ms", "checks", "outcome", "error", "env", "sig"
+        "schema",
+        "seq",
+        "prev_hash",
+        "ts",
+        "drill",
+        "backup",
+        "adapter",
+        "sandbox",
+        "timings_ms",
+        "checks",
+        "outcome",
+        "error",
+        "env",
+        "sig"
       ],
       "additionalProperties": false,
-      "allOf": [{ "$ref": "#/$defs/errorIffNotPass" }]
+      "allOf": [
+        {
+          "$ref": "#/$defs/errorIffNotPass"
+        }
+      ]
     },
     "backup": {
       "type": "object",
       "properties": {
-        "kind": { "type": "string", "minLength": 1 },
-        "checksum": { "oneOf": [{ "$ref": "#/$defs/sha256Ref" }, { "type": "null" }] },
-        "size_bytes": { "oneOf": [{ "$ref": "#/$defs/int53" }, { "type": "null" }] },
-        "created_at": { "oneOf": [{ "$ref": "#/$defs/tsMilliZ" }, { "type": "null" }] }
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "checksum": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size_bytes": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/int53"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/tsMilliZ"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
       },
-      "required": ["kind", "checksum", "size_bytes", "created_at"],
+      "required": [
+        "kind",
+        "checksum",
+        "size_bytes",
+        "created_at"
+      ],
       "additionalProperties": false
     },
     "adapter": {
       "type": "object",
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "version": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
-        "protocol": { "type": "string", "pattern": "^probavi-adapter/(0|[1-9][0-9]*)$" }
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "protocol": {
+          "type": "string",
+          "pattern": "^probavi-adapter/(0|[1-9][0-9]*)$"
+        }
       },
-      "required": ["name", "version", "protocol"],
+      "required": [
+        "name",
+        "version",
+        "protocol"
+      ],
       "additionalProperties": false
     },
     "adapterV2": {
       "type": "object",
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "version": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
-        "protocol": { "type": "string", "pattern": "^probavi-adapter/(0|[1-9][0-9]*)$" },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "protocol": {
+          "type": "string",
+          "pattern": "^probavi-adapter/(0|[1-9][0-9]*)$"
+        },
         "digest": {
-          "oneOf": [{ "$ref": "#/$defs/sha256Ref" }, { "type": "null" }],
-          "description": "SHA-256 of the adapter executable the core resolved and launched; null when it could not be read. Attests the file the core chose, not the instructions that ran (§3)."
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256Ref"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "SHA-256 of the adapter executable the core resolved and launched; null when it could not be read. Attests the file the core chose, not the instructions that ran (\u00a73)."
         }
       },
-      "required": ["name", "version", "protocol", "digest"],
+      "required": [
+        "name",
+        "version",
+        "protocol",
+        "digest"
+      ],
       "additionalProperties": false
     },
     "sandbox": {
       "type": "object",
       "properties": {
-        "provider": { "type": "string", "minLength": 1 },
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
         "params": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
+          "additionalProperties": {
+            "type": "string"
+          },
           "description": "Provider parameters from config, values as written. Never tokens or handles."
         }
       },
-      "required": ["provider", "params"],
+      "required": [
+        "provider",
+        "params"
+      ],
       "additionalProperties": false
     },
     "timings": {
       "type": "object",
-      "description": "Per-phase durations in integer milliseconds (§3.1). Phases that never ran are null.",
+      "description": "Per-phase durations in integer milliseconds (\u00a73.1). Phases that never ran are null.",
       "properties": {
-        "provision": { "$ref": "#/$defs/nullableInt53" },
-        "engine_ready": { "$ref": "#/$defs/nullableInt53" },
-        "transfer": { "$ref": "#/$defs/nullableInt53" },
-        "restore": { "$ref": "#/$defs/nullableInt53" },
-        "validate": { "$ref": "#/$defs/nullableInt53" },
-        "total": { "$ref": "#/$defs/nullableInt53" }
+        "provision": {
+          "$ref": "#/$defs/nullableInt53"
+        },
+        "engine_ready": {
+          "$ref": "#/$defs/nullableInt53"
+        },
+        "transfer": {
+          "$ref": "#/$defs/nullableInt53"
+        },
+        "restore": {
+          "$ref": "#/$defs/nullableInt53"
+        },
+        "validate": {
+          "$ref": "#/$defs/nullableInt53"
+        },
+        "total": {
+          "$ref": "#/$defs/nullableInt53"
+        }
       },
-      "required": ["provision", "engine_ready", "transfer", "restore", "validate", "total"],
+      "required": [
+        "provision",
+        "engine_ready",
+        "transfer",
+        "restore",
+        "validate",
+        "total"
+      ],
       "additionalProperties": false
     },
     "checks": {
@@ -188,17 +515,32 @@
       "items": {
         "type": "object",
         "properties": {
-          "name": { "type": "string", "minLength": 1 },
-          "ok": { "type": "boolean" },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "ok": {
+            "type": "boolean"
+          },
           "detail": {
             "oneOf": [
-              { "type": "string", "maxLength": 256, "pattern": "^[^\\r\\n]*$" },
-              { "type": "null" }
+              {
+                "type": "string",
+                "maxLength": 256,
+                "pattern": "^[^\\r\\n]*$"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "description": "Single line, aggregates only (§8) — never query result values."
+            "description": "Single line, aggregates only (\u00a78) \u2014 never query result values."
           }
         },
-        "required": ["name", "ok", "detail"],
+        "required": [
+          "name",
+          "ok",
+          "detail"
+        ],
         "additionalProperties": false
       }
     },
@@ -222,75 +564,464 @@
             "internal",
             "check_failed"
           ],
-          "description": "The adapter-protocol §5 registry plus check_failed, which is defined by the evidence schema (§7)."
+          "description": "The adapter-protocol \u00a75 registry plus check_failed, which is defined by the evidence schema (\u00a77)."
         },
-        "message": { "type": "string", "maxLength": 512, "pattern": "^[^\\r\\n]*$" }
+        "message": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^[^\\r\\n]*$"
+        }
       },
-      "required": ["code", "message"],
+      "required": [
+        "code",
+        "message"
+      ],
       "additionalProperties": false
     },
     "errorIffNotPass": {
-      "description": "error is null exactly when outcome is pass (§7).",
+      "description": "error is null exactly when outcome is pass (\u00a77).",
       "if": {
-        "properties": { "outcome": { "const": "pass" } },
-        "required": ["outcome"]
+        "properties": {
+          "outcome": {
+            "const": "pass"
+          }
+        },
+        "required": [
+          "outcome"
+        ]
       },
-      "then": { "properties": { "error": { "type": "null" } } },
-      "else": { "properties": { "error": { "type": "object" } } }
+      "then": {
+        "properties": {
+          "error": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "error": {
+            "type": "object"
+          }
+        }
+      }
     },
     "env": {
       "type": "object",
       "properties": {
-        "probavi_version": { "type": "string", "minLength": 1 },
-        "os": { "type": "string", "minLength": 1 },
-        "arch": { "type": "string", "minLength": 1 },
-        "host_id": { "$ref": "#/$defs/hex16" }
+        "probavi_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "os": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "host_id": {
+          "$ref": "#/$defs/hex16"
+        }
       },
-      "required": ["probavi_version", "os", "arch", "host_id"],
+      "required": [
+        "probavi_version",
+        "os",
+        "arch",
+        "host_id"
+      ],
       "additionalProperties": false
     },
     "envV2": {
       "type": "object",
       "properties": {
-        "probavi_version": { "type": "string", "minLength": 1 },
-        "os": { "type": "string", "minLength": 1 },
-        "arch": { "type": "string", "minLength": 1 },
-        "host_id": { "$ref": "#/$defs/hex16" },
+        "probavi_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "os": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "host_id": {
+          "$ref": "#/$defs/hex16"
+        },
         "probavi_digest": {
-          "oneOf": [{ "$ref": "#/$defs/sha256Ref" }, { "type": "null" }],
-          "description": "SHA-256 of the probavi executable that wrote the record; null when it could not be read. Carries the same attestation limit as adapter.digest (§3)."
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256Ref"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "SHA-256 of the probavi executable that wrote the record; null when it could not be read. Carries the same attestation limit as adapter.digest (\u00a73)."
         }
       },
-      "required": ["probavi_version", "os", "arch", "host_id", "probavi_digest"],
+      "required": [
+        "probavi_version",
+        "os",
+        "arch",
+        "host_id",
+        "probavi_digest"
+      ],
       "additionalProperties": false
     },
     "sig": {
       "type": "object",
       "properties": {
-        "alg": { "const": "ed25519" },
-        "key_id": { "$ref": "#/$defs/hex16" },
+        "alg": {
+          "const": "ed25519"
+        },
+        "key_id": {
+          "$ref": "#/$defs/hex16"
+        },
         "sig_b64": {
           "type": "string",
           "pattern": "^[A-Za-z0-9+/]{86}==$",
           "description": "RFC 4648 standard base64 (with padding) of the 64-byte signature."
         }
       },
-      "required": ["alg", "key_id", "sig_b64"],
+      "required": [
+        "alg",
+        "key_id",
+        "sig_b64"
+      ],
       "additionalProperties": false
     },
-    "sha256Ref": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "sha256Ref": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
     "tsMilliZ": {
       "type": "string",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
-      "description": "RFC 3339 UTC with exactly millisecond precision and Z suffix (§3)."
+      "description": "RFC 3339 UTC with exactly millisecond precision and Z suffix (\u00a73)."
     },
-    "hex16": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+    "hex16": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$"
+    },
     "int53": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991,
-      "description": "The §4 integer restriction: |n| ≤ 2^53 − 1; negative values never occur in these fields."
+      "description": "The \u00a74 integer restriction: |n| \u2264 2^53 \u2212 1; negative values never occur in these fields."
     },
-    "nullableInt53": { "oneOf": [{ "$ref": "#/$defs/int53" }, { "type": "null" }] }
+    "nullableInt53": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/int53"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "backupV3": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "checksum": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256Ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size_bytes": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/int53"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/tsMilliZ"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "manifest_hash": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256Ref"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "sha256: of the backup manifest's bytes, pinning which manifest was believed; null when the configuration named none."
+        },
+        "manifest_match": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Whether the artifact agreed with that manifest; null when the configuration named none. The expectation itself is deliberately absent: it is not comparable to backup.checksum beside it."
+        },
+        "newest_data_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/tsMilliZ"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The newest instant found in the restored data, read from the engine after the restore. A measurement, never a claim: neither backup.created_at nor a manifest's created_at may populate it. Null when the drill measured none."
+        }
+      },
+      "required": [
+        "kind",
+        "checksum",
+        "size_bytes",
+        "created_at",
+        "manifest_hash",
+        "manifest_match",
+        "newest_data_at"
+      ],
+      "additionalProperties": false
+    },
+    "sandboxV3": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Provider parameters from config, values as written. Never tokens or handles."
+        },
+        "image_digest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256Ref"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "sha256: of the engine image the sandbox actually ran. Null where there is no image, as on a bare host, or where the provider cannot answer. sandbox.params.image holds a tag, which points at different bytes over time."
+        },
+        "resources": {
+          "type": "object",
+          "description": "What the provider applied, not what the configuration asked for. Both members are null wherever a provider cannot answer.",
+          "properties": {
+            "memory_bytes": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/int53"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cpus_milli": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/int53"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Applied CPU limit in thousandths of a CPU: 1500 is one and a half. Thousandths because \u00a74 admits no number that is not an integer."
+            }
+          },
+          "required": [
+            "memory_bytes",
+            "cpus_milli"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "provider",
+        "params",
+        "image_digest",
+        "resources"
+      ],
+      "additionalProperties": false
+    },
+    "envV3": {
+      "type": "object",
+      "properties": {
+        "probavi_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "os": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "host_id": {
+          "$ref": "#/$defs/hex16"
+        },
+        "probavi_digest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256Ref"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "SHA-256 of the probavi executable that wrote the record; null when it could not be read. Carries the same attestation limit as adapter.digest (\u00a73)."
+        },
+        "clock_synchronised": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Whether the host believed its clock was synchronised. A belief, not a time: a lying time source produces the same true. Null outside systemd and on any failed read."
+        }
+      },
+      "required": [
+        "probavi_version",
+        "os",
+        "arch",
+        "host_id",
+        "probavi_digest",
+        "clock_synchronised"
+      ],
+      "additionalProperties": false
+    },
+    "recordV3": {
+      "title": "probavi-evidence/3 \u2014 v2 plus the backup manifest verdict, the restored data's newest instant, what the sandbox actually was, and the host's clock belief",
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "probavi-evidence/3"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "prev_hash": {
+          "$ref": "#/$defs/sha256Ref"
+        },
+        "ts": {
+          "$ref": "#/$defs/tsMilliZ"
+        },
+        "drill": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "config_hash": {
+              "$ref": "#/$defs/sha256Ref"
+            },
+            "pitr_target": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/tsMilliZ"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The resolved absolute PITR target the drill demanded of the adapter; null when the drill did not request PITR."
+            }
+          },
+          "required": [
+            "name",
+            "config_hash",
+            "pitr_target"
+          ],
+          "additionalProperties": false
+        },
+        "backup": {
+          "$ref": "#/$defs/backupV3"
+        },
+        "adapter": {
+          "$ref": "#/$defs/adapterV2"
+        },
+        "sandbox": {
+          "$ref": "#/$defs/sandboxV3"
+        },
+        "timings_ms": {
+          "$ref": "#/$defs/timings"
+        },
+        "checks": {
+          "$ref": "#/$defs/checks"
+        },
+        "outcome": {
+          "enum": [
+            "pass",
+            "fail",
+            "error",
+            "cancelled"
+          ]
+        },
+        "error": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/drillError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "env": {
+          "$ref": "#/$defs/envV3"
+        },
+        "sig": {
+          "$ref": "#/$defs/sig"
+        }
+      },
+      "required": [
+        "schema",
+        "seq",
+        "prev_hash",
+        "ts",
+        "drill",
+        "backup",
+        "adapter",
+        "sandbox",
+        "timings_ms",
+        "checks",
+        "outcome",
+        "error",
+        "env",
+        "sig"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "$ref": "#/$defs/errorIffNotPass"
+        }
+      ]
+    }
   }
 }
