@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -643,4 +644,100 @@ func randomSuffix() string {
 		return "p" + strconv.Itoa(os.Getpid())
 	}
 	return hex.EncodeToString(b[:])
+}
+
+// factsPath asks the API server for what the pod actually runs and what
+// the kubelet recorded as its container's limits. imageID is the digest
+// the node resolved the tag to, which is the fact a record wants — `image`
+// is the tag, and a tag points at different bytes over time.
+const factsPath = `{.status.containerStatuses[0].imageID} ` +
+	`{.spec.containers[0].resources.limits.memory} ` +
+	`{.spec.containers[0].resources.limits.cpu}`
+
+// Facts reports what this pod actually ran and the limits its spec carries
+// (sandbox-providers.md §6.1).
+//
+// A Job without limits is the ordinary case here and reports nil for both:
+// a pod with no limits takes what the node has, which is not a number this
+// record may state. That is the same absence docker's zero produces, and
+// it is why §6.1 makes null always acceptable.
+func (s *Sandbox) Facts(ctx context.Context) sandbox.Facts {
+	stdout, stderr, _, exit, err := s.p.run.Run(ctx, nil, nil, s.p.bin,
+		"get", "pod", s.pod, "-n", s.namespace, "-o", "jsonpath="+factsPath)
+	if err != nil || exit != 0 {
+		s.p.logger.Debug("sandbox facts unavailable", "pod", s.pod, "exit", exit,
+			"err", err, "stderr", firstLine(stderr))
+		return sandbox.Facts{}
+	}
+	fields := strings.Fields(string(stdout))
+	facts := sandbox.Facts{}
+	if len(fields) > 0 {
+		facts.ImageDigest = imageDigestOrNil(fields[0])
+	}
+	if len(fields) > 1 {
+		facts.MemoryBytes = quantityBytes(fields[1])
+	}
+	if len(fields) > 2 {
+		facts.CPUsMilli = quantityMilli(fields[2])
+	}
+	return facts
+}
+
+// imageDigestOrNil extracts the digest from a container status's imageID,
+// which the kubelet writes as "<repo>@sha256:<hex>" for an image it pulled
+// by digest and may write without one for an image loaded locally. Only
+// the published form is recorded; anything else records nothing.
+func imageDigestOrNil(imageID string) *string {
+	_, digest, found := strings.Cut(imageID, "@")
+	if !found || !imageDigestPattern.MatchString(digest) {
+		return nil
+	}
+	return &digest
+}
+
+var imageDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// quantityBytes reads a Kubernetes memory quantity — a plain number of
+// bytes, or one with a binary or decimal suffix. Anything it cannot read
+// is nil rather than a guess.
+func quantityBytes(q string) *int64 {
+	multipliers := []struct {
+		suffix string
+		factor int64
+	}{
+		{"Ki", 1 << 10}, {"Mi", 1 << 20}, {"Gi", 1 << 30}, {"Ti", 1 << 40},
+		{"k", 1000}, {"M", 1000 * 1000}, {"G", 1000 * 1000 * 1000}, {"T", 1e12},
+	}
+	for _, m := range multipliers {
+		if num, ok := strings.CutSuffix(q, m.suffix); ok {
+			return positiveOrNil(num, m.factor)
+		}
+	}
+	return positiveOrNil(q, 1)
+}
+
+// quantityMilli reads a Kubernetes CPU quantity, which is either a number
+// of CPUs or a millicore count written with an "m" suffix.
+func quantityMilli(q string) *int64 {
+	if num, ok := strings.CutSuffix(q, "m"); ok {
+		return positiveOrNil(num, 1)
+	}
+	return positiveOrNil(q, 1000)
+}
+
+// positiveOrNil multiplies by factor and returns nil for anything that is
+// not a positive number, so "no limit" stays an absence rather than
+// becoming a limit of zero. Fractional CPU counts are accepted because a
+// spec may carry 1.5; the schema's integer rule is satisfied by the
+// thousandths the caller asks for.
+func positiveOrNil(s string, factor int64) *int64 {
+	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil || f <= 0 {
+		return nil
+	}
+	v := int64(f * float64(factor))
+	if v <= 0 {
+		return nil
+	}
+	return &v
 }

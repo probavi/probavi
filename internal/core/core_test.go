@@ -93,6 +93,9 @@ type fakeSandbox struct {
 	execValue    string
 	destroyed    int
 	destroyErr   error
+	// facts is what this sandbox says it actually was. The zero value is
+	// the provider that cannot answer, which the record carries as null.
+	facts sandbox.Facts
 }
 
 func (f *fakeSandbox) Exec(_ context.Context, req sandbox.ExecRequest) (*sandbox.ExecResult, error) {
@@ -104,7 +107,12 @@ func (f *fakeSandbox) PutFile(context.Context, string, string, string) (*sandbox
 	return &sandbox.PutFileResult{}, nil
 }
 
-func (f *fakeSandbox) ID() string                    { return "sbx-1" }
+func (f *fakeSandbox) ID() string { return "sbx-1" }
+
+// Facts answers what a provider would: a test sets what it wants the
+// record to carry, and the zero value is the provider that cannot say.
+func (f *fakeSandbox) Facts(context.Context) sandbox.Facts { return f.facts }
+
 func (f *fakeSandbox) ScratchDir() string            { return "/tmp" }
 func (f *fakeSandbox) Destroy(context.Context) error { f.destroyed++; return f.destroyErr }
 
@@ -1109,5 +1117,190 @@ func TestDialectFromCarriesWhatTheAdapterDeclared(t *testing.T) {
 	}
 	if d.Statements["row_count"] != "SELECT COUNT(*) FROM {{table}}" {
 		t.Errorf("statements = %v, want the declared row_count", d.Statements)
+	}
+}
+
+// --- the host's clock belief ------------------------------------------------
+
+// TestClockSynchronisedReadsABeliefNotATime covers every answer the probe
+// can give, including the ones that must produce nil. A field the schema
+// allows to be null must never guess: "not synchronised" is a claim, and
+// nothing that failed to ask is entitled to make it.
+func TestClockSynchronisedReadsABelief(t *testing.T) {
+	tests := []struct {
+		name string
+		out  string
+		err  error
+		want *bool
+	}{
+		{"synchronised", "yes\n", nil, boolPtr(true)},
+		{"not synchronised", "no\n", nil, boolPtr(false)},
+		{"no time daemon", "", errors.New("exec: \"timedatectl\": executable file not found"), nil},
+		{"an answer this code does not understand", "maybe\n", nil, nil},
+		{"nothing at all", "", nil, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &Drill{Logger: slog.New(slog.DiscardHandler)}
+			d.ProbeClock = func(context.Context) (string, error) { return tc.out, tc.err }
+			got := d.clockSynchronised(context.Background())
+			switch {
+			case tc.want == nil && got != nil:
+				t.Errorf("clockSynchronised() = %v, want nil — nothing may claim what was not read", *got)
+			case tc.want != nil && got == nil:
+				t.Errorf("clockSynchronised() = nil, want %v", *tc.want)
+			case tc.want != nil && *got != *tc.want:
+				t.Errorf("clockSynchronised() = %v, want %v", *got, *tc.want)
+			}
+		})
+	}
+}
+
+// --- what probavi-evidence/3 added -------------------------------------------
+
+// TestRecordCarriesWhatV3Added walks the six fields end to end: the
+// manifest the drill believed and whether it agreed, the newest instant
+// the checks read, what the sandbox actually was, and what the host
+// believed about its clock.
+func TestRecordCarriesWhatV3Added(t *testing.T) {
+	fa := &fakeAdapter{probe: testProbe(), provRes: testProvision(), healthy: true}
+	digest := "sha256:" + strings.Repeat("ab", 32)
+	memory, cpus := int64(2147483648), int64(1500)
+	fp := &fakeProvider{sbx: &fakeSandbox{
+		execValue: "2026-09-20T10:00:00Z",
+		facts: sandbox.Facts{
+			ImageDigest: &digest, MemoryBytes: &memory, CPUsMilli: &cpus,
+		},
+	}}
+	d, _ := newDrill(t, fa, fp)
+	d.ProbeClock = func(context.Context) (string, error) { return "yes\n", nil }
+	content := "the bytes the backup tool wrote"
+	sum := sha256.Sum256([]byte(content))
+	_, manifestPath := manifestFixture(t, d.Config, content, fmt.Sprintf(
+		`{"schema":"probavi-manifest/1","expected_checksum":"sha256:%x"}`, sum))
+	// A freshness check is what reads the restored data's newest instant:
+	// the core cannot go looking on its own, because which column holds it
+	// is exactly what the check is configured to say.
+	d.Config.Checks = []config.Check{
+		{Builtin: config.CheckFreshness, Table: "orders", Column: "ts",
+			MaxAge: config.Duration(24 * 365 * 100 * time.Hour)},
+	}
+
+	rec, err := d.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rec.Schema != "probavi-evidence/3" {
+		t.Fatalf("schema = %q, want probavi-evidence/3", rec.Schema)
+	}
+
+	wantHash := fmt.Sprintf("sha256:%x", sha256.Sum256(readFixture(t, manifestPath)))
+	for name, got := range map[string]*string{
+		"backup.manifest_hash":  rec.Backup.ManifestHash,
+		"backup.newest_data_at": rec.Backup.NewestDataAt,
+		"sandbox.image_digest":  rec.Sandbox.ImageDigest,
+	} {
+		want := map[string]string{
+			"backup.manifest_hash":  wantHash,
+			"backup.newest_data_at": "2026-09-20T10:00:00.000Z",
+			"sandbox.image_digest":  digest,
+		}[name]
+		if got == nil || *got != want {
+			t.Errorf("%s = %v, want %q", name, deref(got), want)
+		}
+	}
+	for name, got := range map[string]*int64{
+		"resources.memory_bytes": rec.Sandbox.Resources.MemoryBytes,
+		"resources.cpus_milli":   rec.Sandbox.Resources.CPUsMilli,
+	} {
+		want := map[string]int64{"resources.memory_bytes": memory, "resources.cpus_milli": cpus}[name]
+		if got == nil || *got != want {
+			t.Errorf("%s = %v, want %d — what the provider applied", name, got, want)
+		}
+	}
+	for name, got := range map[string]*bool{
+		"backup.manifest_match":  rec.Backup.ManifestMatch,
+		"env.clock_synchronised": rec.Env.ClockSynchronised,
+	} {
+		if got == nil || !*got {
+			t.Errorf("%s = %v, want true", name, got)
+		}
+	}
+}
+
+// TestV3FieldsAreNullWhenNothingMeasuredThem is the other shape §3 allows,
+// and the one most drills produce: no manifest named, a provider that
+// cannot say what it applied, no freshness check, no time daemon. Null is
+// an answer here, and a record that guessed instead would be stating what
+// nothing measured.
+func TestV3FieldsAreNullWhenNothingMeasuredThem(t *testing.T) {
+	fa := &fakeAdapter{probe: testProbe(), provRes: testProvision(), healthy: true}
+	fp := &fakeProvider{sbx: &fakeSandbox{execValue: "1"}}
+	d, _ := newDrill(t, fa, fp)
+	d.ProbeClock = func(context.Context) (string, error) { return "", errors.New("no timedatectl") }
+
+	rec, err := d.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rec.Outcome != evidence.OutcomePass {
+		t.Fatalf("outcome = %q (%+v), want pass", rec.Outcome, rec.Error)
+	}
+	for name, got := range map[string]any{
+		"backup.manifest_hash":   rec.Backup.ManifestHash,
+		"backup.manifest_match":  rec.Backup.ManifestMatch,
+		"backup.newest_data_at":  rec.Backup.NewestDataAt,
+		"sandbox.image_digest":   rec.Sandbox.ImageDigest,
+		"resources.memory_bytes": rec.Sandbox.Resources.MemoryBytes,
+		"resources.cpus_milli":   rec.Sandbox.Resources.CPUsMilli,
+		"env.clock_synchronised": rec.Env.ClockSynchronised,
+	} {
+		if !isNilPtr(got) {
+			t.Errorf("%s = %v, want null — nothing measured it", name, got)
+		}
+	}
+}
+
+// TestNewestDataAtTakesTheMaximum: a drill asserting freshness over
+// several tables has measured several instants, and how much data a
+// recovery would have lost is bounded by the newest of them — not by the
+// first read, nor the last.
+func TestNewestDataAtTakesTheMaximum(t *testing.T) {
+	older := time.Date(2026, 9, 18, 8, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC)
+	got := newestDataAt([]checks.Result{
+		{Name: "freshness:a.ts", NewestData: &older},
+		{Name: "row_count:b"},
+		{Name: "freshness:c.ts", NewestData: &newer},
+	})
+	if got == nil || *got != "2026-09-20T10:00:00.000Z" {
+		t.Errorf("newestDataAt = %v, want the newest of the instants read", deref(got))
+	}
+	if newestDataAt([]checks.Result{{Name: "row_count:b"}}) != nil {
+		t.Error("newestDataAt over checks that read no instant should be nil")
+	}
+}
+
+func readFixture(t *testing.T, path string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return raw
+}
+
+// isNilPtr reports whether a typed nil pointer was handed over as an any,
+// which a plain == nil comparison would miss.
+func isNilPtr(v any) bool {
+	switch p := v.(type) {
+	case *string:
+		return p == nil
+	case *bool:
+		return p == nil
+	case *int64:
+		return p == nil
+	default:
+		return v == nil
 	}
 }

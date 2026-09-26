@@ -711,3 +711,110 @@ func TestExecRejectsUnexpressibleEnv(t *testing.T) {
 		t.Error("nothing may be executed when the environment cannot be expressed")
 	}
 }
+
+// TestQuantityParsing covers the shapes a pod spec actually carries.
+// Kubernetes writes memory with binary or decimal suffixes and CPU either
+// as a count or in millicores, and a limit nobody set is absent rather
+// than zero — which is why every unreadable answer here is nil.
+func TestQuantityParsing(t *testing.T) {
+	memory := map[string]int64{
+		"512Mi": 536870912, "2Gi": 2147483648, "1Ki": 1024,
+		"1000000": 1000000, "500M": 500000000,
+		"": 0, "banana": 0, "0": 0, "-1": 0,
+	}
+	for in, want := range memory {
+		got := quantityBytes(in)
+		if want == 0 && got != nil {
+			t.Errorf("quantityBytes(%q) = %d, want nil", in, *got)
+		} else if want != 0 && (got == nil || *got != want) {
+			t.Errorf("quantityBytes(%q) = %v, want %d", in, got, want)
+		}
+	}
+	cpu := map[string]int64{
+		"1500m": 1500, "500m": 500, "2": 2000, "1.5": 1500,
+		"": 0, "0": 0, "banana": 0,
+	}
+	for in, want := range cpu {
+		got := quantityMilli(in)
+		if want == 0 && got != nil {
+			t.Errorf("quantityMilli(%q) = %d, want nil", in, *got)
+		} else if want != 0 && (got == nil || *got != want) {
+			t.Errorf("quantityMilli(%q) = %v, want %d", in, got, want)
+		}
+	}
+}
+
+// TestImageDigestOrNil: the kubelet writes imageID as "<repo>@sha256:<hex>"
+// for an image it pulled by digest, and may write no digest at all for one
+// loaded locally. Only the published form is recorded — a record naming an
+// image must name bytes, not a tag.
+func TestImageDigestOrNil(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("7a", 32)
+	for in, want := range map[string]string{
+		"docker.io/library/postgres@" + digest: digest,
+		digest:                                 "",
+		"postgres:16":                          "",
+		"":                                     "",
+		"repo@sha256:short":                    "",
+	} {
+		got := imageDigestOrNil(in)
+		if want == "" && got != nil {
+			t.Errorf("imageDigestOrNil(%q) = %q, want nil", in, *got)
+		} else if want != "" && (got == nil || *got != want) {
+			t.Errorf("imageDigestOrNil(%q) = %v, want %q", in, got, want)
+		}
+	}
+}
+
+// TestFactsReadsThePodRatherThanTheRequest: the values come from the API
+// server's record of the pod, not from the parameters this provider was
+// handed. A Job without limits is the ordinary case and reports nil for
+// both — a pod with no limits takes what the node has, which is not a
+// number a record may state.
+func TestFactsReadsThePodRatherThanTheRequest(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("7a", 32)
+	tests := []struct {
+		name       string
+		stdout     string
+		exit       int
+		err        error
+		wantImage  string
+		wantMemory int64
+		wantCPU    int64
+	}{
+		{"limits set", "docker.io/library/postgres@" + digest + " 2Gi 1500m", 0, nil, digest, 2147483648, 1500},
+		{"no limits set", "docker.io/library/postgres@" + digest + " ", 0, nil, digest, 0, 0},
+		{"nothing at all", "", 0, nil, "", 0, 0},
+		{"kubectl failed", "", 1, nil, "", 0, 0},
+		{"kubectl could not run", "", 0, errors.New("kubectl not found"), "", 0, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, _ := testProvider(t, response{stdout: tc.stdout, exit: tc.exit, err: tc.err})
+			got := (&Sandbox{job: "j", pod: "p", namespace: "n", p: p}).Facts(context.Background())
+			checkStrPtr(t, "image_digest", got.ImageDigest, tc.wantImage)
+			checkIntPtr(t, "memory_bytes", got.MemoryBytes, tc.wantMemory)
+			checkIntPtr(t, "cpus_milli", got.CPUsMilli, tc.wantCPU)
+		})
+	}
+}
+
+func checkStrPtr(t *testing.T, name string, got *string, want string) {
+	t.Helper()
+	switch {
+	case want == "" && got != nil:
+		t.Errorf("%s = %q, want nil", name, *got)
+	case want != "" && (got == nil || *got != want):
+		t.Errorf("%s = %v, want %q", name, got, want)
+	}
+}
+
+func checkIntPtr(t *testing.T, name string, got *int64, want int64) {
+	t.Helper()
+	switch {
+	case want == 0 && got != nil:
+		t.Errorf("%s = %d, want nil — unlimited and unknown are both absences", name, *got)
+	case want != 0 && (got == nil || *got != want):
+		t.Errorf("%s = %v, want %d", name, got, want)
+	}
+}

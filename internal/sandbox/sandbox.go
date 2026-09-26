@@ -42,3 +42,22 @@ type PutFileResult struct {
 	BytesCopied int64
 	Duration    time.Duration
 }
+
+// Facts are what a provider can say about the sandbox it actually created,
+// as opposed to what the drill configuration asked for
+// (sandbox-providers.md §6.1). Every member is optional, and nil is an
+// answer rather than a failure: a record that says "I do not know" is
+// worth more than one stating a limit that never held.
+type Facts struct {
+	// ImageDigest is the engine image the sandbox ran, as
+	// "sha256:<64 lowercase hex>". Nil where there is no image — a bare
+	// host — or where the runtime cannot be asked for one.
+	ImageDigest *string
+	// MemoryBytes and CPUsMilli are the limits the provider read back
+	// after creating the sandbox, never the values it was handed. Nil
+	// where no limit was applied, and nil where the provider cannot read
+	// one back: "unlimited" and "unknown" are both absences here, and
+	// neither is a number.
+	MemoryBytes *int64
+	CPUsMilli   *int64
+}

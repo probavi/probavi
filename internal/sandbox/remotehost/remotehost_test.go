@@ -787,3 +787,75 @@ func TestExecRejectsUnexpressibleEnv(t *testing.T) {
 		t.Error("nothing may be executed when the environment cannot be expressed")
 	}
 }
+
+// TestSystemdLimitParsing covers what systemctl show actually prints.
+// "infinity" is systemd's word for no limit and must stay an absence: a
+// record stating a memory cap of zero would be stating something nothing
+// applied, and a bare host is exactly where an operator reads the limits
+// to know what the timings mean.
+func TestSystemdLimitParsing(t *testing.T) {
+	for in, want := range map[string]int64{
+		"2147483648": 2147483648, "536870912": 536870912,
+		"infinity": 0, "": 0, "0": 0, "banana": 0,
+	} {
+		got := bytesOrNil(in)
+		if want == 0 && got != nil {
+			t.Errorf("bytesOrNil(%q) = %d, want nil", in, *got)
+		} else if want != 0 && (got == nil || *got != want) {
+			t.Errorf("bytesOrNil(%q) = %v, want %d", in, got, want)
+		}
+	}
+	for in, want := range map[string]int64{
+		"150%": 1500, "100%": 1000, "50%": 500,
+		"infinity": 0, "": 0, "0%": 0, "150": 0,
+	} {
+		got := quotaMilli(in)
+		if want == 0 && got != nil {
+			t.Errorf("quotaMilli(%q) = %d, want nil", in, *got)
+		} else if want != 0 && (got == nil || *got != want) {
+			t.Errorf("quotaMilli(%q) = %v, want %d", in, got, want)
+		}
+	}
+}
+
+// TestFactsReadsTheSliceRatherThanTheRequest: the values come from the
+// manager's record of the slice, not from the properties this provider
+// set — a property systemd accepted and did not apply would read back
+// differently. There is no image digest here and never will be: this
+// provider runs on a host, not from an image.
+func TestFactsReadsTheSliceRatherThanTheRequest(t *testing.T) {
+	tests := []struct {
+		name       string
+		stdout     string
+		exit       int
+		err        error
+		wantMemory int64
+		wantCPU    int64
+	}{
+		{"both capped", "2147483648\n150%\n", 0, nil, 2147483648, 1500},
+		{"nothing capped", "infinity\ninfinity\n", 0, nil, 0, 0},
+		{"memory only", "536870912\ninfinity\n", 0, nil, 536870912, 0},
+		{"nothing at all", "", 0, nil, 0, 0},
+		{"ssh failed", "", 1, nil, 0, 0},
+		{"ssh could not run", "", 0, errors.New("ssh not found"), 0, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, _ := testProvider(t, response{stdout: tc.stdout, exit: tc.exit, err: tc.err})
+			got := (&Sandbox{name: "probavi-sbx-abc", p: p}).Facts(context.Background())
+			if got.ImageDigest != nil {
+				t.Errorf("image_digest = %q, want nil — a bare host runs from no image", *got.ImageDigest)
+			}
+			if tc.wantMemory == 0 && got.MemoryBytes != nil {
+				t.Errorf("memory_bytes = %d, want nil", *got.MemoryBytes)
+			} else if tc.wantMemory != 0 && (got.MemoryBytes == nil || *got.MemoryBytes != tc.wantMemory) {
+				t.Errorf("memory_bytes = %v, want %d", got.MemoryBytes, tc.wantMemory)
+			}
+			if tc.wantCPU == 0 && got.CPUsMilli != nil {
+				t.Errorf("cpus_milli = %d, want nil", *got.CPUsMilli)
+			} else if tc.wantCPU != 0 && (got.CPUsMilli == nil || *got.CPUsMilli != tc.wantCPU) {
+				t.Errorf("cpus_milli = %v, want %d", got.CPUsMilli, tc.wantCPU)
+			}
+		})
+	}
+}

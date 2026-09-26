@@ -1,6 +1,6 @@
 # Probavi Evidence Schema — v3
 
-Status: **v3 — NORMATIVE, specified 2026-09-26; not yet implemented
+Status: **v3 — NORMATIVE, specified and implemented 2026-09-26. FROZEN
 (§11.3).** v2 was frozen 2026-08-05 and stays exactly as it was; v3 adds
 six nullable fields and changes nothing else (§10). The evidence format is
 the product's core trust artifact; treat every field and byte here as a
@@ -11,8 +11,8 @@ covering every published version lives at
 `docs/schemas/evidence/record.json` (derived from this document; on any
 disagreement this document wins).
 
-Schema identifier: `probavi-evidence/3`. Writers emit v3 once §11.3 is
-complete; verifiers MUST accept every published version —
+Schema identifier: `probavi-evidence/3`. Writers emit v3; verifiers MUST
+accept every published version —
 `probavi-evidence/0`, `/1`, `/2` and `/3` (§10).
 
 **Why one bump rather than four.** The six fields answer four separate
@@ -154,7 +154,7 @@ Field reference:
 | `backup.created_at` | string | yes | Backup's own creation time if derivable (RFC 3339 UTC, ms, `Z`). Normalized by the core from the adapter's `source_identity.created_at`, which may carry any RFC 3339 precision or offset: converted to UTC and truncated — never rounded — to milliseconds (adapter protocol §6.2). |
 | `backup.manifest_hash` | string | yes | `sha256:` of the backup manifest's bytes, pinning *which* manifest was believed, the way `drill.config_hash` pins the configuration (v3). Null when the configuration named none. |
 | `backup.manifest_match` | boolean | yes | Whether the artifact agreed with that manifest (v3). Null when the configuration named none. It is a field rather than something a reader derives, because the derivation does not work: `source_corrupt` is also what an adapter reports on a damaged artifact during provision, so a failed record carrying a manifest hash does not say which of the two happened. The expectation itself is deliberately absent — it is not comparable to `backup.checksum` beside it (`docs/backup-manifest.md` §4, §9.2), and a mismatch names both values in `error.message`, which is the one place they inform rather than mislead. |
-| `backup.newest_data_at` | string | yes | The newest instant found **in the restored data**, read from the engine after the restore (RFC 3339 UTC, ms, `Z`) (v3). Null when the drill did not measure one, which is every drill whose adapter declares no statement for it. **It is a measurement, never a claim:** `backup.created_at` is the backup's self-report and a backup manifest's `created_at` is the backup job's, and neither may populate this. What it is for is the question an auditor asks first and no other field answers — how much data a recovery from this backup would have lost. The gap is `ts` minus this instant, both of which are in the record. |
+| `backup.newest_data_at` | string | yes | The newest instant found **in the restored data**, read from the engine after the restore (RFC 3339 UTC, ms, `Z`) (v3). Null when nothing measured one, which is every drill that ran no `freshness` check. **The core does not go looking on its own, and the reason is not effort:** which table and column hold a drill's notion of *newest* is exactly what a freshness check is configured to say, and an engine that needs a statement in its own dialect to read it has one only where an adapter declared it (adapter protocol §6.1.1). A drill asserting freshness over several tables has measured several instants; this field carries the newest of them, because that is what bounds the loss. **It is a measurement, never a claim:** `backup.created_at` is the backup's self-report and a backup manifest's `created_at` is the backup job's, and neither may populate this. What it is for is the question an auditor asks first and no other field answers — how much data a recovery from this backup would have lost. The gap is `ts` minus this instant, both of which are in the record. |
 | `adapter.name` / `.version` / `.protocol` | string | version: yes | Adapter identity; protocol version actually spoken. |
 | `adapter.digest` | string | yes | `sha256:` of the adapter executable the core resolved and launched (v2). Build identity, which `adapter.version` is not: the version is a semantic number the adapter reports about itself, so two different builds can share one. Null when the file could not be read — a digest is never worth failing a drill for. **What it attests:** the bytes of the file the core selected at the path `probavi-adapter-<name>` resolved to, hashed before launch. It does not prove those bytes are the instructions that ran: a file replaced between hashing and `exec` would go unnoticed. Closing that window would mean reading `/proc/<pid>/exe`, which does not exist on every platform Probavi supports, so the narrower claim is the one this field makes. |
 | `env.probavi_digest` | string | yes | `sha256:` of the `probavi` executable that wrote the record (v2), obtained from the running program's own path. Same rationale and the same attestation limit as `adapter.digest`: the core chooses the sandbox, runs the checks and signs the record, so "which bytes produced this proof" is unanswered without it. Null when the path could not be read. |
@@ -612,12 +612,15 @@ further change to this schema is a version bump (§10).
       `env.probavi_digest` from the running program's own path. A read
       failure records null and never fails the drill. Done 2026-08-05.
 
-### 11.3 v3, and what it still owes
+### 11.3 v3 freeze
 
-v3 is **specified and normative as of 2026-09-26**. The parts that make a
-version *published* — this document, the JSON Schema, and the independent
-verifier §10 obliges to accept it — moved together, because a test holds
-them together. What is left is the writer. It is frozen against further change on the same terms as v1
+**v3 is frozen as of 2026-09-26** — every item below is complete. Any
+further change to this schema is a version bump (§10).
+
+The parts that make a version *published* — this document, the JSON
+Schema, and the independent verifier §10 obliges to accept it — moved
+together, because a test holds them together and failed the build when
+they did not. It is frozen against further change on the same terms as v1
 and v2 from the day the list below is complete; until then a correction to
 this specification is a correction rather than a v4.
 
@@ -631,9 +634,14 @@ this specification is a correction rather than a v4.
       six fields are a question providers were not asked before. That
       document is normative, so it moved with this one and before the
       code that reads it. Done 2026-09-26.
-- [ ] The core populates all six. A read failure records null and never
+- [x] The core populates all six. A read failure records null and never
       fails a drill — the rule v2 set for the digests, applied to a
-      clock, an image and a pair of limits.
+      clock, an image and a pair of limits. Done 2026-09-26. The three
+      sandbox providers answer §6.1's question from the runtime rather
+      than from the parameters they were handed, and each narrows its own
+      claim where it must: docker and Kubernetes report what their runtime
+      recorded, which is not the cgroup as the kernel holds it, and the
+      bare host has no image to report at all.
 - [x] `spec/evidence` accepts `probavi-evidence/3`, with both shapes §3
       allows verified against the committed public key — every field
       populated and every field null — a v2→v3 chain shown to run
@@ -643,12 +651,14 @@ this specification is a correction rather than a v4.
       version in the schema into an obligation on the verifier in the
       same change. Publishing `recordV3` without this failed the build,
       which is §10 working rather than a delay.
-- [ ] Worked example: a byte-exact signed `log_v3.jsonl` beside the
+- [x] Worked example: a byte-exact signed `log_v3.jsonl` beside the
       earlier vectors (§12), verified offline in CI by this repository's
       writer *and* by the independent verifier. It carries both shapes:
       a record with all six populated, and one where they are null
       because nothing measured them. `log_v0.jsonl`, `log_v1.jsonl` and
-      `log_v2.jsonl` stay byte-frozen and MUST never be regenerated.
+      `log_v2.jsonl` stay byte-frozen and MUST never be regenerated —
+      `log_v2.jsonl` joined them with this change, having lost its updater
+      to v3. Done 2026-09-26.
 
 What v3 deliberately does **not** carry, for the reason `ROADMAP.md`
 already records: a `timings_ms.fetch` phase. The core downloads nothing

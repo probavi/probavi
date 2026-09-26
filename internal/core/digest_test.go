@@ -44,8 +44,11 @@ func TestRecordCarriesBuildIdentity(t *testing.T) {
 	if rec.Env.ProbaviDigest == nil || *rec.Env.ProbaviDigest != coreDigest {
 		t.Errorf("env.probavi_digest = %v, want %q", deref(rec.Env.ProbaviDigest), coreDigest)
 	}
-	if rec.Schema != "probavi-evidence/2" {
-		t.Errorf("schema = %q, want probavi-evidence/2", rec.Schema)
+	// The version the writer emits, named rather than referenced: a test
+	// asserting evidence.SchemaID against itself would pass through any
+	// bump, and this one exists to notice one.
+	if rec.Schema != "probavi-evidence/3" {
+		t.Errorf("schema = %q, want probavi-evidence/3", rec.Schema)
 	}
 }
 

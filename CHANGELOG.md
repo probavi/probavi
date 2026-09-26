@@ -13,6 +13,54 @@ always called out explicitly.
 
 ### Added
 
+- **Records are `probavi-evidence/3`**, carrying six nullable fields the
+  earlier versions had no room for. One bump rather than four, which is
+  what the ROADMAP gathered them for.
+
+  `backup.manifest_hash` and `backup.manifest_match` say which backup
+  manifest a drill believed and whether the artifact agreed — the
+  expectation itself stays out, because it is not comparable to the
+  adapter's `backup.checksum` beside it.
+
+  `backup.newest_data_at` is the newest instant found **in the restored
+  data**, and it is a measurement rather than a claim: neither
+  `backup.created_at` nor a manifest's `created_at` may populate it. The
+  core does not go looking on its own — which table and column hold a
+  drill's notion of *newest* is exactly what a `freshness` check is
+  configured to say, so the field is that check's by-product, and null
+  for a drill that ran none. A drill asserting freshness over several
+  tables records the newest of them, because that is what bounds the
+  loss.
+
+  `sandbox.image_digest` and `sandbox.resources` say what the sandbox
+  **actually was**. `sandbox.params.image` holds a tag, which points at
+  different bytes over time; nothing until now identified the engine that
+  performed the restore. All three providers answer from the runtime
+  rather than from the parameters they were handed, and each narrows its
+  claim where it must — docker and Kubernetes report what their runtime
+  recorded, which is not the cgroup as the kernel holds it, and a bare
+  host has no image at all. **Zero is not a limit**: docker writes 0 and
+  systemd writes `infinity` for "nothing applied", and both read back as
+  null, because a record stating a memory cap of zero would state
+  something nothing applied.
+
+  `env.clock_synchronised` is whether the host **believed** its clock was
+  synchronised. Nearly everything else in a record rests on that clock —
+  `ts`, `backup.created_at`, `drill.pitr_target`, every duration — and a
+  log whose whole value is *this happened on this date* rested it on a
+  fact it never attested. It attests a belief and not a time: a lying
+  time source produces the same `true`, which is why it must never be
+  described as doing the outside witness's work.
+
+  Every one is nullable and every read failure records null rather than
+  failing a drill — the rule v2 set for the build digests, applied to a
+  clock, an image and a pair of limits. v0, v1 and v2 records stay valid
+  forever and are never rewritten; `log_v2.jsonl` joins the byte-frozen
+  vectors and `log_v3.jsonl` is published beside it, carrying both shapes
+  §3 allows.
+
+### Added
+
 - **All three generating built-ins now work against InfluxDB**
   (`adapters/influxdb` 0.6.0), declared as Flux. None applied before: the
   core composed SQL and InfluxDB 2.x has none. `table` names a

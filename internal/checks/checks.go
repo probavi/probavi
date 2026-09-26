@@ -150,9 +150,19 @@ func (d Dialect) quote(name string) (string, error) {
 // timings, not per-check ones, so measuring here would produce a number
 // nothing may publish.
 type Result struct {
-	Name   string
-	OK     bool
-	Detail string
+	Name string
+	OK   bool
+	// NewestData is the instant a freshness check read out of the
+	// restored data, kept because the record carries it as
+	// backup.newest_data_at (evidence-schema.md §3). Nil for every other
+	// kind, and for a freshness check that read nothing.
+	//
+	// It is deliberately the check's by-product rather than a measurement
+	// of its own: reading the newest value means a statement in the
+	// engine's own dialect, and freshness is where a drill already says
+	// which table and column that statement is about.
+	NewestData *time.Time
+	Detail     string
 }
 
 // Run executes every check in order. A false verdict does not stop the run
@@ -181,6 +191,7 @@ func runOne(ctx context.Context, c *config.Check, i int, deps *Deps) (*Result, e
 	var (
 		ok     bool
 		detail string
+		newest *time.Time
 		err    error
 	)
 	switch {
@@ -193,7 +204,7 @@ func runOne(ctx context.Context, c *config.Check, i int, deps *Deps) (*Result, e
 	case c.Builtin == config.CheckRowCount:
 		ok, detail, err = runRowCount(ctx, deps, c)
 	case c.Builtin == config.CheckFreshness:
-		ok, detail, err = runFreshness(ctx, deps, c)
+		ok, detail, newest, err = runFreshness(ctx, deps, c)
 	default:
 		// config.Load validates check shapes; reaching this is a bug.
 		err = fmt.Errorf("unrunnable check configuration")
@@ -202,9 +213,10 @@ func runOne(ctx context.Context, c *config.Check, i int, deps *Deps) (*Result, e
 		return nil, err
 	}
 	return &Result{
-		Name:   checkName(c, i),
-		OK:     ok,
-		Detail: truncateDetail(detail),
+		Name:       checkName(c, i),
+		OK:         ok,
+		Detail:     truncateDetail(detail),
+		NewestData: newest,
 	}, nil
 }
 
@@ -263,37 +275,40 @@ func runRowCount(ctx context.Context, deps *Deps, c *config.Check) (bool, string
 	return ok, fmt.Sprintf("%d rows (%s)", n, boundsText(c.Min, c.Max)), nil
 }
 
-func runFreshness(ctx context.Context, deps *Deps, c *config.Check) (bool, string, error) {
+func runFreshness(ctx context.Context, deps *Deps, c *config.Check) (bool, string, *time.Time, error) {
 	table, err := deps.Dialect.quote(c.Table)
 	if err != nil {
-		return false, "", err
+		return false, "", nil, err
 	}
 	column, err := deps.Dialect.quote(c.Column)
 	if err != nil {
-		return false, "", err
+		return false, "", nil, err
 	}
 	stmt := deps.Dialect.statement(config.CheckFreshness, "SELECT max("+column+") FROM "+table, table, column)
 	out, qerr := query(ctx, deps, stmt)
 	if qerr != nil {
-		return false, "", qerr
+		return false, "", nil, qerr
 	}
 	if !out.succeeded {
-		return false, "freshness query failed: " + runnerFailure(out), nil
+		return false, "freshness query failed: " + runnerFailure(out), nil, nil
 	}
 	if out.value == "" {
-		return false, "table has no rows or only NULL timestamps", nil
+		return false, "table has no rows or only NULL timestamps", nil, nil
 	}
 	newest, perr := parseTimestamp(out.value)
 	if perr != nil {
-		return false, "timestamp column returned unparseable output", nil
+		return false, "timestamp column returned unparseable output", nil, nil
 	}
 	age := deps.Now().Sub(newest)
 	if age < 0 {
 		age = 0
 	}
 	maxAge := c.MaxAge.Std()
+	// The instant goes back whatever the verdict is: a check that failed
+	// because the data is old still read when the data is from, and that
+	// is exactly the number a record carrying backup.newest_data_at wants.
 	return age <= maxAge, fmt.Sprintf("newest row is %s old (max_age %s)",
-		age.Truncate(time.Second), maxAge), nil
+		age.Truncate(time.Second), maxAge), &newest, nil
 }
 
 func runSQL(ctx context.Context, deps *Deps, sql, expect string) (bool, string, error) {

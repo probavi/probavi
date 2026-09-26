@@ -27,6 +27,7 @@ import (
 	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/evidence"
 	"github.com/probavi/probavi/internal/manifest"
+	"github.com/probavi/probavi/internal/sandbox"
 )
 
 // teardownGrace bounds cleanup work that runs after the drill context is
@@ -56,6 +57,12 @@ type Sandbox interface {
 	adapter.SandboxVerbs
 	ID() string
 	ScratchDir() string
+	// Facts are what the provider can say about the sandbox it actually
+	// created, rather than what the configuration asked for
+	// (sandbox-providers.md §6.1). It never fails a drill: a provider
+	// that cannot answer returns a zero Facts, whose absences the record
+	// carries as null.
+	Facts(ctx context.Context) sandbox.Facts
 	Destroy(ctx context.Context) error
 }
 
@@ -89,6 +96,11 @@ type Drill struct {
 	// recorded (evidence-schema.md §3). Injected for the same reason
 	// Hostname is: a test must not depend on the machine it runs on.
 	Executable func() (string, error)
+	// ProbeClock asks the host whether it believes its clock is
+	// synchronised, and is injectable for the same reason the two above
+	// are: a test must not depend on whether the machine it runs on has a
+	// time daemon. Nil uses systemd's timedatectl (clock.go).
+	ProbeClock func(ctx context.Context) (string, error)
 }
 
 // Run executes the drill and appends exactly one signed evidence record.
@@ -246,6 +258,12 @@ func (d *Drill) baseRecord() *evidence.Record {
 // and timings. It never returns an error: every failure becomes record
 // content.
 func (d *Drill) execute(ctx context.Context, rec *evidence.Record) {
+	// Asked once, at the start, so that a drill that ends in any of the
+	// ways below still records what the host believed when it ran. It is
+	// the cheapest field here and the only one that describes the machine
+	// rather than the backup.
+	rec.Env.ClockSynchronised = d.clockSynchronised(ctx)
+
 	if removed, err := d.Provider.SweepOrphans(ctx); err != nil {
 		d.Logger.Warn("orphan sweep failed", "err", err)
 	} else if len(removed) > 0 {
@@ -269,7 +287,12 @@ func (d *Drill) execute(ctx context.Context, rec *evidence.Record) {
 	// evidence log is open, before a sandbox exists and before a byte
 	// moves (docs/backup-manifest.md §5). A drill that names none is
 	// unaffected, which is every drill written before the key existed.
-	if fault := d.checkBackupManifest(); fault != nil {
+	res, fault := d.checkBackupManifest()
+	// Whatever the verdict, the record names the manifest that was read:
+	// a mismatch is exactly the case where a reader wants to know which
+	// file the drill believed.
+	rec.Backup.ManifestHash, rec.Backup.ManifestMatch = res.Hash, res.Match
+	if fault != nil {
 		d.recordFault(rec, fault)
 		return
 	}
@@ -285,6 +308,14 @@ func (d *Drill) execute(ctx context.Context, rec *evidence.Record) {
 	}
 	rec.Timings.Provision = msSince(provisionStart, d.Now())
 	defer d.destroySandbox(sbx)
+	// What the sandbox actually was, asked of the provider rather than
+	// copied from the configuration (sandbox-providers.md §6.1). Every
+	// absence is null, and none of them is worth failing a drill for.
+	facts := sbx.Facts(ctx)
+	rec.Sandbox.ImageDigest = facts.ImageDigest
+	rec.Sandbox.Resources = evidence.Resources{
+		MemoryBytes: facts.MemoryBytes, CPUsMilli: facts.CPUsMilli,
+	}
 
 	provRes, perr := d.Adapter.Provision(ctx, d.provisionRequest(sbx, rec.Drill.PITRTarget), sbx)
 	defer d.teardown(rec, provRes, sbx)
@@ -297,6 +328,7 @@ func (d *Drill) execute(ctx context.Context, rec *evidence.Record) {
 	validateStart := d.Now()
 	results, cerr := checks.Run(ctx, d.Config.Checks, d.checkDeps(probe, provRes, sbx))
 	rec.Checks = mapChecks(results)
+	rec.Backup.NewestDataAt = newestDataAt(results)
 	rec.Timings.Validate = msSince(validateStart, d.Now())
 	if cerr != nil {
 		d.classify(ctx, rec, cerr)
@@ -347,10 +379,10 @@ func (d *Drill) refusedByProbe(probe *adapter.ProbeResult, rec *evidence.Record)
 // wrote. Nothing here is engine knowledge: the rule is the core's own and
 // runs on the drill host, which is what lets it answer before any adapter
 // has spoken (docs/backup-manifest.md §4).
-func (d *Drill) checkBackupManifest() *manifest.Fault {
+func (d *Drill) checkBackupManifest() (manifest.Result, *manifest.Fault) {
 	src := d.Config.Target.Source
 	if src.Manifest == "" {
-		return nil
+		return manifest.Result{}, nil
 	}
 	return manifest.Check(src.Path, src.Manifest)
 }
@@ -520,6 +552,31 @@ func (d *Drill) classify(ctx context.Context, rec *evidence.Record, err error) {
 	}
 	rec.Error = &evidence.DrillError{Code: code, Message: message}
 	d.Logger.Error("drill did not pass", "code", code, "outcome", rec.Outcome)
+}
+
+// newestDataAt is the newest instant any freshness check read out of the
+// restored data (evidence-schema.md §3). Nil when no check read one, which
+// is every drill that configured no freshness check: the core cannot go
+// looking on its own, because which table and column hold the drill's
+// notion of "newest" is exactly what a freshness check is configured to
+// say.
+//
+// The maximum across the checks is the answer, not the first or the last:
+// a drill asserting freshness over several tables has measured several
+// instants, and how much data a recovery would have lost is bounded by the
+// newest of them.
+func newestDataAt(results []checks.Result) *string {
+	var newest *time.Time
+	for i := range results {
+		if at := results[i].NewestData; at != nil && (newest == nil || at.After(*newest)) {
+			newest = at
+		}
+	}
+	if newest == nil {
+		return nil
+	}
+	formatted := newest.UTC().Format(evidence.TimestampFormat)
+	return &formatted
 }
 
 func recordProvision(rec *evidence.Record, res *adapter.ProvisionResult) {

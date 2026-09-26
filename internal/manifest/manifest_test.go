@@ -63,7 +63,7 @@ func TestAFileIsHashedOverItsBytes(t *testing.T) {
 	want := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte("hello backup")))
 
 	m := manifestFor(t, dir, want, sizePtr(12))
-	if fault := manifest.Check(artifact, m); fault != nil {
+	if _, fault := manifest.Check(artifact, m); fault != nil {
 		t.Fatalf("a manifest stating the file's own digest was refused: %v", fault)
 	}
 }
@@ -91,10 +91,10 @@ func TestByteOrderIsNotWalkOrder(t *testing.T) {
 	if want == notWant {
 		t.Fatal("the fixture cannot tell the two orders apart")
 	}
-	if fault := manifest.Check(tree, manifestFor(t, dir, want, nil)); fault != nil {
+	if _, fault := manifest.Check(tree, manifestFor(t, dir, want, nil)); fault != nil {
 		t.Fatalf("byte-order framing was refused: %v", fault)
 	}
-	fault := manifest.Check(tree, manifestFor(t, dir, notWant, nil))
+	_, fault := manifest.Check(tree, manifestFor(t, dir, notWant, nil))
 	if fault == nil {
 		t.Fatal("walk-order framing was accepted; the paths are not being sorted")
 	}
@@ -146,7 +146,7 @@ func digestOf(t *testing.T, path string) string {
 	t.Helper()
 	dir := t.TempDir()
 	impossible := "sha256:" + strings.Repeat("0", 64)
-	fault := manifest.Check(path, manifestFor(t, dir, impossible, nil))
+	_, fault := manifest.Check(path, manifestFor(t, dir, impossible, nil))
 	if fault == nil {
 		t.Fatalf("%s matched an all-zero digest", path)
 	}
@@ -166,7 +166,7 @@ func TestMismatchNamesBothValues(t *testing.T) {
 	writeFile(t, artifact, "actual bytes")
 	expected := "sha256:" + strings.Repeat("ab", 32)
 
-	fault := manifest.Check(artifact, manifestFor(t, dir, expected, sizePtr(999)))
+	_, fault := manifest.Check(artifact, manifestFor(t, dir, expected, sizePtr(999)))
 	if fault == nil {
 		t.Fatal("a wrong checksum was accepted")
 	}
@@ -187,7 +187,7 @@ func TestSizeOnlyMismatchTalksAboutSize(t *testing.T) {
 	artifact := filepath.Join(dir, "nightly.dump")
 	writeFile(t, artifact, "twelve bytes")
 
-	fault := manifest.Check(artifact, manifestFor(t, dir, "", sizePtr(4182016)))
+	_, fault := manifest.Check(artifact, manifestFor(t, dir, "", sizePtr(4182016)))
 	if fault == nil {
 		t.Fatal("a wrong size was accepted")
 	}
@@ -215,7 +215,7 @@ func TestSizeOnlyDoesNotReadTheBytes(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(artifact, 0o600) }) //nolint:errcheck // best effort, so t.TempDir can clean up
 
-	if fault := manifest.Check(artifact, manifestFor(t, dir, "", sizePtr(12))); fault != nil {
+	if _, fault := manifest.Check(artifact, manifestFor(t, dir, "", sizePtr(12))); fault != nil {
 		t.Errorf("a size-only manifest read the bytes it did not need: %v", fault)
 	}
 }
@@ -243,7 +243,7 @@ func TestManifestFaultsAreConfigurationFailures(t *testing.T) {
 			dir := t.TempDir()
 			artifact := filepath.Join(dir, "nightly.dump")
 			writeFile(t, artifact, "bytes")
-			fault := manifest.Check(artifact, writeManifest(t, dir, tc.body))
+			_, fault := manifest.Check(artifact, writeManifest(t, dir, tc.body))
 			if fault == nil {
 				t.Fatal("accepted a manifest that cannot be checked")
 			}
@@ -265,7 +265,7 @@ func TestAMissingManifestIsTheConfigsProblem(t *testing.T) {
 	artifact := filepath.Join(dir, "nightly.dump")
 	writeFile(t, artifact, "bytes")
 
-	fault := manifest.Check(artifact, filepath.Join(dir, "absent.manifest.json"))
+	_, fault := manifest.Check(artifact, filepath.Join(dir, "absent.manifest.json"))
 	if fault == nil {
 		t.Fatal("a missing manifest was accepted")
 	}
@@ -290,7 +290,7 @@ func TestAnUnreadableManifestIsAlsoTheConfigsProblem(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(m, 0o600) }) //nolint:errcheck // best effort, so t.TempDir can clean up
 
-	fault := manifest.Check(artifact, m)
+	_, fault := manifest.Check(artifact, m)
 	if fault == nil || fault.Code != evidence.CodeInvalidRequest {
 		t.Fatalf("fault = %v, want %s", fault, evidence.CodeInvalidRequest)
 	}
@@ -343,7 +343,7 @@ func TestArtifactFaultsAreVerdicts(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			source := tc.build(t, dir)
-			fault := manifest.Check(source, manifestFor(t, dir, "", sizePtr(1)))
+			_, fault := manifest.Check(source, manifestFor(t, dir, "", sizePtr(1)))
 			if fault == nil {
 				t.Fatal("accepted an artifact that cannot be measured")
 			}
@@ -371,7 +371,7 @@ func TestAnUnreadableFileInATreeIsUnreadableNotCorrupt(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(filepath.Join(tree, "closed"), 0o600) }) //nolint:errcheck // best effort, so t.TempDir can clean up
 
-	fault := manifest.Check(tree, manifestFor(t, dir, "sha256:"+strings.Repeat("0", 64), nil))
+	_, fault := manifest.Check(tree, manifestFor(t, dir, "sha256:"+strings.Repeat("0", 64), nil))
 	if fault == nil || fault.Code != evidence.CodeSourceUnreadable {
 		t.Fatalf("fault = %v, want %s", fault, evidence.CodeSourceUnreadable)
 	}
@@ -400,10 +400,10 @@ func TestSizeOnlyOverATreeSumsTheRegularFiles(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	if fault := manifest.Check(tree, manifestFor(t, dir, "", sizePtr(11))); fault != nil {
+	if _, fault := manifest.Check(tree, manifestFor(t, dir, "", sizePtr(11))); fault != nil {
 		t.Errorf("a tree of 7 + 4 bytes did not measure 11: %v", fault)
 	}
-	fault := manifest.Check(tree, manifestFor(t, dir, "", sizePtr(23)))
+	_, fault := manifest.Check(tree, manifestFor(t, dir, "", sizePtr(23)))
 	if fault == nil {
 		t.Fatal("the symlink's target length was counted as backup bytes")
 	}
@@ -429,7 +429,7 @@ func TestAnUnwalkableTreeIsUnreadable(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(closed, 0o700) }) //nolint:errcheck // best effort, so t.TempDir can clean up
 
 	for _, m := range []string{"", "sha256:" + strings.Repeat("0", 64)} {
-		fault := manifest.Check(tree, manifestFor(t, dir, m, sizePtr(1)))
+		_, fault := manifest.Check(tree, manifestFor(t, dir, m, sizePtr(1)))
 		if fault == nil || fault.Code != evidence.CodeSourceUnreadable {
 			t.Fatalf("fault = %v, want %s", fault, evidence.CodeSourceUnreadable)
 		}
@@ -451,7 +451,7 @@ func TestAnUnreachableSourcePathIsUnreadable(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(parent, 0o700) }) //nolint:errcheck // best effort, so t.TempDir can clean up
 
-	fault := manifest.Check(filepath.Join(parent, "nightly.dump"), manifestFor(t, dir, "", sizePtr(5)))
+	_, fault := manifest.Check(filepath.Join(parent, "nightly.dump"), manifestFor(t, dir, "", sizePtr(5)))
 	if fault == nil || fault.Code != evidence.CodeSourceUnreadable {
 		t.Fatalf("fault = %v, want %s", fault, evidence.CodeSourceUnreadable)
 	}
@@ -467,7 +467,7 @@ func TestASizeOnlyTreeStillRefusesAnUnstatableFile(t *testing.T) {
 	tree := filepath.Join(dir, "backup")
 	writeFile(t, filepath.Join(tree, "sub", "file"), "bytes")
 	// Walkable while listing, closed by the time each entry is measured.
-	fault := manifest.Check(tree, manifestFor(t, dir, "", sizePtr(5)))
+	_, fault := manifest.Check(tree, manifestFor(t, dir, "", sizePtr(5)))
 	if fault != nil {
 		t.Fatalf("a readable tree was refused: %v", fault)
 	}
@@ -475,7 +475,7 @@ func TestASizeOnlyTreeStillRefusesAnUnstatableFile(t *testing.T) {
 		t.Fatalf("chmod: %v", err)
 	}
 	t.Cleanup(func() { os.Chmod(filepath.Join(tree, "sub"), 0o700) }) //nolint:errcheck // best effort
-	if fault := manifest.Check(tree, manifestFor(t, dir, "", sizePtr(5))); fault != nil {
+	if _, fault := manifest.Check(tree, manifestFor(t, dir, "", sizePtr(5))); fault != nil {
 		t.Errorf("a readable-but-unwritable directory was refused: %v", fault)
 	}
 }
@@ -495,7 +495,7 @@ func TestAnUnreadableFileIsUnreadableNotCorrupt(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(artifact, 0o600) }) //nolint:errcheck // best effort, so t.TempDir can clean up
 
-	fault := manifest.Check(artifact, manifestFor(t, dir, "sha256:"+strings.Repeat("0", 64), nil))
+	_, fault := manifest.Check(artifact, manifestFor(t, dir, "sha256:"+strings.Repeat("0", 64), nil))
 	if fault == nil || fault.Code != evidence.CodeSourceUnreadable {
 		t.Fatalf("fault = %v, want %s", fault, evidence.CodeSourceUnreadable)
 	}
@@ -516,7 +516,7 @@ func TestAPipeInATreeContributesNothing(t *testing.T) {
 	if after := digestOf(t, tree); after != before {
 		t.Errorf("a FIFO changed the tree hash: %s then %s", before, after)
 	}
-	if fault := manifest.Check(tree, manifestFor(t, dir, "", sizePtr(4))); fault != nil {
+	if _, fault := manifest.Check(tree, manifestFor(t, dir, "", sizePtr(4))); fault != nil {
 		t.Errorf("a FIFO was counted in the tree's size: %v", fault)
 	}
 }
@@ -531,13 +531,13 @@ func TestZeroIsAnExpectationNotAnAbsence(t *testing.T) {
 	empty := filepath.Join(dir, "nightly.dump")
 	writeFile(t, empty, "")
 
-	if fault := manifest.Check(empty, manifestFor(t, dir, "", sizePtr(0))); fault != nil {
+	if _, fault := manifest.Check(empty, manifestFor(t, dir, "", sizePtr(0))); fault != nil {
 		t.Errorf("a manifest expecting 0 bytes was refused: %v", fault)
 	}
 
 	nonEmpty := filepath.Join(dir, "other.dump")
 	writeFile(t, nonEmpty, "bytes")
-	fault := manifest.Check(nonEmpty, manifestFor(t, dir, "", sizePtr(0)))
+	_, fault := manifest.Check(nonEmpty, manifestFor(t, dir, "", sizePtr(0)))
 	if fault == nil || fault.Code != evidence.CodeSourceCorrupt {
 		t.Fatalf("fault = %v, want %s — 0 is an expectation like any other", fault, evidence.CodeSourceCorrupt)
 	}
