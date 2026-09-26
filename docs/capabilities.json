@@ -1723,7 +1723,7 @@
           "id": "table",
           "type": "identifier",
           "required": true,
-          "doc": "Table, optionally schema-qualified."
+          "doc": "What the check is about: a table, collection, class, label or key prefix, depending on the engine. The adapter decides what it names, and its README says which."
         }
       ],
       "requires": null
@@ -1738,7 +1738,7 @@
           "id": "table",
           "type": "identifier",
           "required": true,
-          "doc": "Table, optionally schema-qualified."
+          "doc": "What the check is about: a table, collection, class, label or key prefix, depending on the engine. The adapter decides what it names, and its README says which."
         },
         {
           "id": "min",
@@ -1765,13 +1765,13 @@
           "id": "table",
           "type": "identifier",
           "required": true,
-          "doc": "Table, optionally schema-qualified."
+          "doc": "What the check is about: a table, collection, class, label or key prefix, depending on the engine. The adapter decides what it names, and its README says which."
         },
         {
           "id": "column",
           "type": "identifier",
           "required": true,
-          "doc": "Timestamp column to take the maximum of."
+          "doc": "The dated field to take the maximum of — a column, property or attribute, named the way the engine names one."
         },
         {
           "id": "max_age",

@@ -11,6 +11,25 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`docs/capabilities.json` said `table` meant "Table, optionally
+  schema-qualified", which had stopped being true.** Five adapters now
+  declare their own statements for the generating built-ins, so `table`
+  names a collection on MongoDB, a label on Neo4j and a class on
+  Weaviate — and "optionally schema-qualified" is not merely vague on
+  those three, it is false: a qualified name raises a syntax error, which
+  each README states. The manifest is the only permitted source of
+  capability claims for downstream surfaces, so a claim that drifted
+  there is the drift it exists to prevent.
+
+  The parameter now reads as what it is — a table, collection, class,
+  label or key prefix depending on the engine, with the adapter deciding
+  what it names — and `docs/drill-config.md` says the same at length,
+  including the part that does **not** move: the verdict. `row_count`
+  returns one integer and compares it against the bounds whatever the
+  engine counted, so a record from any of them says the same thing.
+
 ### Added
 
 - **The generating built-in checks now work against Weaviate**
