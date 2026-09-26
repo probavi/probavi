@@ -8,13 +8,17 @@ JSON Schema (draft 2020-12) files for Probavi's frozen contracts:
   the `*-request.json` / `*-response.json` files describe the per-operation
   payloads.
 - `evidence/record.json` — one evidence record as stored on a log line,
-  covering every published schema version (`probavi-evidence/0` and `/1`).
+  covering every published schema version (`probavi-evidence/0` through
+  `/3`).
 - `notification/payload.json` — the webhook notification body
   (`probavi-notification/1`) receivers parse.
-- `manifest/manifest.json` — a backup manifest (`probavi-manifest/1`), the
-  file a backup job writes beside its output and a drill checks the
-  artifact against before the sandbox is created. Its normative document
-  is `../backup-manifest.md`.
+- `manifest/manifest.json` — a backup manifest (`probavi-manifest/1` and
+  `/2`), the file a backup job writes beside its output and a drill checks
+  the artifact against before the sandbox is created. Its normative
+  document is `../backup-manifest.md`. It is the one schema here whose
+  instances this repository does not produce, so which version a backup
+  job writes is decided by what the core it drills with reads — see §11
+  there before adopting `/2`.
 - `capabilities/capabilities.json` — the generated capabilities manifest
   (`probavi-capabilities/1`), which states what Probavi can do in this
   repository. Its normative document is `../capabilities.md`; the

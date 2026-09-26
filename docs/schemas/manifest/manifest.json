@@ -1,40 +1,113 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://probavi.dev/schemas/manifest/manifest.json",
-  "title": "probavi-manifest/1 — the backup manifest, a backup tool's statement about what it wrote",
-  "description": "The backup manifest: one JSON file written beside a backup at backup time and named by target.source.manifest. Not docs/capabilities.json, which is the capabilities manifest. The core reads it before the sandbox is created and refuses the drill when the artifact disagrees. Normative document: ../../backup-manifest.md. Note that expected_checksum is computed under the rule in that document's §3 and is NOT the adapter-defined backup.checksum an evidence record carries: the two answer different questions and are not comparable (§4).",
-  "type": "object",
-  "properties": {
-    "schema": {
-      "const": "probavi-manifest/1",
-      "description": "Pins the shape. Required; an absent or unknown value is a configuration error, not a manifest to guess at."
+  "title": "probavi-manifest/1 and /2 — the backup manifest, a backup tool's statement about what it wrote",
+  "description": "The backup manifest: one JSON file written beside a backup at backup time and named by target.source.manifest. Not docs/capabilities.json, which is the capabilities manifest. The core reads it before the sandbox is created and refuses the drill when the artifact disagrees. Normative document: ../../backup-manifest.md. Note that expected_checksum is computed under the rule in that document's §3 and is NOT the adapter-defined backup.checksum an evidence record carries: the two answer different questions and are not comparable (§4). Both published versions validate here, and a backup job chooses between them by what the core it drills with reads rather than by what this file accepts: probavi-manifest/2 is specified as of 2026-09-26 and no released core reads it yet (backup-manifest.md §11.1), so a manifest written today says probavi-manifest/1. An unknown schema value is a configuration error rather than a manifest to guess at, which is why adopting a version early fails a drill instead of degrading quietly.",
+  "oneOf": [
+    { "$ref": "#/$defs/v1" },
+    { "$ref": "#/$defs/v2" }
+  ],
+  "$defs": {
+    "v1": {
+      "title": "probavi-manifest/1",
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "probavi-manifest/1",
+          "description": "Pins the shape. Required; an absent or unknown value is a configuration error, not a manifest to guess at."
+        },
+        "expected_checksum": { "$ref": "#/$defs/expectedChecksum" },
+        "expected_size_bytes": { "$ref": "#/$defs/expectedSizeBytes" },
+        "created_at": { "$ref": "#/$defs/createdAt" },
+        "engine_version": { "$ref": "#/$defs/engineVersion" }
+      },
+      "required": ["schema"],
+      "anyOf": [
+        { "required": ["expected_checksum"] },
+        { "required": ["expected_size_bytes"] }
+      ],
+      "additionalProperties": false
     },
-    "expected_checksum": {
+    "v2": {
+      "title": "probavi-manifest/2 — v1 plus an optional baseline",
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "probavi-manifest/2",
+          "description": "Pins the shape. Required; an absent or unknown value is a configuration error, not a manifest to guess at."
+        },
+        "expected_checksum": { "$ref": "#/$defs/expectedChecksum" },
+        "expected_size_bytes": { "$ref": "#/$defs/expectedSizeBytes" },
+        "created_at": { "$ref": "#/$defs/createdAt" },
+        "engine_version": { "$ref": "#/$defs/engineVersion" },
+        "baseline": { "$ref": "#/$defs/baseline" }
+      },
+      "required": ["schema"],
+      "anyOf": [
+        { "required": ["expected_checksum"] },
+        { "required": ["expected_size_bytes"] }
+      ],
+      "additionalProperties": false
+    },
+    "baseline": {
+      "type": "object",
+      "description": "What the backup job counted, per table, for the baseline check to reconcile against the restored database (backup-manifest.md §2.1). A key names a table the way the drill's engine names one, exactly as the table parameter does elsewhere: a collection, a label, a class or a key prefix where that is what the engine has. A value states an exact count or a range and nothing else, and a job that can state neither honestly omits the table. A key obeys the identifier rule a check's table parameter obeys, because the baseline check runs the adapter's declared statement against exactly that name. Never stands alone: a v2 manifest still states a checksum or a size, because refusing the drill before the restore is what this file is for. One constraint here is not expressible in JSON Schema and is enforced by the reader instead: rows_min must not exceed rows_max.",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)?$",
+        "description": "The same identifier rule a check's table parameter obeys (drill-config.md \u00a73.5): at most two dot-separated segments, each starting with a letter or underscore. A name outside it is one the check could never run, so it is refused when the manifest is read rather than at the point the reconciliation would have failed."
+      },
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "title": "An exact count",
+            "type": "object",
+            "properties": {
+              "rows": {
+                "$ref": "#/$defs/int53",
+                "description": "The exact number of rows the backup holds."
+              }
+            },
+            "required": ["rows"],
+            "additionalProperties": false
+          },
+          {
+            "title": "A range",
+            "type": "object",
+            "properties": {
+              "rows_min": {
+                "$ref": "#/$defs/int53",
+                "description": "The low end of the narrowest range the backup job can honestly state."
+              },
+              "rows_max": {
+                "$ref": "#/$defs/int53",
+                "description": "The high end of the same range. Both bounds are required together; a one-sided bound is a tolerance wearing a range's clothes, and §2.1 declines to offer one."
+              }
+            },
+            "required": ["rows_min", "rows_max"],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "expectedChecksum": {
       "$ref": "#/$defs/sha256Ref",
       "description": "The artifact's digest under backup-manifest.md §3, whose framing is stated to the byte there and reproduced by the shell recipe in §3.1: SHA-256 over a regular file's bytes, or the canonical tree hash for a directory. Not the adapter's backup.checksum."
     },
-    "expected_size_bytes": {
+    "expectedSizeBytes": {
       "$ref": "#/$defs/int53",
       "description": "A regular file's size, or the sum of every regular file's size in a directory."
     },
-    "created_at": {
+    "createdAt": {
       "type": "string",
       "format": "date-time",
       "description": "When the backup job says it produced the artifact. Informational: it is the backup tool's claim, and never populates the record's backup.created_at, which is the adapter's measurement of the artifact itself."
     },
-    "engine_version": {
+    "engineVersion": {
       "type": "string",
       "minLength": 1,
       "description": "Informational. Version compatibility is enforced by the adapter, from the artifact, not from this file."
-    }
-  },
-  "required": ["schema"],
-  "anyOf": [
-    { "required": ["expected_checksum"] },
-    { "required": ["expected_size_bytes"] }
-  ],
-  "additionalProperties": false,
-  "$defs": {
+    },
     "sha256Ref": {
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"

@@ -1,12 +1,13 @@
 # Backup manifest — design spec
 
-Status: **Normative, and implemented** — `target.source.manifest`,
-`internal/manifest`, shipped 2026-09-25. The two decisions §9 held open
-were taken the same day and are recorded there with the alternatives they
-beat; the code followed this document rather than the other way round
-(AGENTS.md §5.1). One part of §8 is deliberately not built yet and says
-so where it is specified: the two record fields ride on the single
-`probavi-evidence/3` bump the ROADMAP gathers four items into.
+Status: **v2 — NORMATIVE, specified 2026-09-26; not yet implemented
+(§11.1).** v1 was specified and shipped 2026-09-25 —
+`target.source.manifest`, `internal/manifest` — and stays exactly as it
+was; v2 adds one optional object and changes nothing else (§11). Every
+decision this document held open is recorded in §9 with the alternatives
+it beat, and in both versions the code followed this document rather than
+the other way round (AGENTS.md §5.1). §8's two record fields shipped with
+`probavi-evidence/3` on 2026-09-26.
 
 ## 1. The gap this closes
 
@@ -55,6 +56,10 @@ words. In this repository the unqualified *manifest* is
 written by a generator rather than by a backup job, and the collision is
 worth spending a word on every time.
 
+The example says `probavi-manifest/1` because that is what a backup job
+writes today: `/2` is specified and not yet read by a release, and §2.1
+says what changes when it is.
+
 `schema` is required and pins the shape. Everything else is optional,
 and a backup manifest carrying no expectation at all is refused as a
 configuration mistake rather than accepted as a no-op: a file that
@@ -63,11 +68,90 @@ this whole document exists to remove.
 
 | Field | Required | Meaning |
 |---|---|---|
-| `schema` | yes | `probavi-manifest/1`. |
+| `schema` | yes | `probavi-manifest/1` or `/2`. A v2 manifest is a v1 manifest plus `baseline` (§2.1); nothing else differs, and a v1 manifest stays valid forever (§12). |
 | `expected_checksum` | one of the two | `sha256:<64 lowercase hex>` under the rule in §3 — **not** the adapter's checksum; see §4. |
 | `expected_size_bytes` | one of the two | Total bytes under the same rule: a file's size, or the sum of the regular files in a tree. |
 | `created_at` | no | RFC 3339. Informational: it is the backup tool's claim, and never populates `backup.created_at`, which is the adapter's measurement of the artifact. |
 | `engine_version` | no | Informational. Version compatibility is the adapter's to enforce, from the artifact itself, and several already do. |
+| `baseline` | no (v2) | What the backup job counted, per table, for the `baseline` check to reconcile against (§2.1). |
+
+### 2.1 `baseline`: what the backup job counted (v2)
+
+A drill proves a backup restores. It does not, on its own, prove that
+**everything** came back — and a restore tool exiting 0 having restored
+part of the data is the failure class three engines in this catalogue
+have shown.
+
+`row_count` is the instrument that exists for it today, and it is blunt
+by construction: the bound is written by hand in the drill config, so a
+restore that lands ninety per cent of the rows passes a loose one. The
+sharper half of the same question is an expectation **recorded at backup
+time by the party that knows it**, which is what this section is.
+
+```json
+"baseline": {
+  "orders":         {"rows": 100000},
+  "public.invoices": {"rows": 42},
+  "customers":      {"rows_min": 4980, "rows_max": 5020}
+}
+```
+
+**Write `probavi-manifest/1` until the core you drill with reads `/2`.**
+A version is governed the moment this document specifies it and read the
+moment a release implements it, and those are not the same day (§11.1).
+A core that does not know a `schema` value refuses the drill — that is
+§2's rule working as intended, not a fault — so a backup job that adopts
+v2 early stops drills rather than degrading quietly. `baseline` also
+never stands alone: a v2 manifest still states a checksum or a size,
+because refusing the drill **before** the restore is what this file is
+for, and an expectation that can only be reconciled afterwards does not
+replace it.
+
+Each key names a table the way the drill's engine names one — the same
+vocabulary `table` takes elsewhere (`drill-config.md` §3.5), so it is a
+collection on MongoDB, a label on Neo4j, a class on Weaviate, a key prefix
+on Redis. Each value states either an exact count or a range, and nothing
+else:
+
+| Field | Meaning |
+|---|---|
+| `rows` | The exact number of rows the backup holds. Mutually exclusive with the pair below. |
+| `rows_min`, `rows_max` | The narrowest range the backup job can honestly state. Both required together, `rows_min` ≤ `rows_max`, and both ≥ 0. |
+
+A key obeys **the identifier rule a check's `table` obeys**
+(`drill-config.md` §3.5): at most two dot-separated segments, each
+matching `^[A-Za-z_][A-Za-z0-9_]*$`. The reason is not tidiness — the
+reconciliation runs the adapter's declared statement against exactly this
+name, so a name the check could never run is refused when the manifest is
+read, with the message naming the key, rather than surfacing later as a
+reconciliation that mysteriously cannot be performed.
+
+**A range, and deliberately not a tolerance.** The two express the same
+uncertainty and differ in who owns it, which is the whole point: a dial in
+the drill configuration is turned by whoever wants a green drill, and a
+range in the backup manifest is a claim made at the source by the job that
+counted. It is also **pinned** — `backup.manifest_hash` reaches every
+record (evidence schema §3), so a range that widened between two drills
+is visible to anyone reading the log and a dial that widened is not. The
+full argument, and what the rejected half was right about, is §9.3.
+
+**Where the numbers come from is the backup job's business, and its
+honesty is the whole contract.** A job that can count the backup itself
+states `rows`. A job that can only count the live database around the
+backup states the range its own uncertainty justifies — the rows written
+while the copy ran, say. A job that can state neither honestly states
+**nothing**: `baseline` is optional, an absent table is simply not
+reconciled, and a baseline nobody can meet is worse than no baseline,
+because a check that always fails gets switched off and takes the honest
+ones with it.
+
+**What it is not.** It is not a checksum of the data, and it is not a
+second copy of it: §8 of the evidence schema forbids a record from
+carrying row values, and these are aggregates for the same reason. It
+does not catch rows restored with wrong values — only their number. What
+catches that is the engine's own corruption detector, which is a
+different item on the ROADMAP, and this section must never be described
+as doing its work.
 
 ## 3. The checksum rule
 
@@ -237,6 +321,53 @@ file nothing produces: every drill fails, forever, on a backup that is
 fine. Where the backup job instead died before writing either,
 `source.path` is missing too and answers first, on its own terms.
 
+### 5.1 The `baseline` check: the same file's other half, after the restore
+
+Everything above happens before a sandbox exists. `baseline` (§2.1) is
+the part of the backup manifest that cannot: reconciling counts needs a
+restored database to count. It is therefore **not** part of the gate — it
+is a built-in check, configured like the other four, running where checks
+run:
+
+```yaml
+checks:
+  - builtin: baseline
+```
+
+**It takes no parameters, and that is the design.** The manifest is the
+list of what to reconcile; naming the tables again in the drill config
+would let a table added to the backup job and not to the drill go
+silently unreconciled, which is the gap §2.1 exists to close, reopened
+one level up. One entry expands to **one result per table the manifest
+declares**, named `baseline:<table>` under the derived-name rule
+(`drill-config.md` §3.5), so the record shows each table's verdict
+separately and a reader can see which one moved.
+
+| Situation | Where it is caught | Result |
+|---|---|---|
+| `builtin: baseline` with no `source.manifest` | config load | Refused; the config names no file to reconcile against. |
+| the backup manifest is `probavi-manifest/1`, or `/2` without `baseline` | §5's read, before the sandbox | `invalid_request`, outcome `error`. A check that would validate nothing is a configuration mistake, not a pass. |
+| the count is within the stated bound | the check | Pass, the detail naming the count and the expectation. |
+| the count is outside it | the check | False verdict for that table; the other tables and the other checks still run and still report. |
+| a table the manifest declares is not in the restored database | the check | False verdict for that table. The reconciliation asked a question the restore could not answer, and that is the finding — not an abandoned drill. |
+| the engine has no way to count rows | the adapter | The same limitation `row_count` has, stated in the same place: the adapter's README. `baseline` asks that question and inherits its answer. |
+
+The count comes from the adapter's declared `row_count` statement where
+there is one, and from the core's composition where there is not (adapter
+protocol §6.1.1). **No protocol version moves for this**: the statement
+that counts rows already exists — seven adapters declare one, and the
+rest are counted by the composition — so `baseline` is a second question
+asked of an answer the protocol already has. **No evidence
+version moves either**: each expansion is an ordinary check result in
+`checks[]`, which the schema has carried since v0.
+
+What the record gains over a hand-written `row_count` is the pairing.
+Both write a count and a verdict into the log; only `baseline` also
+carries `backup.manifest_hash`, which pins the file the expectation came
+from. A bound that was widened to make a drill green is visible in the
+log for `baseline` and invisible for `row_count`, and that difference is
+the whole reason to prefer it where a backup job can state one.
+
 ## 6. What this does not prove
 
 **It catches corruption, not tampering.** Whoever can rewrite the backup
@@ -264,9 +395,11 @@ from the artifact itself.
 
 ## 7. What is deliberately not in it
 
-- **Expected row and table counts.** They need a live query against the
-  restored database, which is after everything this file governs. They
-  belong to the baseline check, and the ROADMAP places them there.
+- **Row *values*.** §2.1 carries counts and nothing else. Evidence schema
+  §8 forbids a record from carrying row data, and an expectation is
+  compared inside the drill and summarised into a record the same way a
+  check's detail is — in aggregate only.
+- **A tolerance.** §2.1 states a range instead, and says why.
 - **Anything the core would have to interpret per engine.** The core
   knows nothing about pg_dump, WAL or binlogs (AGENTS.md §2.1), and a
   backup manifest field that needed engine knowledge to check would move
@@ -278,12 +411,11 @@ from the artifact itself.
 
 ## 8. The record
 
-Two nullable fields, arriving with the single `probavi-evidence/3` bump
-the ROADMAP gathers four items into — not a bump of their own, and
-therefore **not yet shipped**: the check runs and refuses, and the fields
-that will describe it in a passing record wait for that bump. What a
-refusal records is complete without them, because the code and the
-message carry the finding (§5):
+Two nullable fields, which arrived with the single `probavi-evidence/3`
+bump the ROADMAP gathered four items into rather than with a bump of
+their own — **shipped 2026-09-26**, so a passing record now describes
+the backup manifest it believed. A refusal was already complete without
+them, because the code and the message carry the finding (§5):
 
 | Field | Meaning |
 |---|---|
@@ -311,10 +443,11 @@ Where the values do belong is a mismatch, and they are already there:
 place a second checksum beside the adapter's informs rather than misleads,
 because there the disagreement *is* the finding.
 
-## 9. The two decisions
+## 9. The decisions
 
-Both were taken on 2026-09-25, before any code. The alternatives are kept
-because a decision without its rejected half is a preference.
+§9.1 and §9.2 were taken on 2026-09-25, before any code; §9.3 on
+2026-09-26, with v2. The alternatives are kept because a decision without
+its rejected half is a preference.
 
 ### 9.1 No `probavi manifest write`. The shape is documented, and the recipe is a test
 
@@ -384,6 +517,39 @@ recorded as accepted, from three fields to two, and the single
 in the same change, because a plan and a specification disagreeing is how
 a schema ends up with a field nobody decided to add.
 
+### 9.3 The backup manifest states a range, the drill config does not state a tolerance
+
+An exact count is not always honest. A backup job that copies a live
+database knows roughly how many rows it took and not exactly, and the two
+ways to admit that are a **tolerance in the drill configuration** —
+`baseline` grows a `tolerance: 1%`, reusing the `row_count` bounds
+machinery an operator already understands — or a **range in the backup
+manifest**, which is §2.1.
+
+The range, and the argument is about who owns the uncertainty rather than
+about shape. Both express the same thing; a tolerance puts it in the file
+edited by whoever wants the drill green, and a range puts it in the file
+written by the job that counted. Those are not the same party, and the
+gap between them is the failure this feature addresses: a hand-written
+bound loosened until it passes is how `row_count` stops meaning anything,
+and a dial on top of a manifest would import that property into the
+manifest's own check.
+
+There is a second difference, and it is the one that decides it for a
+trust product. `backup.manifest_hash` reaches every record, so **a range
+that widened between two drills is visible in the log**; a tolerance that
+widened is not, because the drill configuration's hash covers it but the
+before-and-after are two different drills nobody is comparing. The
+evidence is the product (§1 of AGENTS.md), and between two designs that
+verify the same thing, the one whose loosening leaves a mark in the
+append-only log is the one this project ships.
+
+**What the rejected half was right about**, and §2.1 keeps: an
+expectation nobody can meet gets switched off and takes the honest checks
+with it. The answer is not a dial but an omission — a job that cannot
+state a bound honestly states none, and the table is simply not
+reconciled.
+
 ## 10. The contract list
 
 `probavi-manifest/1` is a new contract identifier, and the canonical
@@ -405,7 +571,62 @@ this repository will write:
   schema's question, and it moves `probavi-evidence/N` by that schema's
   own rule.
 
-## 11. Exit
+**`probavi-manifest/2` needs no second decision.** ADR 0047 governs the
+identifier, not one version of it — the same way ADR 0035 governs
+`probavi-evidence/N` while the evidence schema decides what each N
+contains. What a major bump does owe is §11: the shape difference, the
+migration, and the list of what the version still owes before a build
+claims it.
+
+## 11. Versioning and migration
+
+The contract identifier is `probavi-manifest/<major>`, and the rule is
+the one its siblings carry: any field addition, removal, rename, type
+change or semantic change increments the major. The schema is a closed
+object and the reader refuses unknown fields, so there is no such thing
+as an additive change here — a v1 reader handed a v2 manifest refuses it
+by name, which is the behaviour §2 asks for and not a fault to design
+around.
+
+| Version | Shape difference | Migration |
+|---|---|---|
+| `probavi-manifest/1` | v2 without `baseline`. | None. A v1 manifest is valid forever, and a core that reads v2 reads v1 unchanged. |
+| `probavi-manifest/2` | Current (§2, §2.1). | Write `"schema": "probavi-manifest/2"` and add `baseline`. A backup job with nothing to count stays on v1 rather than writing an empty object: `baseline` is optional in v2, but a job that gains nothing from v2 gains nothing from moving to it. |
+
+**Both versions are read, and only one is refused.** A core accepts either
+and acts on what it finds; what it refuses is a `schema` value it does not
+know, because the field exists to pin the shape and honouring an unknown
+one would defeat it.
+
+### 11.1 v2, and what it still owes
+
+v2 is **specified and normative as of 2026-09-26**, and not yet
+implemented. Until the list below is complete a correction to this
+specification is a correction rather than a v3.
+
+- [x] The JSON Schema accepts both versions, with `baseline` constrained
+      to what §2.1 states — exact or range, never both, never negative,
+      and no other member. Done 2026-09-26, with this specification.
+- [ ] `internal/manifest` reads a v2 manifest and refuses a malformed
+      `baseline` the way it refuses a malformed expectation today: as a
+      configuration failure, `invalid_request`, because a baseline the
+      core cannot read is the operator's file being wrong and not a
+      verdict about the backup (§5).
+- [ ] The `baseline` check kind, to §5.1: no parameters, one result per
+      declared table, the table of situations in that section, and the
+      `drill-config.md` §3.5 entry that goes with it. Neither the adapter
+      protocol nor the evidence schema moves for it, and §5.1 says why
+      for each.
+
+What v2 deliberately does **not** carry, and why it is not an oversight:
+`max(<primary key>)` and `sum(<column>)`, which the ROADMAP names beside
+the counts. Both need an aggregate the adapter protocol has no shape for
+— `checks` is keyed by built-in check kind and carries one statement
+each, so a kind needing three would be a protocol change. The failure
+class this item exists for is a restore that landed part of the data, and
+that is a count. The rest waits for a demand signal, in its own bump.
+
+## 12. Exit
 
 A backup altered between the backup run and the drill fails **before the
 restore**, and the record names the value that disagreed. Met 2026-09-25:
