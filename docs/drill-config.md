@@ -261,9 +261,22 @@ Each entry sets exactly one of `builtin` or `sql`:
 | `builtin` | Parameters | Verdict |
 |---|---|---|
 | `service_healthy` | none | The adapter's `healthcheck` operation answers healthy. |
-| `table_exists` | `table` (required) | The table exists and is queryable. |
-| `row_count` | `table` (required), `min`, `max` (at least one, non-negative, `min` ≤ `max`) | The row count lies within the inclusive bounds. |
-| `freshness` | `table`, `column`, `max_age` (all required) | The newest value in the timestamp column is younger than `max_age`. |
+| `table_exists` | `table` (required) | The thing `table` names exists and is queryable. |
+| `row_count` | `table` (required), `min`, `max` (at least one, non-negative, `min` ≤ `max`) | The count lies within the inclusive bounds. |
+| `freshness` | `table`, `column`, `max_age` (all required) | The newest value in the dated field is younger than `max_age`. |
+
+**`table` and `column` are named for the relational case and mean the
+engine's own thing.** A table on a SQL engine; a collection, class, label
+or key prefix elsewhere; a column, property or attribute for the dated
+field. What each names is the adapter's to define — it declares the
+statement the check runs (adapter protocol §6.1.1) — and every adapter's
+README says which. Qualification follows the same rule: a SQL engine takes
+`schema.table`, and several engines refuse a qualified name outright,
+which their READMEs state.
+
+The *verdict* does not move with the vocabulary. `row_count` returns one
+integer and compares it against the bounds whatever the engine counted, so
+a record from any of them says the same thing.
 
 A check that sets `sql` instead of `builtin` requires `sql` and `expect`,
 and takes an optional `name`: it passes when the statement returns a
