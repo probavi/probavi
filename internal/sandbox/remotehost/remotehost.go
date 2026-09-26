@@ -638,3 +638,68 @@ func randomSuffix() string {
 	}
 	return hex.EncodeToString(b[:])
 }
+
+// factsScript asks systemd what the drill's slice actually carries. The
+// values come back from the manager rather than from the properties this
+// provider set, which is the distinction §6.1 draws: a property systemd
+// accepted and did not apply would read back differently here.
+//
+// "infinity" is systemd's word for no limit, and it stays an absence
+// rather than becoming a number.
+const factsScript = `systemctl show --property=MemoryMax --property=CPUQuota --value -- "$1" 2>/dev/null || true`
+
+// Facts reports what the drill's transient slice actually carries
+// (sandbox-providers.md §6.1).
+//
+// There is no image digest here and there never will be: this provider
+// runs on a host, not from an image, which is the case §6.1 names when it
+// says nil is an answer. What a record gains instead is the pair of limits
+// the manager holds — without them a duration in the record is a number
+// with no scale beside it, and a bare host is exactly where the scale
+// varies most.
+func (s *Sandbox) Facts(ctx context.Context) sandbox.Facts {
+	stdout, stderr, _, exit, err := s.p.ssh(ctx, nil, "sh", "-c", factsScript, "sh", s.name+".slice")
+	if err != nil || exit != 0 {
+		s.p.logger.Debug("sandbox facts unavailable", "slice", s.name, "exit", exit,
+			"err", err, "stderr", firstLine(stderr))
+		return sandbox.Facts{}
+	}
+	lines := strings.Fields(string(stdout))
+	facts := sandbox.Facts{}
+	if len(lines) > 0 {
+		facts.MemoryBytes = bytesOrNil(lines[0])
+	}
+	if len(lines) > 1 {
+		facts.CPUsMilli = quotaMilli(lines[1])
+	}
+	return facts
+}
+
+// bytesOrNil reads MemoryMax, which systemd reports as a plain byte count
+// or as "infinity" when nothing is capped.
+func bytesOrNil(v string) *int64 {
+	n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+	if err != nil || n <= 0 {
+		return nil
+	}
+	return &n
+}
+
+// quotaMilli reads CPUQuota, which systemd reports as a percentage with a
+// trailing "%" — 150% is one and a half CPUs, which the schema counts as
+// 1500 thousandths.
+func quotaMilli(v string) *int64 {
+	pct, ok := strings.CutSuffix(strings.TrimSpace(v), "%")
+	if !ok {
+		return nil
+	}
+	f, err := strconv.ParseFloat(pct, 64)
+	if err != nil || f <= 0 {
+		return nil
+	}
+	milli := int64(f * 10)
+	if milli <= 0 {
+		return nil
+	}
+	return &milli
+}

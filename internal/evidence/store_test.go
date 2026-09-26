@@ -100,7 +100,7 @@ func TestGoldenLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read log: %v", err)
 	}
-	golden := filepath.Join(examplesDir, "log_v2.jsonl")
+	golden := filepath.Join(examplesDir, "log_v3.jsonl")
 	if *updateGolden {
 		if err := os.MkdirAll(examplesDir, 0o755); err != nil {
 			t.Fatalf("mkdir examples: %v", err)
@@ -118,14 +118,14 @@ func TestGoldenLog(t *testing.T) {
 	}
 }
 
-// TestFrozenLogsVerify pins schema-version support forever. log_v0.jsonl
-// and log_v1.jsonl were written by the implementations of their own
-// versions and are byte-frozen — they have no updater and MUST never be
-// regenerated. Records already written under a published version stay
+// TestFrozenLogsVerify pins schema-version support forever. log_v0.jsonl,
+// log_v1.jsonl and log_v2.jsonl were written by the implementations of
+// their own versions and are byte-frozen — they have no updater and MUST
+// never be regenerated. Records already written under a published version stay
 // verifiable for the lifetime of the product (evidence-schema.md §10), and
 // this is the test that would notice if they stopped.
 func TestFrozenLogsVerify(t *testing.T) {
-	for _, name := range []string{"log_v0.jsonl", "log_v1.jsonl"} {
+	for _, name := range []string{"log_v0.jsonl", "log_v1.jsonl", "log_v2.jsonl"} {
 		t.Run(name, func(t *testing.T) {
 			f, err := os.Open(filepath.Join(examplesDir, name))
 			if err != nil {
@@ -160,7 +160,7 @@ func TestWorkedExampleVerifiesWithCommittedKey(t *testing.T) {
 	if got, want := PublicKeyID(pub), testSigner().KeyID(); got != want {
 		t.Fatalf("committed key id %s does not match the golden signer %s", got, want)
 	}
-	for _, golden := range []string{"log_v0.jsonl", "log_v1.jsonl", "log_v2.jsonl"} {
+	for _, golden := range []string{"log_v0.jsonl", "log_v1.jsonl", "log_v2.jsonl", "log_v3.jsonl"} {
 		f, err := os.Open(filepath.Join(examplesDir, golden))
 		if err != nil {
 			t.Fatalf("open %s: %v", golden, err)

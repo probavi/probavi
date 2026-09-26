@@ -72,24 +72,53 @@ func faultf(code, format string, args ...any) *Fault {
 	return &Fault{Code: code, Message: fmt.Sprintf(format, args...)}
 }
 
+// Result is what a record carries about the check (evidence-schema.md §3):
+// which manifest was believed, and whether the artifact agreed with it.
+// Both are nil when no manifest was read — a configuration naming none,
+// or one naming a file this package could not use.
+//
+// The expectation itself is deliberately not here. It is not comparable to
+// the adapter's backup.checksum beside it in the record (§4), and a
+// mismatch names both values in the Fault's message, which is the one
+// place they inform rather than mislead.
+type Result struct {
+	Hash  *string
+	Match *bool
+}
+
 // Check holds the artifact at sourcePath to the backup manifest at
-// manifestPath. It returns nil when they agree, and a Fault naming both
-// values when they do not.
+// manifestPath. It returns a nil Fault when they agree, and one naming
+// both values when they do not — and, either way, what a record says
+// about the manifest it believed.
 //
 // The checksum is computed only when the manifest expects one: a
 // size-only manifest is a deliberately cheap check, and reading every byte
 // to satisfy it anyway would take that choice away from the operator who
 // made it.
-func Check(sourcePath, manifestPath string) *Fault {
-	m, fault := read(manifestPath)
+func Check(sourcePath, manifestPath string) (Result, *Fault) {
+	m, raw, fault := read(manifestPath)
 	if fault != nil {
-		return fault
+		return Result{}, fault
 	}
+	// The hash is of the manifest's bytes as read, so a record pins the
+	// file this drill believed rather than whatever stands there later.
+	hash := digestOf(raw)
 	got, fault := measure(sourcePath, m.ExpectedChecksum != "")
 	if fault != nil {
-		return fault
+		// The artifact could not be measured, so nothing compared: the
+		// record names the manifest that was read and leaves the verdict
+		// unstated rather than reporting a disagreement nobody found.
+		return Result{Hash: &hash}, fault
 	}
-	return compare(sourcePath, manifestPath, m, got)
+	fault = compare(sourcePath, manifestPath, m, got)
+	matched := fault == nil
+	return Result{Hash: &hash, Match: &matched}, fault
+}
+
+// digestOf is the manifest-file rule: SHA-256 over the bytes as read.
+func digestOf(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("sha256:%x", sum)
 }
 
 // read parses the manifest and refuses every shape that cannot be checked.
@@ -97,24 +126,24 @@ func Check(sourcePath, manifestPath string) *Fault {
 // object: a drill that silently ignored `expected_size` would check
 // nothing while the config believed in it, which is the failure this
 // feature exists to remove.
-func read(path string) (*Manifest, *Fault) {
+func read(path string) (*Manifest, []byte, *Fault) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, faultf(evidence.CodeInvalidRequest, "backup manifest not found: %s", path)
+			return nil, nil, faultf(evidence.CodeInvalidRequest, "backup manifest not found: %s", path)
 		}
-		return nil, faultf(evidence.CodeInvalidRequest, "backup manifest %s cannot be read: %s", path, reason(err))
+		return nil, nil, faultf(evidence.CodeInvalidRequest, "backup manifest %s cannot be read: %s", path, reason(err))
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	var m Manifest
 	if err := dec.Decode(&m); err != nil {
-		return nil, faultf(evidence.CodeInvalidRequest, "backup manifest %s is not a readable %s document: %s", path, SchemaID, err)
+		return nil, nil, faultf(evidence.CodeInvalidRequest, "backup manifest %s is not a readable %s document: %s", path, SchemaID, err)
 	}
 	if dec.More() {
-		return nil, faultf(evidence.CodeInvalidRequest, "backup manifest %s carries more than one JSON document", path)
+		return nil, nil, faultf(evidence.CodeInvalidRequest, "backup manifest %s carries more than one JSON document", path)
 	}
-	return &m, m.validate(path)
+	return &m, raw, m.validate(path)
 }
 
 func (m *Manifest) validate(path string) *Fault {

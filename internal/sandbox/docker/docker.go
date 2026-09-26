@@ -458,3 +458,72 @@ func randomSuffix() string {
 	}
 	return hex.EncodeToString(b[:])
 }
+
+// facts template asks the runtime for the three values §6.1 wants, in one
+// inspect. A pipe separates them because none of the three can contain
+// one: two are digests or decimal integers, and the third is a digest.
+const factsFormat = `{{.Image}}|{{.HostConfig.Memory}}|{{.HostConfig.NanoCpus}}`
+
+// Facts reports what this container actually ran and what the runtime
+// recorded as applied to it (sandbox-providers.md §6.1).
+//
+// **What it attests is narrower than "the cgroup holds this".** The values
+// come from the runtime's own record of the container it created, read
+// back after creation rather than copied from the parameters handed in —
+// which is the difference §6.1 insists on, since echoing the request would
+// turn sandbox.params into evidence under another name. It is not the
+// kernel's view: a runtime that accepted a cap and silently failed to
+// apply it would still report it here. Reading the cgroup would mean an
+// exec into a sandbox holding production data, for a field the schema
+// already allows to be null.
+//
+// Zero is not a limit. Docker writes 0 for "no limit applied", so a zero
+// reads back as nil: unlimited and unknown are both absences here, and
+// neither is the number 0.
+func (s *Sandbox) Facts(ctx context.Context) sandbox.Facts {
+	stdout, stderr, _, exit, err := s.p.run.Run(ctx, nil, nil, s.p.bin, "inspect", "-f", factsFormat, s.id)
+	if err != nil || exit != 0 {
+		s.p.logger.Debug("sandbox facts unavailable", "id", s.id, "exit", exit,
+			"err", err, "stderr", firstLine(stderr))
+		return sandbox.Facts{}
+	}
+	fields := strings.Split(strings.TrimSpace(string(stdout)), "|")
+	if len(fields) != 3 {
+		s.p.logger.Debug("sandbox facts unreadable", "id", s.id, "answer", strings.TrimSpace(string(stdout)))
+		return sandbox.Facts{}
+	}
+	return sandbox.Facts{
+		ImageDigest: digestOrNil(fields[0]),
+		MemoryBytes: positiveOrNil(fields[1], 1),
+		// Docker counts CPU in billionths; the schema counts thousandths,
+		// because §4 admits no number that is not an integer and a limit
+		// is routinely fractional.
+		CPUsMilli: positiveOrNil(fields[2], 1_000_000),
+	}
+}
+
+// digestOrNil keeps only the published form, so a runtime answering
+// anything else records nothing rather than something unparseable.
+func digestOrNil(s string) *string {
+	if !imageDigestPattern.MatchString(s) {
+		return nil
+	}
+	return &s
+}
+
+var imageDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// positiveOrNil divides by unit and returns nil for anything that is not a
+// positive integer — which is how "no limit applied" (docker writes 0)
+// stays absent instead of becoming a limit of zero.
+func positiveOrNil(s string, unit int64) *int64 {
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil || n <= 0 {
+		return nil
+	}
+	v := n / unit
+	if v <= 0 {
+		return nil
+	}
+	return &v
+}

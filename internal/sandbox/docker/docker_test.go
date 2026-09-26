@@ -643,3 +643,60 @@ func TestSweepAsksTheOwnerLivenessCheck(t *testing.T) {
 		})
 	}
 }
+
+// TestFactsReadsWhatTheRuntimeRecorded covers every answer inspect can
+// give, including the ones that must produce nil. Docker writes 0 for "no
+// limit applied", and 0 is not a limit — unlimited and unknown are both
+// absences here, and a record stating a memory cap of zero would be
+// stating something nothing applied.
+func TestFactsReadsWhatTheRuntimeRecorded(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("32", 32)
+	tests := []struct {
+		name          string
+		stdout        string
+		exit          int
+		err           error
+		wantImage     string
+		wantMemory    int64
+		wantCPUsMilli int64
+	}{
+		{"limits applied", digest + "|536870912|1500000000\n", 0, nil, digest, 536870912, 1500},
+		{"no limits applied", digest + "|0|0\n", 0, nil, digest, 0, 0},
+		{"inspect failed", "", 1, nil, "", 0, 0},
+		{"inspect could not run", "", 0, errors.New("docker not found"), "", 0, 0},
+		{"an answer this code does not understand", "garbage\n", 0, nil, "", 0, 0},
+		{"an image that is not a digest", "postgres:16|0|0\n", 0, nil, "", 0, 0},
+		{"a fractional cpu below a thousandth", digest + "|0|1000\n", 0, nil, digest, 0, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, _ := testProvider(t, response{stdout: tc.stdout, exit: tc.exit, err: tc.err})
+			got := (&Sandbox{id: "c1", p: p}).Facts(context.Background())
+			assertPtr(t, "image_digest", got.ImageDigest, tc.wantImage)
+			assertInt(t, "memory_bytes", got.MemoryBytes, tc.wantMemory)
+			assertInt(t, "cpus_milli", got.CPUsMilli, tc.wantCPUsMilli)
+		})
+	}
+}
+
+// assertPtr compares against "" meaning nil, so a table can say "this
+// answer records nothing" without a pointer per row.
+func assertPtr(t *testing.T, name string, got *string, want string) {
+	t.Helper()
+	switch {
+	case want == "" && got != nil:
+		t.Errorf("%s = %q, want nil", name, *got)
+	case want != "" && (got == nil || *got != want):
+		t.Errorf("%s = %v, want %q", name, got, want)
+	}
+}
+
+func assertInt(t *testing.T, name string, got *int64, want int64) {
+	t.Helper()
+	switch {
+	case want == 0 && got != nil:
+		t.Errorf("%s = %d, want nil — unlimited and unknown are both absences", name, *got)
+	case want != 0 && (got == nil || *got != want):
+		t.Errorf("%s = %v, want %d", name, got, want)
+	}
+}

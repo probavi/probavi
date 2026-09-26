@@ -8,6 +8,7 @@ import (
 
 func strPtr(s string) *string { return &s }
 func i64Ptr(n int64) *int64   { return &n }
+func boolPtr(b bool) *bool    { return &b }
 
 func hexRef(pair string) string { return "sha256:" + strings.Repeat(pair, 32) }
 
@@ -23,16 +24,24 @@ func sampleRecordPass() *Record {
 			PITRTarget: strPtr("2026-07-30T14:32:00.000Z"),
 		},
 		Backup: Backup{
-			Kind:      "pgdump",
-			Checksum:  strPtr(hexRef("9f")),
-			SizeBytes: i64Ptr(565248),
-			CreatedAt: strPtr("2026-07-30T01:58:02.000Z"),
+			Kind:          "pgdump",
+			Checksum:      strPtr(hexRef("9f")),
+			SizeBytes:     i64Ptr(565248),
+			CreatedAt:     strPtr("2026-07-30T01:58:02.000Z"),
+			ManifestHash:  strPtr(hexRef("3b")),
+			ManifestMatch: boolPtr(true),
+			NewestDataAt:  strPtr("2026-07-30T01:57:44.000Z"),
 		},
 		Adapter: Adapter{
 			Name: "postgres", Version: strPtr("0.1.0"), Protocol: "probavi-adapter/0",
 			Digest: strPtr(hexRef("4c")),
 		},
-		Sandbox: Sandbox{Provider: "docker", Params: map[string]string{"image": "postgres:16", "memory": "2GiB"}},
+		Sandbox: Sandbox{
+			Provider:    "docker",
+			Params:      map[string]string{"image": "postgres:16", "memory": "2GiB"},
+			ImageDigest: strPtr(hexRef("05")),
+			Resources:   Resources{MemoryBytes: i64Ptr(2147483648), CPUsMilli: i64Ptr(1500)},
+		},
 		Timings: Timings{
 			Provision: i64Ptr(1170), EngineReady: i64Ptr(1166), Transfer: i64Ptr(110),
 			Restore: i64Ptr(190), Validate: i64Ptr(61), Total: i64Ptr(2840),
@@ -45,7 +54,8 @@ func sampleRecordPass() *Record {
 		Error:   nil,
 		Env: Env{
 			ProbaviVersion: "0.1.0", OS: "linux", Arch: "amd64", HostID: "3f7a9c2e5b1d8e04",
-			ProbaviDigest: strPtr(hexRef("1d")),
+			ProbaviDigest:     strPtr(hexRef("1d")),
+			ClockSynchronised: boolPtr(true),
 		},
 	}
 }

@@ -63,6 +63,18 @@ type Backup struct {
 	Checksum  *string `json:"checksum"`
 	SizeBytes *int64  `json:"size_bytes"`
 	CreatedAt *string `json:"created_at"`
+	// ManifestHash pins which backup manifest was believed, the way
+	// drill.config_hash pins the configuration; ManifestMatch is whether
+	// the artifact agreed with it (schema §3, v3). Both nil when the
+	// configuration named no manifest. The expectation itself is
+	// deliberately absent: it is not comparable to Checksum beside it.
+	ManifestHash  *string `json:"manifest_hash"`
+	ManifestMatch *bool   `json:"manifest_match"`
+	// NewestDataAt is the newest instant found in the restored data
+	// (schema §3, v3). A measurement, never a claim — neither CreatedAt
+	// nor a manifest's created_at may populate it. Nil when nothing
+	// measured one.
+	NewestDataAt *string `json:"newest_data_at"`
 }
 
 // Adapter identifies the engine adapter that performed the restore.
@@ -82,6 +94,26 @@ type Adapter struct {
 type Sandbox struct {
 	Provider string            `json:"provider"`
 	Params   map[string]string `json:"params"`
+	// ImageDigest is the engine image the sandbox actually ran (schema
+	// §3, v3). Nil where there is no image, as on a bare host, or where
+	// the provider cannot answer. Params.image holds a tag, which points
+	// at different bytes over time.
+	ImageDigest *string `json:"image_digest"`
+	// Resources is what the provider applied, never what the
+	// configuration asked for (schema §3, v3, and sandbox-providers.md
+	// §6.1).
+	Resources Resources `json:"resources"`
+}
+
+// Resources is what a provider applied to a sandbox. Both members are nil
+// wherever a provider cannot read back what it set, which is an answer
+// rather than a failure: a record that says "I do not know" is worth more
+// than one stating a limit that never held.
+type Resources struct {
+	MemoryBytes *int64 `json:"memory_bytes"`
+	// CPUsMilli is thousandths of a CPU: 1500 is one and a half.
+	// Thousandths because §4 admits no number that is not an integer.
+	CPUsMilli *int64 `json:"cpus_milli"`
 }
 
 // Timings holds per-phase durations in integer milliseconds
@@ -119,6 +151,11 @@ type Env struct {
 	// wrote the record (schema §3). Null when it could not be read: build
 	// identity is never worth failing a drill for.
 	ProbaviDigest *string `json:"probavi_digest"`
+	// ClockSynchronised is whether the host *believed* its clock was
+	// synchronised (schema §3, v3). A belief, not a time: a lying or
+	// manipulated time source produces the same true. Nil outside systemd
+	// and on any failed read.
+	ClockSynchronised *bool `json:"clock_synchronised"`
 }
 
 // Signature is the detached ed25519 signature over the record's canonical
