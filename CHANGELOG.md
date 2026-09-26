@@ -11,6 +11,18 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A published evidence-schema version is now held to its worked
+  example by a test**, not by remembering to extend a list.
+  `internal/spec` validated the golden logs against a hand-written set of
+  versions, and `probavi-evidence/3` was published without being added to
+  it — so `log_v3.jsonl` went unvalidated against the very schema that
+  had just grown to accept it. The set is derived from the schema's own
+  `oneOf` branches now, and a second gate refuses a published version
+  with no vector beside the others. Both were confirmed to fail before
+  they were relied on.
+
 ### Added
 
 - **`probavi-manifest/2` is specified**, and nothing reads it yet. The

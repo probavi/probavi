@@ -660,6 +660,18 @@ this specification is a correction rather than a v4.
       `log_v2.jsonl` joined them with this change, having lost its updater
       to v3. Done 2026-09-26.
 
+One thing the v3 list above was true about and nothing held it to, found
+2026-09-26 and fixed the same day: `internal/spec` validated the golden
+logs against a **hand-written list** of versions, and publishing
+`recordV3` did not add v3 to it. The vector carrying the new version went
+unvalidated against the very schema that had just grown to accept it —
+the one direction of that change nothing was watching, while the
+verifier's own obligation *was* enforced and duly failed the build. The
+list is now derived from the schema's `oneOf` branches, so a published
+version brings its test case with it, and a second gate states the rest
+of the obligation: a version this document publishes owes a worked
+example beside the others, in the same change.
+
 What v3 deliberately does **not** carry, for the reason `ROADMAP.md`
 already records: a `timings_ms.fetch` phase. The core downloads nothing
 today, and whether it ever will is an open question rather than a settled
