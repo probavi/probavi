@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "influxdb"
-	adapterVersion = "0.5.0"
+	adapterVersion = "0.6.0"
 
 	// Where the restored instance serves inside the sandbox. No TLS and
 	// no operator credentials: a Probavi sandbox is zero-ingress
@@ -110,18 +110,69 @@ printf '%s\n' "$out" | tr -d '\r' | awk '
     print row
   }'`
 
+// countFlux counts a bucket's points and never answers "no rows".
+//
+// The union with a single zero row is the whole point: an empty bucket
+// answers nothing at all, which the core cannot parse as a count, so the
+// floor turns it into 0 and a check asserting emptiness works. A missing
+// bucket still fails the query, measured, which is what lets table_exists
+// share this statement.
+const countFlux = `import "array"
+union(tables:[from(bucket:{{table}}) |> range(start:0) |> group() |> count() |> keep(columns:["_value"]), array.from(rows:[{_value:0}])]) |> sum() |> keep(columns:["_value"])`
+
 // probePayload reports identity and capabilities (§6.1). Probe must not
 // touch the sandbox and needs no credentials.
 func probePayload() any {
 	return map[string]any{
 		"name":              adapterName,
 		"adapter_version":   adapterVersion,
-		"protocol_versions": []string{protocolVersion},
+		"protocol_versions": protocolVersions,
 		"engine":            map[string]string{"name": "influxdb"},
 		"sources": []map[string]any{
 			{"kind": "influx_backup_tar", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "influx_backup", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "influx_backup_dir", "capabilities": map[string]bool{"pitr": false}},
+		},
+		// All three generating built-ins, in Flux. They did not apply to
+		// this adapter at all before: the core composed SQL and InfluxDB
+		// 2.x has none. table names a **bucket**, and column the field
+		// whose newest point freshness reads.
+		//
+		// No identifier quoting is declared, and that is the unusual part:
+		// the core's SQL-standard default is exactly what Flux wants, so
+		// `from(bucket:{{table}})` receives `from(bucket:"metrics")`
+		// already correct. This is the one engine in the catalogue where
+		// the relational default happens to fit a language that is not
+		// SQL.
+		//
+		// table_exists and row_count are one statement because the engine
+		// answers both from it, and the union with a zero row is what
+		// makes that true. Measured on 2.7.12, all four cases:
+		//
+		//   - a bucket that does not exist fails the query outright,
+		//     "could not find bucket", which is what table_exists reads;
+		//   - a bucket that exists but holds nothing would otherwise
+		//     answer *no rows at all*, which the core cannot read as a
+		//     count — so the union floors it at 0, and `max: 0` (assert
+		//     this bucket is empty) works rather than failing with
+		//     "unexpected output";
+		//   - a populated bucket answers its count;
+		//   - and the union does not swallow the 404: a missing bucket
+		//     still fails, measured, so sharing the statement costs
+		//     table_exists nothing.
+		//
+		// freshness takes the maximum _time rather than last(). last()
+		// answers per series, and a bucket holds many — the maximum
+		// across all of them is the instant a freshness check is about.
+		// InfluxDB renders it RFC 3339, which the core already reads. A
+		// field that matches nothing answers no rows, and the core
+		// reports that as a table with no rows rather than as an error.
+		"checks": map[string]any{
+			"table_exists": map[string]string{"statement": countFlux},
+			"row_count":    map[string]string{"statement": countFlux},
+			"freshness": map[string]string{
+				"statement": `from(bucket:{{table}}) |> range(start:0) |> filter(fn:(r) => r._field == {{column}}) |> group() |> max(column:"_time") |> keep(columns:["_time"])`,
+			},
 		},
 		"sql_runner": map[string]any{
 			// InfluxDB 2.x has no SQL: the check text the core passes

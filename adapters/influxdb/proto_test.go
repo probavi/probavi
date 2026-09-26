@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,7 +27,9 @@ import (
 func harnessCore(input string, out io.Writer) *core {
 	sc := bufio.NewScanner(strings.NewReader(input))
 	sc.Buffer(make([]byte, 64*1024), maxLineBytes)
-	return &core{in: sc, out: out, requestID: "r-test"}
+	// The floor, because that is what the core probes at and what these
+	// tests frame their fixtures in; every message back echoes it.
+	return &core{in: sc, out: out, requestID: "r-test", protocol: protocolFloor}
 }
 
 // sandboxResultLine is one sandbox_result message carrying result.
@@ -73,8 +76,15 @@ func TestProtoAnotherVersionIsRefusedByName(t *testing.T) {
 	if perr == nil || perr.Code != "unsupported_protocol" {
 		t.Fatalf("perr = %+v, want unsupported_protocol", perr)
 	}
-	if supported, ok := perr.Detail["supported"].([]string); !ok || len(supported) != 1 || supported[0] != protocolVersion {
-		t.Errorf("detail.supported = %v, want [%s]", perr.Detail["supported"], protocolVersion)
+	supported, ok := perr.Detail["supported"].([]string)
+	if !ok || !slices.Equal(supported, protocolVersions) {
+		t.Errorf("detail.supported = %v, want every version this adapter speaks %v",
+			perr.Detail["supported"], protocolVersions)
+	}
+	// The refusal itself must be readable: it is framed at the floor,
+	// never at the version that was asked for and refused.
+	if c.protocol != protocolFloor {
+		t.Errorf("refusal framed at %q, want the floor %q", c.protocol, protocolFloor)
 	}
 }
 
@@ -118,7 +128,9 @@ func assertCalls(t *testing.T, written string, verbs ...string) {
 			t.Fatalf("line %d is not JSON: %s", i+1, lines[i])
 		}
 		id := "c" + strconv.Itoa(i+1)
-		if msg.Protocol != protocolVersion || msg.RequestID != "r-test" ||
+		// Echoing, not asserting a constant: the fixture core was handed
+		// the floor, and every message back must carry what it was sent.
+		if msg.Protocol != protocolFloor || msg.RequestID != "r-test" ||
 			msg.SandboxCall.CallID != id || msg.SandboxCall.Verb != verb || len(msg.SandboxCall.Args) == 0 {
 			t.Errorf("line %d = %s, want call %s of %s echoing the request", i+1, lines[i], id, verb)
 		}
@@ -240,5 +252,83 @@ func TestProtoFinalResponses(t *testing.T) {
 	}
 	if exit := broken.finishError(protoErr("internal", false, "unwritable")); exit != 1 {
 		t.Errorf("finishError on a broken stdout exit = %d, want 1", exit)
+	}
+}
+
+// TestProtoSpeaksBothVersionsAndEchoesWhatItWasSent: the migration every
+// adapter makes. The core probes at the floor and drives everything after
+// it at the highest version both sides declare.
+func TestProtoSpeaksBothVersionsAndEchoesWhatItWasSent(t *testing.T) {
+	for _, version := range protocolVersions {
+		t.Run(version, func(t *testing.T) {
+			in := strings.NewReader(`{"protocol":"` + version +
+				`","request_id":"r-1","op":"probe","payload":{}}` + "\n")
+			var out bytes.Buffer
+			c, req, perr := accept(in, &out)
+			if perr != nil {
+				t.Fatalf("accept refused %s: %+v", version, perr)
+			}
+			if req.Op != "probe" || c.protocol != version {
+				t.Fatalf("core protocol = %q, request = %+v; want the version it was sent", c.protocol, req)
+			}
+			c.finishOK(map[string]any{"ok": true})
+			var msg struct {
+				Protocol string `json:"protocol"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &msg); err != nil {
+				t.Fatalf("response is not JSON: %s", out.String())
+			}
+			if msg.Protocol != version {
+				t.Errorf("response protocol = %q, want the %q it was sent", msg.Protocol, version)
+			}
+		})
+	}
+}
+
+// TestProbeDeclaresAllThreeBuiltinsAsFlux, and declares no quoting,
+// because the core's SQL-standard default is exactly what Flux wants
+// around a bucket name — the one engine here where that is true of a
+// language that is not SQL.
+func TestProbeDeclaresAllThreeBuiltinsAsFlux(t *testing.T) {
+	payload, err := json.Marshal(probePayload())
+	if err != nil {
+		t.Fatalf("marshal probe: %v", err)
+	}
+	var got struct {
+		ProtocolVersions []string                     `json:"protocol_versions"`
+		Identifier       map[string]string            `json:"identifier"`
+		Checks           map[string]map[string]string `json:"checks"`
+	}
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("probe payload: %v", err)
+	}
+	if !slices.Equal(got.ProtocolVersions, protocolVersions) {
+		t.Errorf("protocol_versions = %v, want %v", got.ProtocolVersions, protocolVersions)
+	}
+	if got.Identifier != nil {
+		t.Errorf("identifier = %v, want none: the core's default quoting is what Flux wants", got.Identifier)
+	}
+	for _, kind := range []string{"table_exists", "row_count", "freshness"} {
+		stmt := got.Checks[kind]["statement"]
+		if !strings.Contains(stmt, "from(bucket:{{table}})") {
+			t.Errorf("checks[%q] = %q, want it to read the bucket table names", kind, stmt)
+		}
+	}
+	// One statement, because the engine answers both from it.
+	if got.Checks["table_exists"]["statement"] != got.Checks["row_count"]["statement"] {
+		t.Error("table_exists and row_count diverged; the engine answers both from one query")
+	}
+	// The zero floor is what lets them share it: without the union an
+	// empty bucket answers no rows at all, which the core cannot read as
+	// a count, and asserting a bucket is empty would fail as unparseable.
+	if !strings.Contains(got.Checks["row_count"]["statement"], "array.from(rows:[{_value:0}])") {
+		t.Errorf("row_count = %q, want the zero floor an empty bucket needs",
+			got.Checks["row_count"]["statement"])
+	}
+	// max(_time), not last(): last() answers per series, and a bucket
+	// holds many.
+	fresh := got.Checks["freshness"]["statement"]
+	if !strings.Contains(fresh, `max(column:"_time")`) || strings.Contains(fresh, "last()") {
+		t.Errorf("freshness = %q, want the maximum _time across every series", fresh)
 	}
 }

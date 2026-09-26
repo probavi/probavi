@@ -76,13 +76,46 @@ checks should target: set `options.database` in the drill config.
 
 ## Checks: one Flux query
 
-InfluxDB 2.x has no SQL, so the generating built-in checks
-(`row_count`, `table_exists`, `freshness`) do not apply. Having no SQL is
-no longer the whole reason — an adapter may declare its own statement for
-a built-in (`probavi-adapter/1`, adapter protocol §6.1.1), and several
-engines without SQL now do. This one has not yet. A check's
-text is one Flux query, delivered as a single argument (no shell
-anywhere):
+**All three generating built-ins work here now** — `table_exists`,
+`row_count` and `freshness` — declared as Flux (adapter protocol §6.1.1,
+`probavi-adapter/1`). They did not apply before, because the core composed
+SQL and InfluxDB 2.x has none. `table` names a **bucket**, and `column`
+the field whose newest point `freshness` reads:
+
+```yaml
+checks:
+  - builtin: row_count
+    table: metrics
+    min: 1
+  - builtin: freshness
+    table: metrics
+    column: usage
+    max_age: 24h
+```
+
+Three things worth knowing, all measured on 2.7.12:
+
+- `table_exists` and `row_count` are **one query**. A bucket that does
+  not exist fails it outright with *"could not find bucket"*, which is
+  what `table_exists` reads; a bucket that exists answers its count.
+- That query **floors the count at zero**. An empty bucket would
+  otherwise answer no rows at all, which is not a number the core can
+  read — so `max: 0`, asserting a bucket is empty, works rather than
+  failing as unparseable output. The floor does not swallow the missing
+  bucket: that still fails.
+- `freshness` takes the **maximum `_time`**, not `last()`. `last()`
+  answers per series and a bucket holds many; the maximum across all of
+  them is the instant the check is about. InfluxDB renders it RFC 3339,
+  which the core already reads.
+
+**No identifier quoting is declared, and that is deliberate.** The core's
+SQL-standard default is exactly what Flux wants around a bucket name, so
+`from(bucket:{{table}})` arrives as `from(bucket:"metrics")` already
+correct. This is the one engine here where the relational default happens
+to fit a language that is not SQL.
+
+A check you write yourself is still one Flux query, delivered as a single
+argument (no shell anywhere):
 
 ```yaml
 checks:

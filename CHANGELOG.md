@@ -13,6 +13,43 @@ always called out explicitly.
 
 ### Added
 
+- **All three generating built-ins now work against InfluxDB**
+  (`adapters/influxdb` 0.6.0), declared as Flux. None applied before: the
+  core composed SQL and InfluxDB 2.x has none. `table` names a
+  **bucket**, and `column` the field whose newest point `freshness`
+  reads.
+
+  ```yaml
+  checks:
+    - builtin: row_count
+      table: metrics
+      min: 1
+    - builtin: freshness
+      table: metrics
+      column: usage
+      max_age: 24h
+  ```
+
+  `table_exists` and `row_count` are one query, and **it floors the count
+  at zero**. A bucket that does not exist fails it outright with *"could
+  not find bucket"*, which is what `table_exists` reads; a bucket that
+  exists but holds nothing would otherwise answer no rows at all, which
+  is not a number the core can read — so `max: 0`, asserting a bucket is
+  empty, works rather than failing as unparseable output. The floor does
+  not swallow the missing bucket: that still fails, measured.
+
+  `freshness` takes the **maximum `_time`**, not `last()`. `last()`
+  answers per series and a bucket holds many; the maximum across all of
+  them is the instant the check is about.
+
+  **No identifier quoting is declared**, and that is deliberate: the
+  core's SQL-standard default is exactly what Flux wants around a bucket
+  name, so `from(bucket:{{table}})` arrives already correct. This is the
+  one engine in the catalogue where the relational default happens to fit
+  a language that is not SQL.
+
+### Added
+
 - **`table_exists` and `row_count` now work against Valkey**
   (`adapters/valkey` 0.6.0), declared as Lua with `table` read as a **key
   prefix** — the same two statements the redis adapter carries, but
