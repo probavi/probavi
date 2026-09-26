@@ -13,6 +13,29 @@ always called out explicitly.
 
 ### Added
 
+- **`table_exists` and `row_count` now work against Valkey**
+  (`adapters/valkey` 0.6.0), declared as Lua with `table` read as a **key
+  prefix** — the same two statements the redis adapter carries, but
+  measured against this engine rather than assumed from that one, at
+  **both ends of the verified range**: 7.2.14 and 9.1.1.
+
+  The statements use `redis.call`, which is the portable spelling.
+  Valkey also exposes `server`, but `redis` works on every verified
+  version — 9.1.1's own `redis_version` still reads 7.2.4 — and a
+  statement that only worked on the newest would fail the version matrix
+  rather than an operator's drill, which is the better place for it but
+  still the wrong answer.
+
+  As for redis: every declared statement is free of spaces, because the
+  runner expands a check's text by word splitting; `row_count` answers 0
+  for an empty prefix rather than failing, so `table_exists` is a
+  different statement that asserts the first key; `KEYS` reads the whole
+  keyspace, and `SCAN` needs a loop that needs spaces; and `freshness` is
+  not declared, because a TTL says when a key will go, not when its value
+  arrived.
+
+### Added
+
 - **`table_exists` and `row_count` now work against Redis**
   (`adapters/redis` 0.7.0), declared as Lua, with `table` read as a **key
   prefix** — the check asks about the keys under `<table>:`, which is the

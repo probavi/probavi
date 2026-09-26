@@ -14,7 +14,7 @@ import (
 
 const (
 	adapterName    = "valkey"
-	adapterVersion = "0.5.0"
+	adapterVersion = "0.6.0"
 
 	// Where the restored server serves inside the sandbox. No TLS and no
 	// auth: a Probavi sandbox is zero-ingress (--network none, no ports
@@ -80,12 +80,52 @@ func probePayload() any {
 	return map[string]any{
 		"name":              adapterName,
 		"adapter_version":   adapterVersion,
-		"protocol_versions": []string{protocolVersion},
+		"protocol_versions": protocolVersions,
 		"engine":            map[string]string{"name": "valkey"},
 		"sources": []map[string]any{
 			{"kind": "valkey_rdb", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "valkey_rdb_dir", "capabilities": map[string]bool{"pitr": false}},
 			{"kind": "valkey_aof", "capabilities": map[string]bool{"pitr": false}},
+		},
+		// A key prefix is not quoted, and the core must not wrap it in the
+		// SQL-standard quotes it applies by default (§6.1.1).
+		"identifier": map[string]string{"open": "", "close": "", "separator": "."},
+		// Two of the three generating built-ins, with table read as a key
+		// prefix: the check asks about the keys under `<table>:`, the
+		// naming convention this engine inherits from its ancestor.
+		//
+		// **Every statement here is free of spaces on purpose.** The
+		// runner expands the check text by word splitting, so a Lua script
+		// carrying a space arrives as several arguments and the engine
+		// refuses it. That is why the count is written
+		// `return#redis.call(...)` and the message
+		// `no_keys_under_this_prefix`.
+		//
+		// The `redis` global is the portable spelling and the deliberate
+		// one. Valkey also exposes `server` (measured), but `redis` works
+		// on every version this adapter is verified against, oldest to
+		// newest — measured on 7.2.14 and on 9.1.1, whose own
+		// redis_version still reads 7.2.4.
+		//
+		// row_count answers 0 for a prefix holding nothing rather than
+		// failing, because a count of zero is a legitimate answer to
+		// compare against a bound. table_exists cannot be the same
+		// statement for that reason: it asserts the first key and fails
+		// with its own message when there is none.
+		//
+		// KEYS reads the whole keyspace, and on a large restore this is
+		// the expensive check in the set. It is the only form the runner
+		// can carry: SCAN needs a loop, and a loop needs spaces.
+		//
+		// freshness is not declared. Valkey dates nothing per key — a TTL
+		// says when a key will go, not when its value arrived.
+		"checks": map[string]any{
+			"table_exists": map[string]string{
+				"statement": `EVAL assert(redis.call('keys',ARGV[1])[1],'no_keys_under_this_prefix') 0 {{table}}:*`,
+			},
+			"row_count": map[string]string{
+				"statement": `EVAL return#redis.call('keys',ARGV[1]) 0 {{table}}:*`,
+			},
 		},
 		"sql_runner": map[string]any{
 			// Valkey has no SQL: the check text the core passes through
