@@ -8,12 +8,30 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 )
 
 const (
-	protocolVersion = "probavi-adapter/0"
+	// protocolVersion is the highest version this adapter speaks and
+	// protocolFloor the lowest. Both are declared: the core probes at the
+	// floor, so an adapter that stopped accepting it could not be probed
+	// at all (§8).
+	protocolVersion = "probavi-adapter/1"
+	protocolFloor   = "probavi-adapter/0"
 	maxLineBytes    = 4 << 20
 )
+
+// protocolVersions are the versions this adapter speaks, highest first.
+var protocolVersions = []string{protocolVersion, protocolFloor}
+
+func speaks(version string) bool {
+	for _, v := range protocolVersions {
+		if v == version {
+			return true
+		}
+	}
+	return false
+}
 
 // protoError is the §5 error object an adapter sends in a final response.
 type protoError struct {
@@ -50,6 +68,11 @@ type core struct {
 	out       io.Writer
 	requestID string
 	callSeq   int
+	// protocol is the version the core used for this operation. Every
+	// message back carries it: the core reads its own version on every
+	// line and treats a mismatch as a crash, so echoing a constant would
+	// break the moment the two sides negotiated anything but it.
+	protocol string
 }
 
 // accept reads and validates the single request message (§3.1).
@@ -63,12 +86,16 @@ func accept(stdin io.Reader, stdout io.Writer) (*core, *inbound, *protoError) {
 	if err := json.Unmarshal(sc.Bytes(), req); err != nil {
 		return nil, nil, protoErr("invalid_request", false, "request is not valid JSON")
 	}
-	c := &core{in: sc, out: stdout, requestID: req.RequestID}
-	if req.Protocol != protocolVersion {
+	c := &core{in: sc, out: stdout, requestID: req.RequestID, protocol: req.Protocol}
+	if !speaks(req.Protocol) {
+		// The refusal itself is framed at the floor: the version that was
+		// asked for is one this adapter cannot speak, and a reply in it
+		// would be unreadable to anything.
+		c.protocol = protocolFloor
 		// §3.1: the spoken versions MUST be listed in detail.supported.
 		return c, nil, &protoError{Code: "unsupported_protocol",
-			Message: "this adapter speaks " + protocolVersion + " only",
-			Detail:  map[string]any{"supported": []string{protocolVersion}}}
+			Message: "this adapter speaks " + strings.Join(protocolVersions, ", "),
+			Detail:  map[string]any{"supported": protocolVersions}}
 	}
 	return c, req, nil
 }
@@ -82,7 +109,7 @@ func (c *core) call(ctx context.Context, verb string, args any) (json.RawMessage
 	c.callSeq++
 	callID := "c" + strconv.Itoa(c.callSeq)
 	msg := map[string]any{
-		"protocol":   protocolVersion,
+		"protocol":   c.protocol,
 		"request_id": c.requestID,
 		"sandbox_call": map[string]any{
 			"call_id": callID, "verb": verb, "args": args,
@@ -113,7 +140,7 @@ func (c *core) call(ctx context.Context, verb string, args any) (json.RawMessage
 
 func (c *core) finishOK(payload any) int {
 	if err := c.writeLine(map[string]any{
-		"protocol": protocolVersion, "request_id": c.requestID, "ok": true, "payload": payload,
+		"protocol": c.protocol, "request_id": c.requestID, "ok": true, "payload": payload,
 	}); err != nil {
 		return 1
 	}
@@ -122,7 +149,7 @@ func (c *core) finishOK(payload any) int {
 
 func (c *core) finishError(perr *protoError) int {
 	if err := c.writeLine(map[string]any{
-		"protocol": protocolVersion, "request_id": c.requestID, "ok": false, "error": perr,
+		"protocol": c.protocol, "request_id": c.requestID, "ok": false, "error": perr,
 	}); err != nil {
 		return 1
 	}
