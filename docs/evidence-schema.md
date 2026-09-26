@@ -614,8 +614,10 @@ further change to this schema is a version bump (§10).
 
 ### 11.3 v3, and what it still owes
 
-v3 is **specified and normative as of 2026-09-26**, and not yet
-implemented. It is frozen against further change on the same terms as v1
+v3 is **specified and normative as of 2026-09-26**. The parts that make a
+version *published* — this document, the JSON Schema, and the independent
+verifier §10 obliges to accept it — moved together, because a test holds
+them together. What is left is the writer. It is frozen against further change on the same terms as v1
 and v2 from the day the list below is complete; until then a correction to
 this specification is a correction rather than a v4.
 
@@ -632,11 +634,15 @@ this specification is a correction rather than a v4.
 - [ ] The core populates all six. A read failure records null and never
       fails a drill — the rule v2 set for the digests, applied to a
       clock, an image and a pair of limits.
-- [ ] `spec/evidence` accepts `probavi-evidence/3`, with a v3 record
-      verified against the committed public key, a v2→v3 chain shown to
-      run straight through, and `probavi-evidence/4` still refused. The
-      test pinning the verifier's supported set in both directions moves
-      with it.
+- [x] `spec/evidence` accepts `probavi-evidence/3`, with both shapes §3
+      allows verified against the committed public key — every field
+      populated and every field null — a v2→v3 chain shown to run
+      straight through, and `probavi-evidence/4` still refused. Done
+      2026-09-26, and **not optional at this point**: the test pinning
+      the verifier's supported set in both directions turns publishing a
+      version in the schema into an obligation on the verifier in the
+      same change. Publishing `recordV3` without this failed the build,
+      which is §10 working rather than a delay.
 - [ ] Worked example: a byte-exact signed `log_v3.jsonl` beside the
       earlier vectors (§12), verified offline in CI by this repository's
       writer *and* by the independent verifier. It carries both shapes:

@@ -242,18 +242,98 @@ func TestV2ChainsAcrossVersions(t *testing.T) {
 }
 
 // TestUnpublishedVersionStillRefused keeps the allow-list load-bearing: it
-// grew by one entry, not into a wildcard.
+// grows an entry at a time, never into a wildcard. The version it names
+// moves with each bump — it is always the next one nothing has published.
 func TestUnpublishedVersionStillRefused(t *testing.T) {
 	priv := exampleSigner(t)
-	rec := v2Record(1, genesisPrevHash, nil, nil)
-	rec["schema"] = "probavi-evidence/3"
+	rec := v3Record(1, genesisPrevHash)
+	rec["schema"] = "probavi-evidence/4"
 	line := signRecord(t, rec, priv, KeyID(exampleKey(t)))
 
 	res := verifyBytes(t, line, NewKeyring(exampleKey(t)))
 	if res.Status != StatusInvalid {
 		t.Fatalf("status = %s, want INVALID", res.Status)
 	}
-	if !strings.Contains(res.Reason, `unsupported schema "probavi-evidence/3"`) {
+	if !strings.Contains(res.Reason, `unsupported schema "probavi-evidence/4"`) {
 		t.Errorf("reason = %q, want the unsupported-schema rejection", res.Reason)
+	}
+}
+
+// v3Record is the §3 shape of probavi-evidence/3: v2 plus the backup
+// manifest verdict, the restored data's newest instant, what the sandbox
+// actually was, and the host's clock belief.
+func v3Record(seq int, prevHash string) map[string]any {
+	rec := v2Record(seq, prevHash,
+		"sha256:"+strings.Repeat("05", 32), "sha256:"+strings.Repeat("1d", 32))
+	rec["schema"] = "probavi-evidence/3"
+	backup := rec["backup"].(map[string]any)
+	backup["manifest_hash"] = "sha256:" + strings.Repeat("3b", 32)
+	backup["manifest_match"] = true
+	backup["newest_data_at"] = "2026-08-05T07:59:42.000Z"
+	rec["sandbox"] = map[string]any{
+		"provider":     "docker",
+		"params":       map[string]any{"image": "postgres:16"},
+		"image_digest": "sha256:" + strings.Repeat("9f", 32),
+		"resources": map[string]any{
+			"memory_bytes": json.Number("2147483648"),
+			"cpus_milli":   json.Number("1500"),
+		},
+	}
+	rec["env"].(map[string]any)["clock_synchronised"] = true
+	return rec
+}
+
+// v3NullRecord is the same version with every v3 field null, which §3
+// makes legal so that a drill naming no backup manifest, on a provider
+// that cannot read back its limits, on a host with no time daemon, still
+// emits a conforming record. A verifier that only ever saw the populated
+// shape would not be verifying the version.
+func v3NullRecord(seq int, prevHash string) map[string]any {
+	rec := v3Record(seq, prevHash)
+	backup := rec["backup"].(map[string]any)
+	backup["manifest_hash"], backup["manifest_match"], backup["newest_data_at"] = nil, nil, nil
+	sandbox := rec["sandbox"].(map[string]any)
+	sandbox["image_digest"] = nil
+	sandbox["resources"] = map[string]any{"memory_bytes": nil, "cpus_milli": nil}
+	rec["env"].(map[string]any)["clock_synchronised"] = nil
+	return rec
+}
+
+// TestV3RecordsVerify proves the bump is real rather than an entry in a
+// map: both shapes §3 allows, signed the way §6 prescribes, verify with
+// only the committed public key — the position an auditor is in.
+func TestV3RecordsVerify(t *testing.T) {
+	priv := exampleSigner(t)
+	kr := NewKeyring(exampleKey(t))
+	keyID := KeyID(exampleKey(t))
+
+	for name, build := range map[string]func(int, string) map[string]any{
+		"every field populated": v3Record,
+		"every field null":      v3NullRecord,
+	} {
+		t.Run(name, func(t *testing.T) {
+			line := signRecord(t, build(1, genesisPrevHash), priv, keyID)
+			res := verifyBytes(t, line, kr)
+			if res.Status != StatusValid || res.Records != 1 {
+				t.Fatalf("status = %s, records = %d, reason = %q; want VALID", res.Status, res.Records, res.Reason)
+			}
+		})
+	}
+}
+
+// TestV2ToV3ChainRunsStraightThrough: §10 permits one file to hold records
+// of different versions, because an upgrade happens mid-file. The chain is
+// over canonical bytes and knows nothing of versions, and this is what
+// proves it.
+func TestV3ChainFollowsAV2Record(t *testing.T) {
+	priv := exampleSigner(t)
+	keyID := KeyID(exampleKey(t))
+
+	line1 := signRecord(t, v2Record(1, genesisPrevHash, nil, nil), priv, keyID)
+	line2 := signRecord(t, v3Record(2, chainHash(line1)), priv, keyID)
+
+	res := verifyBytes(t, append(append([]byte(nil), line1...), line2...), NewKeyring(exampleKey(t)))
+	if res.Status != StatusValid || res.Records != 2 {
+		t.Fatalf("status = %s, records = %d, reason = %q; want VALID over both", res.Status, res.Records, res.Reason)
 	}
 }
