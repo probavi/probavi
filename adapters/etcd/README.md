@@ -152,8 +152,28 @@ Built-in checks that generate SQL (`row_count`, `table_exists`,
 `freshness`) do not apply to this adapter. An adapter may declare its own
 statement for a built-in instead of letting the core compose one
 (`probavi-adapter/1`, adapter protocol §6.1.1), and several in this
-catalogue now do — this one does not, and the reason is the engine: etcd
-is a key-value store, so there is nothing for `table` to name.
+catalogue now do. **This one does not, and the reason is `etcdctl` rather
+than the data model** — a key prefix would serve perfectly well as the
+thing `table` names, and the redis adapter reads one.
+
+Two measurements decide it, both on 3.5.21.
+
+`--count-only` is accepted only with `--write-out=fields`, which prints
+six header lines before `"Count" : 2`. There is no invocation that answers
+a bare number, and `row_count` parses what the runner prints as an
+integer. Reducing that output in the runner would change what **every**
+raw check prints, since the runner hands etcdctl's output through
+untouched by design.
+
+And a prefix holding nothing is not an error here: `get --prefix
+/nosuch/` answers `"Count" : 0` and **exits 0**. A declared
+`table_exists` would therefore pass for every prefix, including ones that
+hold nothing — putting *the table exists* into a signed record on the
+strength of a command that cannot fail. A check that cannot fail proves
+nothing; one that cannot fail and asserts something is worse.
+
+Count a prefix with a raw check instead, as the second example above
+does.
 
 ## When the backup was taken
 
