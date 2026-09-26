@@ -11,6 +11,34 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **`probavi-manifest/2` is specified**, and nothing reads it yet. The
+  backup manifest gains one optional object, `baseline`: what the backup
+  job counted, per table, either exactly (`rows`) or as a range
+  (`rows_min`/`rows_max`). `docs/backup-manifest.md` §2.1 is the shape,
+  §5.1 the `baseline` check that reconciles it after the restore, §11
+  the migration and what implementation still owes.
+
+  **Keep writing `probavi-manifest/1` until a release says otherwise.** A
+  core that does not know a `schema` value refuses the drill — that is
+  the rule working, not a fault — so a backup job adopting `/2` early
+  stops drills rather than degrading quietly.
+
+  Why a range in the manifest rather than a tolerance in the drill
+  config (§9.3): both express the same uncertainty, but a dial sits in
+  the file edited by whoever wants a green drill, and `manifest_hash`
+  reaches every record — so a range that widened between two drills is
+  visible in the log and a tolerance that widened is not. A job that can
+  state no honest bound states none.
+
+  The published JSON Schema accepts both versions, and `internal/spec`
+  now holds it to both halves of the contract: the shapes a backup job
+  may write, and the ones it may not. That gate did not exist before —
+  the backup manifest is the one published schema whose instances this
+  repository does not produce, so nothing here could have caught a
+  permissive version of it.
+
 ## [0.33.0] - 2026-09-26
 
 ### Added

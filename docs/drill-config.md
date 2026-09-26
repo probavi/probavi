@@ -222,6 +222,14 @@ What it catches is corruption, not tampering: whoever can rewrite the
 backup can rewrite the manifest lying beside it. `docs/backup-manifest.md`
 §6 states that, and states what a matching manifest does not prove.
 
+The example says `probavi-manifest/1` because that is what a release
+reads. `probavi-manifest/2` is specified — it adds a `baseline` object
+stating what the backup job counted, for a `baseline` check to reconcile
+after the restore — and no released core reads it yet, so a manifest
+written today stays on `/1`: an unknown `schema` fails the drill by the
+rule in the table above rather than being ignored.
+`docs/backup-manifest.md` §2.1, §5.1 and §11 are the whole of it.
+
 ### 3.3 `target.pitr`
 
 Exactly one of:
