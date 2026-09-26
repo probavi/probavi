@@ -178,6 +178,43 @@ sharply: no provider accepts a secret through config.
 configuration**. A record therefore states what was *requested*, never
 what ran.
 
+### 6.1 What a provider must answer about what it ran
+
+`probavi-evidence/3` closes half of that gap, and it does so by asking
+providers a question they were not asked before. A provider MUST be able
+to report, after a sandbox exists:
+
+| What | Reported as | When it is null |
+|---|---|---|
+| The engine image actually run | `sha256:<64 lowercase hex>` | There is no image (a bare host), or the runtime cannot be asked for one |
+| The memory limit actually applied | bytes | The provider cannot read back what it set, or nothing was applied |
+| The CPU limit actually applied | thousandths of a CPU | The same |
+
+Three rules hold this honest, and each exists because the alternative
+would be worse than the missing value.
+
+**A provider reports what it read back, never what it was asked for.**
+Echoing the request would turn `sandbox.params` into evidence by copying
+it under a different name, which is the exact confusion this section
+opens by warning about. A provider that cannot read back a limit reports
+null.
+
+**Null is always an acceptable answer, and never fails a drill.** A
+Kubernetes Job without limits takes what the node has; a rootless runtime
+may accept a cap and drop it; a bare host has no image at all. A record
+that says *I do not know* is worth more than one that says a number
+nobody applied — the podman measurement in §7 is exactly this hazard,
+where a cap the runtime accepted and silently dropped would have left a
+signed record stating a limit that never held.
+
+**The image digest identifies bytes, not a tag.** `sandbox.params.image`
+holds `postgres:16`, which points at different bytes over time; the
+digest is what makes a record say which engine performed the restore.
+That completes the set `adapter.digest` and `env.probavi_digest` began.
+
+What this does **not** close is the other half of the gap above: an
+isolation class is still not evidence, and §7's door is still shut.
+
 That is exactly right for an image or a memory cap, and not obviously
 right for a parameter naming an isolation class, which an auditor will
 read as a fact about the drill. Until that door is answered (§7), no
