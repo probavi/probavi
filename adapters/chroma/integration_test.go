@@ -14,6 +14,8 @@ import (
 
 	"github.com/probavi/probavi/internal/adapter"
 	"github.com/probavi/probavi/internal/capabilities"
+	"github.com/probavi/probavi/internal/checks"
+	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/sandbox"
 	"github.com/probavi/probavi/internal/sandbox/docker"
 )
@@ -243,6 +245,46 @@ func TestEndToEndRestoreDrill(t *testing.T) {
 			if got := strings.TrimSpace(out); got != fmt.Sprint(records) {
 				t.Errorf("count check answered %q, want %d", got, records)
 			}
+
+			// The generating built-ins, run the way the core runs them —
+			// through internal/checks, carrying the declarations this
+			// adapter makes. They did not apply to Chroma at all before
+			// it declared them: the core composed SQL for an engine that
+			// has none. Without the Dialect line the core composes that
+			// SQL again, which is what makes it the assertion.
+			t.Run("the generating built-ins work", func(t *testing.T) {
+				probe, perr := runner.Probe(ctx)
+				if perr != nil {
+					t.Fatalf("probe: %v", perr)
+				}
+				deps := checks.Deps{
+					Exec:    sbx,
+					Runner:  checks.Runner{Argv: probe.SQLRunner.Argv, Env: probe.SQLRunner.Env},
+					Target:  checks.Target{User: res.Connection.User, Database: res.Connection.Database},
+					Dialect: checks.DialectFrom(probe),
+				}
+				min1, tooMany := int64(1), int64(records*10)
+				results, cerr := checks.Run(ctx, []config.Check{
+					{Builtin: config.CheckTableExists, Table: "drills"},
+					{Builtin: config.CheckTableExists, Table: "nosuch"},
+					{Builtin: config.CheckRowCount, Table: "drills", Min: &min1},
+					{Builtin: config.CheckRowCount, Table: "drills", Min: &tooMany},
+				}, deps)
+				if cerr != nil {
+					t.Fatalf("checks.Run: %v", cerr)
+				}
+				// Each asked once so it must pass and once so it must
+				// fail: a check that cannot fail proves nothing.
+				for i, want := range []bool{true, false, true, false} {
+					if results[i].OK != want {
+						t.Errorf("check %d (%s) = %v (%s), want %v",
+							i, results[i].Name, results[i].OK, results[i].Detail, want)
+					}
+				}
+				if !strings.Contains(results[2].Detail, fmt.Sprint(records)) {
+					t.Errorf("row_count detail = %q, want the count read and compared", results[2].Detail)
+				}
+			})
 		})
 	}
 }
