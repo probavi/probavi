@@ -13,6 +13,26 @@ always called out explicitly.
 
 ### Changed
 
+- **The damaged-line warning is asserted in both directions, and
+  `internal/evidence`'s mutation ceiling goes from 10 to 8.** A log carrying
+  crash artifacts reopens successfully on purpose — the chain continues from
+  the last valid record rather than refusing to append ever again — so this
+  warning is the only thing telling an operator that the file is not what it
+  was, and which lines to go and look at. Nothing asserted it, so both ways
+  of getting it wrong were accepted.
+
+  Warning about a log with nothing wrong is not harmless noise: it teaches an
+  operator to skip the line, which costs the warning its meaning for the log
+  that does have damage. Staying quiet about a single damaged line hides the
+  commonest case there is — one interrupted append, which is exactly what a
+  crash leaves behind.
+
+  This is the shape `.mutation-budget`'s header excuses as an error check
+  that only decides whether a debug line is logged, and it is worth saying
+  why this one is not that: the message is a documented operator signal about
+  the integrity of the evidence log, not a diagnostic aid for whoever is
+  reading the source.
+
 - **The bound on the walk back to a rune boundary is asserted, and
   `internal/evidence`'s mutation ceiling goes from 11 to 10.** `TruncateLine`
   walks back from the cut until it finds a byte that starts a rune, bounded
