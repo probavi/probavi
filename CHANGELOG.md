@@ -13,6 +13,41 @@ always called out explicitly.
 
 ### Added
 
+- **How to drill an encrypted backup** (`docs/backup-staging.md` §7).
+  Probavi holds no key of its own and decrypts nothing, so the documented
+  path is to decrypt while staging: the cron entry that copies also
+  decrypts, and the drill sees an ordinary artifact. The key never enters
+  a Probavi configuration, protocol message or record, and a rotated key
+  stops the cron entry with the tool's own message rather than showing up
+  in a signed record.
+
+  The cost is written down rather than glossed: a decrypted copy exists on
+  the drill host for as long as it is kept. Hence a `tmpfs` where the
+  memory allows, and deletion in the same cron entry rather than by a job
+  that can stop without anyone noticing.
+
+  §7.2 states what an encrypted artifact meets **today**, measured, and
+  the three shipped answers differ — ArangoDB recognises the `ENCRYPTION`
+  marker and refuses by name, DuckDB fails its opening read with the
+  engine's own words, and an encrypted pgBackRest manifest cannot be read
+  so `backup.created_at` is null rather than guessed. None silently
+  passes. No shipped adapter decrypts, which is the state of the catalogue
+  rather than an oversight; the shape one would use needs nothing new from
+  the core, because `source.credential_env` is already defined as the
+  names of the variables an adapter needs in order to *read* the backup.
+
+  Two boundaries stated as deliberate: there is no `source.decrypt`,
+  because a key naming a command would be code execution driven from the
+  file whose bytes `drill.config_hash` signs; and decrypting inside the
+  sandbox means your own pinned image, because `age` and `gpg` are absent
+  from most engine images and the sandbox has no network by default.
+
+  One consequence worth knowing before it bites: a backup manifest's
+  checksum is over the bytes the drill is handed, so a manifest written
+  over the ciphertext can never match a plaintext artifact.
+
+### Added
+
 - **`--witness <command>` in both verifiers**: a party other than the
   operator can attest the chain head, and one run now reports both
   whether the log is intact and whether it was attested. Specified and

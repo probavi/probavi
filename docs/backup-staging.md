@@ -167,7 +167,144 @@ violated the day the copy stops. The record also carries
 `backup.created_at` where the artifact states its own creation time, so an
 auditor reading the log can see the age even where no check asserts it.
 
-## 7. Rules that do not bend
+## 7. Encrypted backups
+
+A backup that cannot be decrypted is not a backup, and a drill that never
+tries is not proving much. **Probavi holds no key of its own and decrypts
+nothing**: it has no cipher, no key store and no notion of what your
+archive is wrapped in. What it needs is either a readable artifact on the
+drill host, or an adapter whose engine tooling can read the encrypted one.
+
+Today that means the first. This section is how to arrange it, what an
+encrypted artifact actually meets if you hand one over unchanged, and two
+boundaries that are deliberate rather than unfinished.
+
+### 7.1 Decrypt while staging, which is the answer today
+
+The cron entry that copies also decrypts. The drill then sees an ordinary
+artifact and nothing about it is special:
+
+```sh
+#!/bin/sh
+# Stage tonight's backup, decrypted, for the drill that follows.
+set -eu
+stage=/srv/backups/prod-a/orders
+mkdir -p "$stage"
+
+# age, with the identity readable only by this job's user.
+age --decrypt -i /etc/probavi/staging.age-key \
+    -o "$stage/latest.dump.new" /mnt/archive/orders/latest.dump.age
+mv "$stage/latest.dump.new" "$stage/latest.dump"   # atomic, so no drill
+                                                   # reads a partial file
+```
+
+Three things make this the recommended route rather than merely the
+available one.
+
+**The key never enters Probavi.** It lives where the staging job's other
+credentials live — a file that job reads, or an agent it talks to — and no
+Probavi configuration, protocol message or record has a field for it.
+
+**The decryption is measured by nothing, which is correct.** A record
+states what was restored and how long the restore took. How the bytes came
+to be readable is outside the proof, exactly as §1 says of staging
+generally.
+
+**It fails where failure is cheap.** A rotated key, a missing identity or a
+corrupt wrapper stops the cron entry with the tool's own message, before a
+drill starts. That is a better place to find out than in a signed record.
+
+The cost, stated plainly: **a decrypted copy exists on the drill host for
+as long as you keep it.** That widens exposure by exactly one host, and
+§8's rule about the staging tree applies to it with more force than usual.
+Two mitigations worth the trouble:
+
+- Stage onto a `tmpfs` where the host has the memory, so the plaintext
+  never reaches a disk that outlives a reboot. Size it for one artifact,
+  not the retention window.
+- Delete after the drill in the same cron entry, rather than by a separate
+  job that can stop without anyone noticing — the failure mode §6 is about,
+  pointed the other way.
+
+### 7.2 What an encrypted artifact meets today
+
+Handing an encrypted file to a drill unchanged is a supported thing to do
+in the sense that it fails honestly. It is worth knowing *how*, because the
+three shipped answers differ and none of them is "it silently passed":
+
+| Where | What happens | Outcome |
+|---|---|---|
+| ArangoDB | An encrypted dump is **recognised and refused by name**: `arangodump` writes the `ENCRYPTION` marker either way, so the adapter reads it and says which encryption the dump states rather than failing obscurely later. | `source_corrupt` |
+| DuckDB | An encrypted database **fails its opening read with the engine's own words**, carried into the message verbatim. Key handling is a design that adapter's first release did not assume. | `source_corrupt` |
+| pgBackRest (postgres) | An encrypted **manifest cannot be read** — `repo1-cipher-type` makes `backup.info` unreadable — so `backup.created_at` is **null rather than guessed**. The restore is a separate question the repository's own tooling owns. | not a failure |
+
+**No shipped adapter decrypts an artifact.** That is the state of the
+catalogue rather than an oversight: decryption is engine-specific and
+key-handling is a design, so it arrives per adapter when someone needs it,
+the way everything else in that catalogue arrived. Each adapter's README is
+the answer for that adapter, and this document does not speak for them.
+
+The shape such an adapter would use needs nothing new from the core.
+`source.credential_env` is already defined as the names of the environment
+variables an adapter needs **in order to read the backup**, which is a
+decryption passphrase exactly; adapters already use it for engine
+passwords. So an encrypted source is an adapter-side source kind on a
+mechanism that exists — no core configuration key, no protocol version, and
+no adapter obliged to care. Names, never values, as always.
+
+### 7.3 Decrypting inside the sandbox, and the trap in it
+
+The remaining route is to put the ciphertext in the sandbox and decrypt it
+there, so no plaintext ever lands on the drill host. It works, and it has
+one trap that this project has already paid for once.
+
+**Do not assume the tool is in the image.** An adapter that reached for a
+binary its engine's image did not ship once blamed the *backup* for the
+binary's absence — a failure that read as "your artifact is bad" when it
+meant "this image has no such program". `age` and `gpg` are absent from
+most of the engine images in this catalogue, and the sandbox has **no
+network by default**, so nothing can install one at drill time.
+
+If you take this route, the image is yours: build it, pin it, and put the
+tool in it. The record then carries `sandbox.params.image` — the tag you
+asked for — and `sandbox.image_digest`, the bytes that actually ran, which
+is the field that tells an auditor the decrypting image was the one you
+think it was.
+
+### 7.4 Two boundaries, both deliberate
+
+**There is no `source.decrypt`.** A configuration key naming a command to
+run would be arbitrary code execution driven from the file whose bytes
+`drill.config_hash` signs — so a record would attest that a command ran
+without attesting what it was. It would also be a new configuration key for
+a job the same cron entry already does, which is §9's argument applied one
+level down.
+
+**No key material can reach a record, and three rules keep it out.**
+Credentials are names in `source.credential_env` and the core passes only
+the named variables. `sandbox.params` are recorded verbatim, so nothing
+secret belongs there — which is why `DOCKER_HOST` and `PROBAVI_SSH_TARGET`
+are environment variables (§8). And a record carries checksums, sizes and
+durations, never bytes of the artifact.
+
+One consequence worth knowing before it surprises you: **a backup
+manifest's checksum is over the bytes the drill is handed.** If the backup
+job writes one over the ciphertext and the drill is handed plaintext, the
+two can never agree, and every drill fails `source_corrupt` on an artifact
+that is fine (`docs/backup-manifest.md` §3). Write the manifest over
+whatever the drill will actually see, which for the pattern in §7.1 means
+after decryption rather than before.
+
+Finally, a note on what this is usually *for*. The failure most often
+imagined here is a key rotated out from under the archive, and that one is
+caught more cheaply somewhere else: `select: oldest`
+(`docs/drill-config.md` §3.2) drills the oldest member still in the
+retention window, which is both the artifact an incident reaches for and
+the one whose key is most likely gone. Encryption support and key-rotation
+coverage are different problems, and only one of them needs anything from
+this section.
+
+## 8. Rules that do not bend
 
 - **`put_file` resolves paths.** A request beneath the configured source
   must resolve inside it with every symlink followed, so a symlink in the
@@ -183,9 +320,11 @@ auditor reading the log can see the age even where no check asserts it.
   adapter and nothing else.
 - **The staging tree is production data.** It holds the same bytes the
   database does. Permissions, encryption at rest and retention deserve the
-  same treatment they get on the database host.
+  same treatment they get on the database host — and a tree holding
+  *decrypted* copies of an encrypted archive (§7.1) deserves more, because
+  it is the one place the plaintext exists outside the database.
 
-## 8. What Probavi will not do for you
+## 9. What Probavi will not do for you
 
 There is no fetcher, no scheduler and no pre-drill hook — cron owns the
 cadence and the staging step, and a drill starts with the artifact already
