@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/probavi/probavi/internal/adapter"
 	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/evidence"
 	"github.com/probavi/probavi/internal/manifest"
@@ -569,6 +570,15 @@ func TestEngineDiagnosticsNeverReachTheDetail(t *testing.T) {
 	if strings.Contains(logged, secret) {
 		t.Errorf("the log carries the sandbox password: %s", logged)
 	}
+	// The log must also name *which program* failed, which is the first
+	// thing an operator needs: a runner that exited 1 is either the engine
+	// refusing the statement or the client not being in the image, and the
+	// program name is what tells the two apart. Mutation testing found this
+	// unasserted — logging argv[1] instead of argv[0] would have named a
+	// flag, and nothing would have noticed.
+	if !strings.Contains(logged, testRunner.Argv[0]) {
+		t.Errorf("the log does not name the program that failed (%q): %s", testRunner.Argv[0], logged)
+	}
 }
 
 // TestMask covers both halves of the one redaction this package performs
@@ -797,5 +807,167 @@ func TestBaselineKeepsWhatRanWhenSomethingBreaks(t *testing.T) {
 	}
 	if len(results) == 4 {
 		t.Error("every table reported despite the sandbox dying")
+	}
+}
+
+// DialectFrom is the conversion the core actually uses, and the rest of
+// this suite skips it by building a Dialect by hand.
+//
+// Mutation testing found it: every branch survived, because nothing here
+// had ever driven it. A defect in this function does not produce a wrong
+// answer — it produces an adapter's declarations silently never taking
+// effect, with the core going on composing its own statements and every
+// check still passing. That is the failure conformance check 16 exists to
+// prevent one level up, and it deserves an assertion here too.
+
+// TestDialectFromNothingDeclared: the zero Dialect is what every v0
+// adapter means, and the core composes its own statements from it.
+func TestDialectFromNothingDeclared(t *testing.T) {
+	for name, probe := range map[string]*adapter.ProbeResult{
+		"no probe at all": nil,
+		"an empty probe":  {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := DialectFrom(probe); got.Statements != nil || got.Separator != "" {
+				t.Errorf("DialectFrom = %+v, want the zero Dialect", got)
+			}
+		})
+	}
+}
+
+// TestDialectFromStatementsOnly: an adapter may declare some kinds and no
+// identifier at all — the declarations are independent of each other.
+func TestDialectFromStatementsOnly(t *testing.T) {
+	got := DialectFrom(&adapter.ProbeResult{Checks: map[string]adapter.CheckStatement{
+		config.CheckRowCount:    {Statement: "db.{{table}}.countDocuments()"},
+		config.CheckTableExists: {Statement: "assert({{table}})"},
+	}})
+	if len(got.Statements) != 2 {
+		t.Fatalf("Statements = %v, want both declarations", got.Statements)
+	}
+	if got.Statements[config.CheckRowCount] != "db.{{table}}.countDocuments()" {
+		t.Errorf("row_count = %q", got.Statements[config.CheckRowCount])
+	}
+	if got.Open != "" || got.Close != "" || got.Separator != "" {
+		t.Errorf("identifier = %+v, want nothing declared", got)
+	}
+}
+
+// TestDialectFromIdentifierOnly is the other half of that independence.
+func TestDialectFromIdentifierOnly(t *testing.T) {
+	got := DialectFrom(&adapter.ProbeResult{
+		Identifier: &adapter.Identifier{Open: "`", Close: "`", Separator: "."},
+	})
+	if got.Open != "`" || got.Close != "`" || got.Separator != "." {
+		t.Errorf("identifier = %+v, want the declared backticks", got)
+	}
+	if got.Statements != nil {
+		t.Errorf("Statements = %v, want nil when none was declared", got.Statements)
+	}
+}
+
+// TestDialectFromReachesTheStatement is the end of the path: what a probe
+// declared reaches the statement a check runs, quoting included.
+func TestDialectFromReachesTheStatement(t *testing.T) {
+	exec := &fakeExec{t: t, respond: value("7")}
+	deps := testDeps(exec)
+	deps.Dialect = DialectFrom(&adapter.ProbeResult{
+		Identifier: &adapter.Identifier{Open: "", Close: "", Separator: "."},
+		Checks: map[string]adapter.CheckStatement{
+			config.CheckRowCount: {Statement: "db.{{table}}.countDocuments()"},
+		},
+	})
+	// Run directly rather than through runSingle, which builds its own
+	// deps and would discard the Dialect under test.
+	results, err := Run(context.Background(), []config.Check{
+		{Builtin: config.CheckRowCount, Table: "orders", Min: i64(1)},
+	}, deps)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !results[0].OK {
+		t.Errorf("result = %+v, want a pass", results[0])
+	}
+	if got, want := exec.lastSQL(), "db.orders.countDocuments()"; got != want {
+		t.Errorf("statement = %q, want the declared %q", got, want)
+	}
+}
+
+// TestRowCountBoundsAreInclusive pins the boundary the documentation calls
+// inclusive. Mutation testing found both edges unasserted: a count exactly
+// equal to min or max could have been refused without a test noticing, and
+// `row_count … max: 1000` on a table holding exactly 1000 rows is the
+// commonest configuration there is.
+func TestRowCountBoundsAreInclusive(t *testing.T) {
+	tests := []struct {
+		name     string
+		min, max *int64
+		count    string
+		wantOK   bool
+	}{
+		{"exactly at min", i64(1000), nil, "1000", true},
+		{"one below min", i64(1000), nil, "999", false},
+		{"exactly at max", nil, i64(1000), "1000", true},
+		{"one above max", nil, i64(1000), "1001", false},
+		{"exactly at both", i64(1000), i64(1000), "1000", true},
+		{"zero rows against a zero minimum", i64(0), nil, "0", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := config.Check{Builtin: config.CheckRowCount, Table: "orders", Min: tc.min, Max: tc.max}
+			res := runSingle(t, c, &fakeExec{t: t, respond: value(tc.count)})
+			if res.OK != tc.wantOK {
+				t.Errorf("%s rows against min=%v max=%v: ok=%v, want %v (%s)",
+					tc.count, tc.min, tc.max, res.OK, tc.wantOK, res.Detail)
+			}
+		})
+	}
+}
+
+// TestFreshnessBoundaryAndFutureTimestamps pins two things mutation testing
+// found unasserted: max_age is inclusive, and a timestamp in the future is
+// clamped to zero age rather than producing a negative one.
+//
+// The clamp is not defensive decoration. A restored copy can legitimately
+// carry a timestamp ahead of the drill host's clock — the two hosts are
+// different machines, and env.clock_synchronised exists because the drill
+// host's own clock is a belief. A negative age would print as
+// "newest row is -3m0s old", which is a record nobody can read.
+func TestFreshnessBoundaryAndFutureTimestamps(t *testing.T) {
+	now := time.Date(2026, 7, 31, 2, 0, 0, 0, time.UTC)
+	withAge := func(d time.Duration) config.Check {
+		return config.Check{Builtin: config.CheckFreshness, Table: "orders", Column: "created_at",
+			MaxAge: config.Duration(d)}
+	}
+	tests := []struct {
+		name       string
+		stamp      time.Time
+		maxAge     time.Duration
+		wantOK     bool
+		wantDetail string
+	}{
+		{"exactly at max_age", now.Add(-24 * time.Hour), 24 * time.Hour, true, "24h0m0s old"},
+		{"one second past max_age", now.Add(-24*time.Hour - time.Second), 24 * time.Hour, false, "24h0m1s old"},
+		{"one second inside", now.Add(-24*time.Hour + time.Second), 24 * time.Hour, true, "23h59m59s old"},
+		{"the same instant as now", now, 24 * time.Hour, true, "0s old"},
+		{"three minutes in the future", now.Add(3 * time.Minute), 24 * time.Hour, true, "0s old"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := &fakeExec{t: t, respond: value(tc.stamp.Format(time.RFC3339))}
+			deps := testDeps(exec)
+			deps.Now = func() time.Time { return now }
+			results, err := Run(context.Background(), []config.Check{withAge(tc.maxAge)}, deps)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			res := results[0]
+			if res.OK != tc.wantOK || !strings.Contains(res.Detail, tc.wantDetail) {
+				t.Errorf("result = %+v, want ok=%v detail~%q", res, tc.wantOK, tc.wantDetail)
+			}
+			if strings.Contains(res.Detail, "-") {
+				t.Errorf("detail carries a negative age: %q", res.Detail)
+			}
+		})
 	}
 }
