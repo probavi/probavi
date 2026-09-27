@@ -334,11 +334,12 @@ all secrets it holds; truncation limits (§3) apply after redaction.
 ## 9. Verification
 
 `probavi evidence verify --log <file> --key <pub> [--key <pub>…]
-[--anchor <seq>:sha256:<hex>]` implements exactly this algorithm; independent
-implementations need nothing else. That claim is not left as an assertion:
-`spec/evidence` is a second implementation written from this document alone
-(§12). The algorithm below is the whole of verification; §9.1 adds the one
-optional input.
+[--anchor <seq>:sha256:<hex>] [--witness <command>]` implements exactly this
+algorithm; independent implementations need nothing else. That claim is not
+left as an assertion: `spec/evidence` is a second implementation written from
+this document alone (§12). The algorithm below is the whole of verification;
+§9.1 and §9.2 add its two optional inputs, and neither changes a byte of the
+format.
 
 ```text
 expected_prev ← "sha256:" + 64×"0"
@@ -519,10 +520,190 @@ log's own key would add nothing — the attacker of §1 holds that key and
 can sign a shorter head as easily as a shorter log. A head held or
 countersigned by a party other than the operator is stronger, and what
 makes it stronger is the second party rather than the second signature;
-this schema defines no format for one. The `records` count is monotonic
+this schema defines no format for one, and §9.2 is how a verifier asks
+one without gaining a format. The `records` count is monotonic
 for an append-only log and was the cheapest anchor available before this
 section existed; `head` costs the same to write down and says strictly
 more, so prefer it.
+
+### 9.2 Witnessed verification
+
+Status: **NORMATIVE, specified 2026-09-27; not yet implemented
+(§9.2.5).** No record byte changes and the schema version does not move,
+for the same reason §9.1 gives: a witness is an *input* to verification.
+
+§9.1 closes truncation for whoever kept the anchor. It does not close it
+for anyone else, because an anchor is a value the operator wrote down and
+could as easily have made up. The attacker §1 names holds the signing
+key, so they can rebuild the whole log with any content, re-sign it from
+record 1, and produce a file that is internally perfect — nothing in the
+format dates it.
+
+A **witness** is a party other than the operator who attested a head at a
+moment. What makes it stronger is the second party, not a second
+signature (§9.1). An attestation over the head at time T proves the log
+held that content then, so a later rewrite is detectable by anyone
+holding the attestation: the rewritten log has a different head at that
+`seq`, and §9.1's anchored check is already the comparison that finds it.
+
+**`--witness <command>` is how a verifier asks one.** After the walk, the
+verifier hands the head to a command the operator names, and the
+command's exit status is the answer. The operator's practice — which
+witness to use, how to obtain attestations, where to keep them — is
+`docs/evidence-witness.md`; what follows is only what an independent
+implementation must do to agree with this one.
+
+#### 9.2.1 Why a command and not a parsed receipt
+
+The tempting shape is `--witness <receipt-file>`, with the verifier
+parsing an RFC 3161 token and checking its signature. This specification
+refuses that shape, for three reasons that outlast any one witness
+technology.
+
+**The schema defines no receipt format, and gaining one would cost more
+than it buys.** §9.1 already says so about countersigned heads. A
+verifier that parsed one technology's receipts would bind every
+implementation of this document to that technology, in a section whose
+whole subject is that the second party is what matters. The witness is
+**custody rather than cryptography**, and a format would misplace the
+weight.
+
+**A second trust root inside the verifier is a cost paid by the wrong
+party.** The verifier is what an auditor runs on a log they do not
+trust, holding nothing but the public key and the file (§1). Parsing a
+signed structure there means a certificate chain, a trust store, and a
+revocation question — three new ways for the tool to be wrong about
+something that is not the log.
+
+**Driving a CLI is what this project already does** where an outside
+system has to be spoken to: the sandbox providers drive `docker` and
+`kubectl` rather than linking an SDK, for the same reason. The witness
+tool is the operator's, the trust in it is the operator's, and the
+verifier's report says which command answered so a reader can see whose
+judgement they are reading.
+
+#### 9.2.2 The command contract
+
+A verifier that implements `--witness` MUST run the named command
+exactly as follows.
+
+| | |
+|---|---|
+| **argv** | Exactly two elements: the command as given, and the head in §9.1's written form. No shell, no template, no further arguments. A witness needing more is wrapped in a script, which is what `docs/evidence-witness.md` shows. |
+| **stdin** | Empty and closed. A verifier MUST NOT expect the command to read anything. |
+| **stdout** | At most one line. When the command attests, that line MAY be an RFC 3339 instant with at least second precision — the moment the witness says the head was attested. Anything else, including nothing, is read as *attested, time unstated*. |
+| **stderr** | Diagnostics. A verifier MUST carry the first line of it into the reason when the command refuses or fails, and MUST NOT let it reach stdout. |
+| **environment** | Inherited unchanged. A witness needing a credential reads it from the environment, which is where every other credential in this product lives — never from a flag, where the process list would carry it. |
+| **timeout** | Bounded by the verifier at **60 seconds**, not configurable. A witness is one network round trip; a verifier that could hang forever on a witness is a verifier an operator stops putting in cron. A command still running at the deadline is killed, and that is a failure to run (below), never a verdict. |
+
+The exit status is the answer, and three cases are distinct:
+
+| Exit | Meaning | Verdict |
+|---|---|---|
+| `0` | The witness attested this head. | Verification continues; the run's status is whatever §9 and §9.1 already made it. |
+| `1` | The witness holds no attestation for this head. | **INVALID**, exit code 2. |
+| anything else, or the command cannot be run, or it exceeds the timeout | The witness could not answer. | **Not a verdict.** A usage error, exactly as an anchor that does not parse is (§9.1) — the verifier reports the failure and MUST NOT report a status about the log. |
+
+That third row is the one worth being careful about. A witness that is
+unreachable says nothing about the log, and a verifier that turned "the
+timestamp authority is down" into INVALID would teach an operator that
+INVALID sometimes means nothing — which is the one thing this verdict
+cannot afford to mean.
+
+Exit `1` is INVALID and shares its exit code with every other finding, by
+§9.1's rule: no new status, no new exit code. A head no witness will
+attest is the same class of finding as a head that disagrees with an
+anchor, and a softer verdict would invite a script to treat it as less
+than a failure.
+
+#### 9.2.3 When it runs, and what is reported
+
+The witness is asked **after the chain walk and after §9.1's anchored
+checks**, and only when those produced a head worth attesting:
+
+```text
+# after §9 and §9.1 have produced status and head:
+
+if status = INVALID:
+    the witness is NOT asked         # §9.1: a run that returned INVALID
+                                     # is never a source of an anchor
+if no --witness was given:
+    witness ← null
+else:
+    run <command> <head>             # §9.2.2
+```
+
+A verifier that implements this MUST carry `witness` in its
+machine-readable result: `null` when none was asked, and otherwise an
+object with
+
+- `command` — the command as given, verbatim;
+- `attested` — boolean;
+- `attested_at` — the RFC 3339 instant the command printed, or `null`.
+
+`attested_at` is **what the witness said**, not a measurement and not a
+claim this document makes. A verifier does not check it against its own
+clock: the witness is trusted for the attestation or it is not used, and
+a verifier second-guessing the time it reports would be re-deriving a
+judgement it deliberately does not hold.
+
+#### 9.2.4 What a witness does and does not prove
+
+It proves that a party other than the operator attested **this head**,
+and therefore that the log held this content when the attestation was
+made. With a time, it dates that; without one, it still separates a log
+that was rewritten from one that was not, because the rewritten log has a
+different head.
+
+It does not prove the log is **complete now**: records appended after the
+attestation are outside it, which is the ordinary case and exactly what
+§9.1's "the log has grown" outcome describes. It does not prove the
+drills happened, or that their verdicts are true — the evidence record's
+own contents are §6's subject and §1's threat model bounds them.
+
+And the verifier does not check the attestation. The command does. So
+the report names the command, and the trust a reader places in
+`attested: true` is trust in the operator's choice of witness. That is
+custody, stated plainly, rather than cryptography implied.
+
+#### 9.2.5 Conformance vectors, and what implementation owes
+
+The contract is testable with no network and no timestamp authority: two
+scripts and the published log are enough, which is the point of the exit
+status carrying the answer.
+
+Against `log_v2.jsonl` (§12), whose head is
+`3:sha256:6b3e356a9444cf3d7ca6bfdf7ee6bdf35d88928b2d66fcc28a5ceb033308b62d`:
+
+1. *The witness attests.* A command that exits 0 after printing
+   `2026-09-27T09:00:00Z` → the status §9 would have produced, with
+   `witness` carrying that command, `attested` true and `attested_at`
+   `2026-09-27T09:00:00Z`. The command MUST have been given the head
+   above as its single argument.
+2. *The witness attests without a time.* The same command printing
+   nothing → the same status, `attested` true, `attested_at` `null`.
+3. *The witness refuses.* A command that exits 1 → INVALID, exit code 2,
+   with a reason naming the witness.
+4. *The witness cannot answer.* A command that exits 3, and a command
+   that does not exist → no status about the log at all, and a failure
+   reported the way an unparseable anchor is.
+5. *An INVALID log is never witnessed.* `log_v2.jsonl` anchored at a head
+   it does not match (§9.1, vector 3) with a witness command that would
+   exit 0 → INVALID from the anchor, and the command is not run.
+
+What implementation owes before this section is frozen:
+
+- [ ] `--witness` in `probavi evidence verify` and in `spec/evidence` —
+      both, because §12 promises that a third party's verifier needs
+      nothing this one has. A flag in one of them is a promise broken in
+      the other.
+- [ ] The five vectors above, in both, with the scripts committed rather
+      than written by each test.
+- [ ] `docs/evidence-witness.md` gains the worked example that makes the
+      flag routine rather than merely available — a witness script and
+      the cron line that anchors.
+- [ ] `docs/capabilities.json` declares the flag, which it may not do
+      before a build carries it.
 
 ## 10. Versioning and migration
 

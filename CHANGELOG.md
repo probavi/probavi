@@ -11,6 +11,42 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **A witness for the chain head is specified**, and `--witness` is not
+  implemented yet (`docs/evidence-schema.md` §9.2.5 lists what it owes).
+  The anchoring practice the same document describes works today and
+  needs nothing new.
+
+  The gap it closes: the chain and the signature defend the log against
+  everyone who does not hold the signing key, and not against whoever
+  does — that party can rebuild the log with any content, re-sign it from
+  record 1, and nothing in the format dates the result. A party other
+  than the operator attesting the head at a moment closes it for every
+  reader, not only for whoever kept the anchor.
+
+  **`--witness <command>`, not `--witness <receipt>`.** The verifier runs
+  `<command> <head>` and reads the exit status; the cryptography stays
+  outside. Parsing an RFC 3161 token would bind every implementation of
+  the format document to one witness technology and put a certificate
+  chain, a trust store and a revocation question inside the tool an
+  auditor runs on a log they do not trust.
+
+  Three exit statuses rather than two: `0` attested, `1` not attested
+  (INVALID, exit 2, by §9.1's no-new-status rule), and anything else is a
+  failure to run rather than a verdict — a verifier that turned "the
+  timestamp authority is down" into INVALID would teach an operator that
+  INVALID sometimes means nothing.
+
+  `docs/evidence-witness.md` is the operator's half, and deliberately
+  picks no default between a private timestamp authority and a public
+  transparency log: the second publishes that this organisation runs
+  drills and how often, which is a disclosure a default would make on
+  someone's behalf.
+
+  No record byte changes and no schema version moves. A witness is an
+  input to verification, exactly as an anchor is.
+
 ## [0.34.0] - 2026-09-27
 
 ### Fixed

@@ -251,7 +251,7 @@ $ probavi evidence verify --log evidence.jsonl --key probavi.key.pub
 
 That `VALID` is the product: anyone holding only the log file and your public key can reproduce it, fully offline.
 
-The `head` it prints is the anchor for the next run. Keep it where the drill host cannot rewrite it — a ticket, a mail, a repository — and pass it back as `--anchor <seq>:sha256:<hex>`: a log with its newest records deleted then stops verifying. Without it that deletion is invisible, because a valid prefix of a log is itself a valid log ([the format specification](docs/evidence-schema.md) §9.1 states both halves).
+The `head` it prints is the anchor for the next run. Keep it where the drill host cannot rewrite it — a ticket, a mail, a repository — and pass it back as `--anchor <seq>:sha256:<hex>`: a log with its newest records deleted then stops verifying. Without it that deletion is invisible, because a valid prefix of a log is itself a valid log ([the format specification](docs/evidence-schema.md) §9.1 states both halves). That closes truncation for whoever kept the anchor; closing it for everyone else means a second party attesting the head, which is custody rather than cryptography — [`docs/evidence-witness.md`](docs/evidence-witness.md) is the practice, and says which part of it is specified rather than built.
 
 They do not have to take Probavi's word for it either. [`spec/evidence`](spec/evidence) is a second, independent verifier — written from [the format specification](docs/evidence-schema.md) alone, no dependencies, and in a separate Go module so it *cannot* import Probavi's own evidence code. Install it without installing Probavi:
 
