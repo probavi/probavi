@@ -11,6 +11,43 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **What the checks do not read** (`docs/drill-config.md` §3.5, and the
+  measured half in `adapters/postgres/README.md`). Two limits that were
+  invisible from a passing record:
+
+  A check reads only what it names. `row_count` on `orders` reads
+  `orders`; a cluster with two hundred relations and three checks leaves
+  a hundred and ninety-seven unread, and no built-in reads an index at
+  all — a count is a sequential scan.
+
+  What the engine verifies on read is the engine's setting, not
+  Probavi's. Measured on PostgreSQL with one byte changed inside tuple
+  content in a physical copy: with `data_checksums` **on**, `row_count`
+  fails with `ERROR: invalid page in block 3`; with it **off**,
+  `row_count` passes and returns the right number while a row reads
+  `mmmmmmmmmmZmmm…` where every character should be `m`. It is **off**
+  on the official `postgres:14`, `16` and `17` images and on from 18, and
+  a physical restore inherits the source cluster's setting.
+
+  What closes that gap is one line at the source — `initdb
+  --data-checksums`, or `pg_checksums --enable` offline — and the
+  postgres README now says so where a reader of the physical kinds meets
+  it.
+
+### Changed
+
+- **There will be no `integrity` check**, and the ROADMAP item closes on
+  the measurement rather than on an opinion. Where an engine verifies
+  pages on read, a check that reads a damaged page already fails; where
+  it does not, no instrument can answer at all — `pg_checksums` refuses
+  because checksums are not enabled, and `amcheck` passes when the
+  damaged column is not indexed. A check that cannot answer in the only
+  case it exists for is not a check. What the decision costs is stated
+  with it: the coverage breadth across relations no check names, and
+  indexes, is documented rather than closed.
+
 ## [0.35.0] - 2026-09-27
 
 ### Added

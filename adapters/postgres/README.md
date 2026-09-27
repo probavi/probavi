@@ -521,6 +521,51 @@ Recovery promotes rather than pausing, for the reason the `pgbackrest`
 section gives: the default would leave a drill waiting at the target until
 its wall-clock deadline killed it.
 
+## Page integrity: what a physical restore carries, and what notices
+
+The physical kinds copy PostgreSQL's own pages, so a page damaged in the
+source arrives damaged in the sandbox — faithfully, which is the point of
+a physical backup and also the hazard. Whether anything **notices** is not
+this adapter's decision. It is one setting on the cluster the backup was
+taken from, and the official images ship it off.
+
+Measured on 2026-09-27, one byte changed inside tuple content in a
+consistent copy of a cluster:
+
+| `data_checksums` | What a drill does |
+|---|---|
+| **on** | The engine starts, `table_exists` passes, and `row_count` **fails** — `ERROR: invalid page in block 3`, exit 1 through this adapter's `sql_runner`. The drill catches it. |
+| **off** | The engine starts, `table_exists` passes, `row_count` passes **and returns the right number** — while a row reads `mmmmmmmmmmZmmm…` where every character should be `m`. The drill passes on corrupted data. |
+
+`data_checksums` is **off** on the official `postgres:14`, `16` and `17`
+images and **on** on `postgres:18` (measured with `SHOW data_checksums`).
+A physical restore inherits the setting from the source cluster, because
+the control file comes with the backup — so what matters is what *your*
+cluster was initialised with, not what the sandbox image would have
+chosen.
+
+**With checksums off, no tool closes the gap.** `pg_checksums --check`
+refuses outright (`data checksums are not enabled in cluster`), and
+`bt_index_check` passes even with `heapallindexed` when the damaged column
+is not indexed. That is why this adapter declares no integrity statement
+and Probavi has no `integrity` check: there is nothing to run that would
+answer the question.
+
+What to do about it is one line at the source, and it is not something a
+drill can supply:
+
+```console
+$ initdb --data-checksums …          # or, on an existing cluster, offline:
+$ pg_checksums --enable -D "$PGDATA"
+```
+
+Two further limits worth knowing even with checksums on. `pg_checksums`
+requires the cluster to be **shut down**, so it cannot run as a check
+against a restored, running database; and its cost is a full read of the
+cluster, linear in size rather than in table count. And `row_count` only
+reads the tables a check names — a relation nothing queries is never read,
+so its pages are never verified (`docs/drill-config.md` §3.5).
+
 ## Which backup a drill restores, and when it refuses
 
 When the drill config names a **directory**, the adapter picks the
