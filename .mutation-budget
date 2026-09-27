@@ -29,3 +29,24 @@ spec/evidence      1
 # are one shape — the zero returned beside a fault, which every caller
 # discards after checking the fault.
 internal/manifest  3
+# internal/checks decides every verdict a record carries, and its failure
+# mode is a check that passes on something it never looked at. Measured
+# 2026-09-27 at 68 mutants, 64 caught. The four survivors are two shapes:
+# the clamp that keeps a future timestamp from printing a negative age,
+# whose every boundary vanishes under the detail's truncation to seconds,
+# and an empty environment map allocated instead of left nil, which
+# behaves identically downstream.
+#
+# Joining the run cost three real assertions rather than none. DialectFrom
+# — the conversion that carries an adapter's declarations into a check —
+# had no direct test at all, because the suite built Dialects by hand; the
+# row_count bounds were never tested at their inclusive edges; and the
+# freshness clamp for a timestamp ahead of the drill host's clock was
+# unasserted.
+internal/checks     4
+# Still outside the run, measured 2026-09-27 so the next pass starts from
+# facts rather than from a survey: internal/config at 145 mutants, 130
+# caught, 14 survived — half of them in gameday.go, which is its own
+# feature area; and internal/core, unmeasured. Both decide what a record
+# says, so both belong here eventually. Each joins in its own change,
+# because joining costs assertions rather than a line in this file.

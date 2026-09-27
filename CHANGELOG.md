@@ -11,6 +11,34 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Changed
+
+- **`internal/checks` joined the mutation run**, and joining it cost three
+  assertions rather than a line in `.mutation-budget`. The package decides
+  every verdict a record carries, and it had been outside the scheduled
+  gate, where coverage says a line ran and nothing says a change to it
+  would have been noticed.
+
+  What the measurement found, in descending order of consequence:
+  `DialectFrom` — the conversion that carries an adapter's declared
+  statements and quoting into a check — had **no direct test at all**,
+  because the suite built `Dialect` values by hand. A defect there does
+  not produce a wrong answer; it produces an adapter's declarations
+  silently never taking effect, with the core going on composing its own
+  statements and every check still passing.
+
+  `row_count`'s bounds were never tested at their inclusive edges, so a
+  count exactly equal to `min` or `max` could have been refused without a
+  test noticing — and `max: 1000` against a table holding exactly 1000
+  rows is the commonest configuration there is. The `freshness` clamp for
+  a timestamp *ahead* of the drill host's clock was unasserted, as was the
+  log line naming which program a failed runner was.
+
+  68 mutants, 58 caught before, **64 after**. The ceiling is 4, and all
+  four are unobservable: the future-timestamp clamp's boundaries vanish
+  under the detail's truncation to seconds, and an empty environment map
+  behaves like a nil one.
+
 ### Added
 
 - **What the checks do not read** (`docs/drill-config.md` §3.5, and the
