@@ -1,9 +1,9 @@
 # Witnessing the evidence log
 
-Status: **Normative about practice, specified 2026-09-27; the
-`--witness` flag it documents is not implemented yet**
-(`evidence-schema.md` §9.2.5). The anchoring in §2 works today and needs
-nothing new.
+Status: **Normative about practice, specified and implemented
+2026-09-27.** `--witness` ships in both verifiers
+(`evidence-schema.md` §9.2.5), and the anchoring in §2 needs nothing
+beyond `--anchor`, which has shipped since 0.22.0.
 
 This document is the operator's half of `evidence-schema.md` §9.2: which
 witness to use, how to obtain an attestation, where to keep it, and what

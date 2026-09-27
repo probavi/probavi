@@ -9,17 +9,23 @@
 // Usage:
 //
 //	probavi-evidence-verify --log <file> --key <pubkey> [--key <pubkey> ...]
-//	                        [--anchor <seq>:sha256:<hex>]
+//	                        [--anchor <seq>:sha256:<hex>] [--witness <command>]
 //
 // Every run prints the log's chain head, which is the anchor for the next
 // one; passing an earlier head back as --anchor is what detects records
 // removed from the end of the log (§9.1).
+//
+// --witness names a command the verifier runs as `<command> <head>`, which
+// answers whether a party other than the operator attested that head
+// (§9.2). Exit 0 attested, 1 not attested, anything else could not answer —
+// and the third is a failure to run rather than a verdict about the log.
 //
 // Exit codes follow §9: 0 VALID, 1 VALID_WITH_DAMAGE, 2 INVALID, 3 usage or
 // I/O error.
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"flag"
@@ -91,6 +97,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	var keyPaths keyList
 	fs.Var(&keyPaths, "key", "path to an ed25519 public key file (repeatable)")
 	anchorText := fs.String("anchor", "", "chain head from an earlier run, <seq>:sha256:<hex>; a log ending before it is INVALID")
+	witnessCmd := fs.String("witness", "", "command run as <command> <head>; exit 0 attested, 1 not attested (INVALID), anything else cannot answer")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -124,6 +131,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}()
 
 	res, err := evidence.VerifyAnchored(f, evidence.NewKeyring(keys...), anchor)
+	if err != nil {
+		fmt.Fprintf(stderr, "probavi-evidence-verify: %v\n", err)
+		return exitUsage
+	}
+
+	// The witness is asked after the walk and after the anchored checks,
+	// and never after INVALID (§9.2.3). A witness that could not answer
+	// is a usage error and leaves no status printed at all: it says
+	// nothing about the log.
+	res, err = evidence.Witnessed(context.Background(), res, *witnessCmd)
 	if err != nil {
 		fmt.Fprintf(stderr, "probavi-evidence-verify: %v\n", err)
 		return exitUsage

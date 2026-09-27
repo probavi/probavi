@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -117,6 +118,16 @@ type verifyOutput struct {
 	FailedLine   int        `json:"failed_line"`
 	Reason       string     `json:"reason"`
 	Head         headOutput `json:"head"`
+	// Witness is null when none was asked (evidence-schema.md §9.2.3).
+	Witness *witnessOutput `json:"witness"`
+}
+
+// witnessOutput is what §9.2's optional second input said. attested_at is
+// what the witness printed, never a measurement this verifier made.
+type witnessOutput struct {
+	Command    string  `json:"command"`
+	Attested   bool    `json:"attested"`
+	AttestedAt *string `json:"attested_at"`
 }
 
 // headOutput is the chain head evidence-schema.md §9.1 requires on every
@@ -127,6 +138,35 @@ type headOutput struct {
 	Hash string `json:"hash"`
 }
 
+// verifyLog gathers the verifier's inputs and runs §9 with both of its
+// optional ones. Every failure it returns is a usage error rather than a
+// verdict — an unreadable key, an unopenable log and a witness that could
+// not answer all say nothing about the log's contents, and the caller
+// prints no status for any of them.
+func verifyLog(logPath string, keyPaths []string, anchor *evidence.Head, witnessCmd string,
+	stderr io.Writer) (*evidence.Result, error) {
+	keyring, err := loadKeyring(keyPaths)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(logPath)
+	if err != nil {
+		return nil, err
+	}
+	defer closeQuietly(f, stderr)
+
+	res, err := evidence.Verify(f, keyring, anchor)
+	if err != nil {
+		return nil, err
+	}
+	// The witness is asked after the walk and after the anchored checks,
+	// and never after INVALID (§9.2.3).
+	if err := evidence.Witnessed(context.Background(), res, witnessCmd); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
 func runEvidenceVerify(args []string, stdout, stderr io.Writer, tr *i18n.T) int {
 	fs := flag.NewFlagSet("evidence verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -134,6 +174,7 @@ func runEvidenceVerify(args []string, stdout, stderr io.Writer, tr *i18n.T) int 
 	var keyPaths stringList
 	fs.Var(&keyPaths, "key", "public key file; repeat to build a keyring (required)")
 	anchorText := fs.String("anchor", "", "chain head from an earlier verification, <seq>:sha256:<hex>; a log that ends before it is INVALID")
+	witnessCmd := fs.String("witness", "", "command run as <command> <head>; exit 0 attested, 1 not attested (INVALID), anything else cannot answer")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -149,19 +190,7 @@ func runEvidenceVerify(args []string, stdout, stderr io.Writer, tr *i18n.T) int 
 		return exitUsage
 	}
 
-	keyring, err := loadKeyring(keyPaths)
-	if err != nil {
-		fmt.Fprintf(stderr, "probavi evidence verify: %v\n", err)
-		return exitUsage
-	}
-	f, err := os.Open(*logPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "probavi evidence verify: %v\n", err)
-		return exitUsage
-	}
-	defer closeQuietly(f, stderr)
-
-	res, err := evidence.Verify(f, keyring, anchor)
+	res, err := verifyLog(*logPath, keyPaths, anchor, *witnessCmd, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "probavi evidence verify: %v\n", err)
 		return exitUsage
@@ -173,6 +202,9 @@ func runEvidenceVerify(args []string, stdout, stderr io.Writer, tr *i18n.T) int 
 		FailedLine:   res.FailedLine,
 		Reason:       res.Reason,
 		Head:         headOutput{Seq: res.Head.Seq, Hash: res.Head.Hash},
+	}
+	if w := res.Witness; w != nil {
+		out.Witness = &witnessOutput{Command: w.Command, Attested: w.Attested, AttestedAt: w.AttestedAt}
 	}
 	if out.DamagedLines == nil {
 		out.DamagedLines = []int{}

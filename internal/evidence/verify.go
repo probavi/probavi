@@ -48,6 +48,10 @@ type Result struct {
 	// anchor for the next one; after INVALID it describes the prefix that
 	// verified, which is why an anchor is never taken from such a run.
 	Head Head
+	// Witness is what §9.2's optional second input said, and nil when
+	// none was asked — including after INVALID, where there is nothing
+	// worth attesting.
+	Witness *Witness
 }
 
 // Verify checks an evidence log against evidence-schema.md §9 using the

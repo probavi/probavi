@@ -528,8 +528,8 @@ more, so prefer it.
 
 ### 9.2 Witnessed verification
 
-Status: **NORMATIVE, specified 2026-09-27; not yet implemented
-(§9.2.5).** No record byte changes and the schema version does not move,
+Status: **NORMATIVE and implemented**, specified and frozen 2026-09-27
+(§9.2.5). No record byte changes and the schema version does not move,
 for the same reason §9.1 gives: a witness is an *input* to verification.
 
 §9.1 closes truncation for whoever kept the anchor. It does not close it
@@ -691,19 +691,26 @@ Against `log_v2.jsonl` (§12), whose head is
    it does not match (§9.1, vector 3) with a witness command that would
    exit 0 → INVALID from the anchor, and the command is not run.
 
-What implementation owes before this section is frozen:
+**§9.2 is frozen as of 2026-09-27** — every item below is complete.
 
-- [ ] `--witness` in `probavi evidence verify` and in `spec/evidence` —
+- [x] `--witness` in `probavi evidence verify` and in `spec/evidence` —
       both, because §12 promises that a third party's verifier needs
       nothing this one has. A flag in one of them is a promise broken in
-      the other.
-- [ ] The five vectors above, in both, with the scripts committed rather
-      than written by each test.
-- [ ] `docs/evidence-witness.md` gains the worked example that makes the
+      the other. Done 2026-09-27, in two implementations that share no
+      code.
+- [x] The five vectors above, in both, with the scripts committed rather
+      than written by each test. Done 2026-09-27. They are scripts and not
+      Go fakes on purpose: the contract is a process boundary — argv,
+      stdin, stdout, stderr and the exit status — and a fake in either
+      language would test something else. The attesting script refuses any
+      head but the one it was armed with, so the vector that passes is
+      also the assertion that the verifier passed the right argv.
+- [x] `docs/evidence-witness.md` gains the worked example that makes the
       flag routine rather than merely available — a witness script and
-      the cron line that anchors.
-- [ ] `docs/capabilities.json` declares the flag, which it may not do
-      before a build carries it.
+      the cron line that anchors. Done 2026-09-27, with the script's three
+      exit statuses demonstrated rather than described.
+- [x] `docs/capabilities.json` declares the flag, which it may not do
+      before a build carries it. Done 2026-09-27, with this change.
 
 ## 10. Versioning and migration
 

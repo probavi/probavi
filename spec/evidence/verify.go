@@ -57,6 +57,10 @@ type Result struct {
 	// verification yields the anchor for the next one; after INVALID it
 	// describes only the prefix that verified.
 	Head Head `json:"head"`
+	// Witness is what §9.2's optional second input said, and null when
+	// none was asked — including after INVALID, where there is nothing
+	// worth attesting.
+	Witness *Witness `json:"witness"`
 }
 
 // invalid finishes a Result with the §9 INVALID verdict. Line 0 means no

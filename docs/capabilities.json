@@ -1998,6 +1998,12 @@
             "required": false,
             "repeatable": false,
             "doc": "Chain head from an earlier verification, <seq>:sha256:<hex>; a log that ends before it is INVALID."
+          },
+          {
+            "id": "--witness",
+            "required": false,
+            "repeatable": false,
+            "doc": "Command run as <command> <head>, answering whether a party other than the operator attested it: exit 0 attested, 1 not attested (INVALID), anything else could not answer, which is a failure to run rather than a verdict."
           }
         ],
         "positional": null,
