@@ -730,3 +730,39 @@ func TestExpectationString(t *testing.T) {
 		t.Errorf("range renders %q, want %q", got, "4980–5020")
 	}
 }
+
+// TestBaselineBoundariesAreAccepted is the other half of
+// TestMalformedBaselineIsAConfigurationFailure, and it exists because
+// mutation testing found the refusals nailed down and the acceptances not:
+// every boundary here could be moved by one and the suite stayed green.
+//
+// Each case is a real thing a backup job writes. Zero rows is an
+// expectation like any other — a table that is empty in the backup must be
+// empty in the restore, and refusing the manifest for saying so would make
+// the honest statement unwritable. A range whose bounds are equal is an
+// exact count written the long way, which a job assembling bounds
+// programmatically produces without meaning anything by it.
+func TestBaselineBoundariesAreAccepted(t *testing.T) {
+	const head = `{"schema":"probavi-manifest/2","expected_size_bytes":5,`
+	tests := []struct{ name, baseline string }{
+		{"an exact zero", `"baseline":{"orders":{"rows":0}}}`},
+		{"a range at zero", `"baseline":{"orders":{"rows_min":0,"rows_max":0}}}`},
+		{"a range from zero", `"baseline":{"orders":{"rows_min":0,"rows_max":9}}}`},
+		{"a range of one value", `"baseline":{"orders":{"rows_min":7,"rows_max":7}}}`},
+		{"a large exact count", `"baseline":{"orders":{"rows":9007199254740991}}}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			artifact := filepath.Join(dir, "nightly.dump")
+			writeFile(t, artifact, "bytes")
+			res, fault := manifest.Check(artifact, writeManifest(t, dir, head+tc.baseline))
+			if fault != nil {
+				t.Fatalf("an honest baseline was refused: %v", fault)
+			}
+			if len(res.Baseline) != 1 {
+				t.Errorf("Baseline = %v, want the one table declared", res.Baseline)
+			}
+		})
+	}
+}
