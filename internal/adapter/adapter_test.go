@@ -677,7 +677,15 @@ func TestBuildEnvDeduplicates(t *testing.T) {
 	env := r.buildEnv()
 	seen := map[string]int{}
 	for _, kv := range env {
-		name, _, _ := strings.Cut(kv, "=")
+		name, _, ok := strings.Cut(kv, "=")
+		// exec hands this slice to the kernel as it stands, so an entry
+		// that is not a NAME=VALUE pair — an empty string above all — is
+		// a malformed environment for the adapter rather than a harmless
+		// extra: the allow-list's whole job is that nothing unnamed
+		// reaches the process.
+		if !ok || name == "" {
+			t.Errorf("env carries %q, which names no variable", kv)
+		}
 		seen[name]++
 	}
 	for name, n := range seen {
