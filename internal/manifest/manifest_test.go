@@ -232,7 +232,8 @@ func TestManifestFaultsAreConfigurationFailures(t *testing.T) {
 		{"unknown field", `{"schema":"probavi-manifest/1","expected_size":5}`, "unknown field"},
 		{"two documents", `{"schema":"probavi-manifest/1","expected_size_bytes":5} {"schema":"x"}`, "more than one JSON document"},
 		{"no schema", `{"expected_size_bytes":5}`, "names no schema"},
-		{"unknown schema", `{"schema":"probavi-manifest/2","expected_size_bytes":5}`, "does not read"},
+		{"unknown schema", `{"schema":"probavi-manifest/3","expected_size_bytes":5}`, "does not read"},
+		{"a version behind the floor", `{"schema":"probavi-manifest/0","expected_size_bytes":5}`, "does not read"},
 		{"asserts nothing", `{"schema":"probavi-manifest/1"}`, "asserts nothing"},
 		{"checksum not sha256", `{"schema":"probavi-manifest/1","expected_checksum":"deadbeef"}`, "64 lowercase hex"},
 		{"checksum uppercase", `{"schema":"probavi-manifest/1","expected_checksum":"sha256:` + strings.Repeat("AB", 32) + `"}`, "64 lowercase hex"},
@@ -540,5 +541,228 @@ func TestZeroIsAnExpectationNotAnAbsence(t *testing.T) {
 	_, fault := manifest.Check(nonEmpty, manifestFor(t, dir, "", sizePtr(0)))
 	if fault == nil || fault.Code != evidence.CodeSourceCorrupt {
 		t.Fatalf("fault = %v, want %s — 0 is an expectation like any other", fault, evidence.CodeSourceCorrupt)
+	}
+}
+
+// bothVersionsAreRead is the v2 promise §11 makes: v1 is not a legacy
+// shape, and a build that reads v2 reads v1 unchanged. The test states it
+// against the same artifact, so nothing but the schema value differs.
+func TestBothVersionsAreRead(t *testing.T) {
+	for _, schema := range manifest.SchemaIDs() {
+		t.Run(schema, func(t *testing.T) {
+			dir := t.TempDir()
+			artifact := filepath.Join(dir, "nightly.dump")
+			writeFile(t, artifact, "twelve bytes")
+			body := fmt.Sprintf(`{"schema":%q,"expected_size_bytes":12}`, schema)
+			res, fault := manifest.Check(artifact, writeManifest(t, dir, body))
+			if fault != nil {
+				t.Fatalf("a %s manifest was refused: %v", schema, fault)
+			}
+			if res.Match == nil || !*res.Match {
+				t.Errorf("Match = %v, want true", res.Match)
+			}
+			if res.Baseline != nil {
+				t.Errorf("Baseline = %v, want nil — neither document declared one", res.Baseline)
+			}
+		})
+	}
+}
+
+// TestBaselineReachesTheResult: the reconciliation happens after the
+// restore, so the only thing this package owes it is the expectations,
+// carried out of the one read of the file.
+func TestBaselineReachesTheResult(t *testing.T) {
+	dir := t.TempDir()
+	artifact := filepath.Join(dir, "nightly.dump")
+	writeFile(t, artifact, "twelve bytes")
+	body := `{"schema":"probavi-manifest/2","expected_size_bytes":12,` +
+		`"baseline":{"orders":{"rows":100000},"public.invoices":{"rows_min":40,"rows_max":44}}}`
+
+	res, fault := manifest.Check(artifact, writeManifest(t, dir, body))
+	if fault != nil {
+		t.Fatalf("a valid v2 manifest was refused: %v", fault)
+	}
+	if len(res.Baseline) != 2 {
+		t.Fatalf("Baseline has %d tables, want 2", len(res.Baseline))
+	}
+	if got := res.Baseline["orders"]; got.Rows == nil || *got.Rows != 100000 {
+		t.Errorf("orders = %+v, want rows 100000", got)
+	}
+	if got := res.Baseline["public.invoices"].String(); got != "40–44" {
+		t.Errorf("public.invoices renders %q, want %q", got, "40–44")
+	}
+}
+
+// TestBaselineSurvivesAnUnmeasurableArtifact: a manifest read successfully
+// still carries its baseline when the artifact could not be measured. The
+// drill stops there, so nothing reconciles — but the field is set where it
+// is read, not where it is used, and a nil here would be a lie about the
+// file.
+func TestBaselineSurvivesAnUnmeasurableArtifact(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"schema":"probavi-manifest/2","expected_size_bytes":12,"baseline":{"orders":{"rows":1}}}`
+	res, fault := manifest.Check(filepath.Join(dir, "absent.dump"), writeManifest(t, dir, body))
+	if fault == nil {
+		t.Fatal("a missing artifact was accepted")
+	}
+	if len(res.Baseline) != 1 {
+		t.Errorf("Baseline = %v, want the one table the manifest declared", res.Baseline)
+	}
+}
+
+// TestMalformedBaselineIsAConfigurationFailure: every shape §2.1 declines
+// to give a meaning to. All of it is invalid_request — a baseline the core
+// cannot read is the operator's file being wrong, and a drill must never
+// sign "the backup is the problem" over it.
+func TestMalformedBaselineIsAConfigurationFailure(t *testing.T) {
+	const head = `{"schema":"probavi-manifest/2","expected_size_bytes":5,`
+	tests := []struct {
+		name, body, wantIn string
+	}{
+		{"on a v1 manifest",
+			`{"schema":"probavi-manifest/1","expected_size_bytes":5,"baseline":{"orders":{"rows":1}}}`,
+			"only exists in probavi-manifest/2"},
+		{"empty", head + `"baseline":{}}`, "empty baseline"},
+		{"both forms at once", head + `"baseline":{"orders":{"rows":1,"rows_min":1,"rows_max":2}}}`,
+			"one table has one expectation"},
+		{"no form at all", head + `"baseline":{"orders":{}}}`, "states no rows"},
+		{"only a minimum", head + `"baseline":{"orders":{"rows_min":1}}}`, "only one bound"},
+		{"only a maximum", head + `"baseline":{"orders":{"rows_max":9}}}`, "only one bound"},
+		{"negative exact count", head + `"baseline":{"orders":{"rows":-1}}}`, "negative rows"},
+		{"negative bound", head + `"baseline":{"orders":{"rows_min":-2,"rows_max":4}}}`, "negative bound"},
+		{"inverted range", head + `"baseline":{"orders":{"rows_min":9,"rows_max":4}}}`, "above rows_max"},
+		{"unknown member", head + `"baseline":{"orders":{"rows":1,"tolerance":"1%"}}}`, "unknown field"},
+		{"a table name with a space", head + `"baseline":{"order items":{"rows":1}}}`, "not an identifier"},
+		{"a table name starting with a digit", head + `"baseline":{"2024_orders":{"rows":1}}}`, "not an identifier"},
+		{"a three-part qualified name", head + `"baseline":{"db.public.orders":{"rows":1}}}`, "not an identifier"},
+		{"an empty table name", head + `"baseline":{"":{"rows":1}}}`, "not an identifier"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			artifact := filepath.Join(dir, "nightly.dump")
+			writeFile(t, artifact, "bytes")
+			_, fault := manifest.Check(artifact, writeManifest(t, dir, tc.body))
+			if fault == nil {
+				t.Fatal("accepted a baseline the core cannot act on")
+			}
+			if fault.Code != evidence.CodeInvalidRequest {
+				t.Errorf("code = %q, want %q", fault.Code, evidence.CodeInvalidRequest)
+			}
+			if !strings.Contains(fault.Message, tc.wantIn) {
+				t.Errorf("message %q does not explain the fault (%q)", fault.Message, tc.wantIn)
+			}
+		})
+	}
+}
+
+// TestTheFirstReportedBaselineFaultIsStable: two bad tables in one file
+// must always name the same one, because a message that moves between runs
+// on identical input is a message nobody trusts. Map iteration is random,
+// so this is a real risk rather than a theoretical one.
+func TestTheFirstReportedBaselineFaultIsStable(t *testing.T) {
+	dir := t.TempDir()
+	artifact := filepath.Join(dir, "nightly.dump")
+	writeFile(t, artifact, "bytes")
+	body := `{"schema":"probavi-manifest/2","expected_size_bytes":5,` +
+		`"baseline":{"zeta":{"rows":-1},"alpha":{"rows":-2}}}`
+	path := writeManifest(t, dir, body)
+
+	var first string
+	for i := range 20 {
+		_, fault := manifest.Check(artifact, path)
+		if fault == nil {
+			t.Fatal("accepted two negative counts")
+		}
+		if i == 0 {
+			first = fault.Message
+			continue
+		}
+		if fault.Message != first {
+			t.Fatalf("two runs of the same file reported different faults:\n%s\n%s", first, fault.Message)
+		}
+	}
+	if !strings.Contains(first, "alpha") {
+		t.Errorf("the reported fault is %q; sorted order names alpha first", first)
+	}
+}
+
+// TestExpectationSatisfied covers the comparison both forms make, at and
+// around every boundary. Both are inclusive, and a range of one value is a
+// legitimate exact count written the long way.
+func TestExpectationSatisfied(t *testing.T) {
+	exact := manifest.Expectation{Rows: sizePtr(100)}
+	ranged := manifest.Expectation{RowsMin: sizePtr(10), RowsMax: sizePtr(12)}
+	single := manifest.Expectation{RowsMin: sizePtr(7), RowsMax: sizePtr(7)}
+	tests := []struct {
+		name string
+		want manifest.Expectation
+		rows int64
+		ok   bool
+	}{
+		{"exact, equal", exact, 100, true},
+		{"exact, one short", exact, 99, false},
+		{"exact, one over", exact, 101, false},
+		{"range, at the minimum", ranged, 10, true},
+		{"range, inside", ranged, 11, true},
+		{"range, at the maximum", ranged, 12, true},
+		{"range, below", ranged, 9, false},
+		{"range, above", ranged, 13, false},
+		{"a range of one, equal", single, 7, true},
+		{"a range of one, off by one", single, 8, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.want.Satisfied(tc.rows); got != tc.ok {
+				t.Errorf("Satisfied(%d) = %v, want %v", tc.rows, got, tc.ok)
+			}
+		})
+	}
+}
+
+// TestExpectationString is what a check's detail says, which is the only
+// place an expectation reaches a record (§9.2).
+func TestExpectationString(t *testing.T) {
+	if got := (manifest.Expectation{Rows: sizePtr(0)}).String(); got != "0" {
+		t.Errorf("exact zero renders %q, want %q", got, "0")
+	}
+	if got := (manifest.Expectation{RowsMin: sizePtr(4980), RowsMax: sizePtr(5020)}).String(); got != "4980–5020" {
+		t.Errorf("range renders %q, want %q", got, "4980–5020")
+	}
+}
+
+// TestBaselineBoundariesAreAccepted is the other half of
+// TestMalformedBaselineIsAConfigurationFailure, and it exists because
+// mutation testing found the refusals nailed down and the acceptances not:
+// every boundary here could be moved by one and the suite stayed green.
+//
+// Each case is a real thing a backup job writes. Zero rows is an
+// expectation like any other — a table that is empty in the backup must be
+// empty in the restore, and refusing the manifest for saying so would make
+// the honest statement unwritable. A range whose bounds are equal is an
+// exact count written the long way, which a job assembling bounds
+// programmatically produces without meaning anything by it.
+func TestBaselineBoundariesAreAccepted(t *testing.T) {
+	const head = `{"schema":"probavi-manifest/2","expected_size_bytes":5,`
+	tests := []struct{ name, baseline string }{
+		{"an exact zero", `"baseline":{"orders":{"rows":0}}}`},
+		{"a range at zero", `"baseline":{"orders":{"rows_min":0,"rows_max":0}}}`},
+		{"a range from zero", `"baseline":{"orders":{"rows_min":0,"rows_max":9}}}`},
+		{"a range of one value", `"baseline":{"orders":{"rows_min":7,"rows_max":7}}}`},
+		{"a large exact count", `"baseline":{"orders":{"rows":9007199254740991}}}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			artifact := filepath.Join(dir, "nightly.dump")
+			writeFile(t, artifact, "bytes")
+			res, fault := manifest.Check(artifact, writeManifest(t, dir, head+tc.baseline))
+			if fault != nil {
+				t.Fatalf("an honest baseline was refused: %v", fault)
+			}
+			if len(res.Baseline) != 1 {
+				t.Errorf("Baseline = %v, want the one table declared", res.Baseline)
+			}
+		})
 	}
 }

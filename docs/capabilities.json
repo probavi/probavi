@@ -40,7 +40,11 @@
       "schema": "docs/schemas/evidence/record.json"
     },
     "backup_manifest": {
-      "version": "probavi-manifest/1",
+      "version": "probavi-manifest/2",
+      "readable_versions": [
+        "probavi-manifest/2",
+        "probavi-manifest/1"
+      ],
       "spec": "docs/backup-manifest.md",
       "schema": "docs/schemas/manifest/manifest.json"
     }
@@ -1786,6 +1790,14 @@
         }
       ],
       "requires": null
+    },
+    {
+      "id": "baseline",
+      "name": "Restored rows reconcile with the backup manifest's baseline",
+      "status": "experimental",
+      "kind": "builtin",
+      "params": [],
+      "requires": "target.source.manifest, declaring a baseline. The manifest names the tables to reconcile; one entry produces one result per table, named baseline:<table>."
     },
     {
       "id": "sql",

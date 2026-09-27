@@ -12,6 +12,7 @@ import (
 
 	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/evidence"
+	"github.com/probavi/probavi/internal/manifest"
 	"github.com/probavi/probavi/internal/sandbox"
 )
 
@@ -584,5 +585,217 @@ func TestMask(t *testing.T) {
 				t.Errorf("mask(%q, %q) = %q, want %q", tt.in, tt.secret, got, tt.want)
 			}
 		})
+	}
+}
+
+// baselineDeps is testDeps plus what the backup manifest declared.
+func baselineDeps(exec *fakeExec, baseline map[string]manifest.Expectation) Deps {
+	deps := testDeps(exec)
+	deps.Baseline = baseline
+	return deps
+}
+
+// exact and ranged spell an expectation the way §2.1 does.
+func exact(n int64) manifest.Expectation { return manifest.Expectation{Rows: i64(n)} }
+
+func ranged(lo, hi int64) manifest.Expectation {
+	return manifest.Expectation{RowsMin: i64(lo), RowsMax: i64(hi)}
+}
+
+// TestBaselineExpandsToOneResultPerTable is the design §5.1 states: one
+// configured check, one result per table the manifest declared. The names
+// are what a record carries, so they are the assertion.
+func TestBaselineExpandsToOneResultPerTable(t *testing.T) {
+	exec := &fakeExec{t: t, respond: value("100")}
+	results, err := Run(context.Background(), []config.Check{{Builtin: config.CheckBaseline}},
+		baselineDeps(exec, map[string]manifest.Expectation{
+			"orders":          exact(100),
+			"public.invoices": ranged(90, 110),
+			"customers":       exact(100),
+		}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Sorted, not map order: a record's checks are read side by side
+	// across drills, and an order that reshuffled per run would make two
+	// records of one drill look like different drills.
+	want := []string{"baseline:customers", "baseline:orders", "baseline:public.invoices"}
+	if len(results) != len(want) {
+		t.Fatalf("results = %d, want %d", len(results), len(want))
+	}
+	for i, name := range want {
+		if results[i].Name != name {
+			t.Errorf("results[%d].Name = %q, want %q", i, results[i].Name, name)
+		}
+		if !results[i].OK {
+			t.Errorf("%s = %+v, want a pass", name, results[i])
+		}
+	}
+}
+
+// TestBaselineOrderIsStable runs the same reconciliation repeatedly: map
+// iteration is random, so an unsorted expansion would pass a single run and
+// fail an audit that compared two records.
+func TestBaselineOrderIsStable(t *testing.T) {
+	baseline := map[string]manifest.Expectation{}
+	for _, name := range []string{"zeta", "alpha", "mu", "beta", "omega", "kappa", "delta"} {
+		baseline[name] = exact(1)
+	}
+	var first []string
+	for i := range 20 {
+		exec := &fakeExec{t: t, respond: value("1")}
+		results, err := Run(context.Background(), []config.Check{{Builtin: config.CheckBaseline}},
+			baselineDeps(exec, baseline))
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		names := make([]string, len(results))
+		for j, r := range results {
+			names[j] = r.Name
+		}
+		if i == 0 {
+			first = names
+			continue
+		}
+		if strings.Join(names, ",") != strings.Join(first, ",") {
+			t.Fatalf("two runs produced different orders:\n%v\n%v", first, names)
+		}
+	}
+}
+
+// TestBaselineVerdicts covers what one table's reconciliation can produce.
+// The detail is part of the record, so it is asserted rather than ignored:
+// a reader has to see the count and the expectation side by side to know
+// what moved.
+func TestBaselineVerdicts(t *testing.T) {
+	tests := []struct {
+		name       string
+		want       manifest.Expectation
+		output     func(string) *sandbox.ExecResult
+		wantOK     bool
+		wantDetail string
+	}{
+		{"exact count met", exact(100000), value("100000"), true, "100000 rows (backup manifest states 100000)"},
+		{"exact count short", exact(100000), value("90000"), false, "90000 rows (backup manifest states 100000)"},
+		{"exact count over", exact(100000), value("100001"), false, "100001 rows (backup manifest states 100000)"},
+		{"range met", ranged(4980, 5020), value("5000"), true, "5000 rows (backup manifest states 4980–5020)"},
+		{"range low bound", ranged(4980, 5020), value("4980"), true, "4980 rows"},
+		{"range high bound", ranged(4980, 5020), value("5020"), true, "5020 rows"},
+		{"range missed", ranged(4980, 5020), value("4979"), false, "4979 rows (backup manifest states 4980–5020)"},
+		{"zero met", exact(0), value("0"), true, "0 rows (backup manifest states 0)"},
+		// A table the restored database does not have is a false verdict
+		// for that table, not an abandoned drill (§5.1). The
+		// reconciliation asked a question the restore could not answer,
+		// and that is the finding.
+		{"table absent", exact(1), queryFailure(`ERROR:  relation "orders" does not exist`), false, "count query failed"},
+		{"unreadable output", exact(1), value("one hundred"), false, "unexpected output"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &fakeExec{t: t, respond: tt.output}
+			results, err := Run(context.Background(), []config.Check{{Builtin: config.CheckBaseline}},
+				baselineDeps(exec, map[string]manifest.Expectation{"orders": tt.want}))
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if len(results) != 1 {
+				t.Fatalf("results = %d, want 1", len(results))
+			}
+			if results[0].OK != tt.wantOK || !strings.Contains(results[0].Detail, tt.wantDetail) {
+				t.Errorf("result = %+v, want ok=%v detail~%q", results[0], tt.wantOK, tt.wantDetail)
+			}
+			if exec.lastSQL() != `SELECT count(*) FROM "orders"` {
+				t.Errorf("sql = %q", exec.lastSQL())
+			}
+		})
+	}
+}
+
+// TestBaselineAsksTheRowCountQuestion is why no protocol version moves for
+// this: the statement that counts rows already exists, and baseline asks a
+// second question of the same answer (§5.1). An adapter that declared one
+// gets it used, without declaring anything new.
+func TestBaselineAsksTheRowCountQuestion(t *testing.T) {
+	exec := &fakeExec{t: t, respond: value("42")}
+	deps := baselineDeps(exec, map[string]manifest.Expectation{"orders": exact(42)})
+	deps.Dialect = Dialect{
+		Statements: map[string]string{config.CheckRowCount: "db.{{table}}.countDocuments()"},
+		Open:       "", Close: "", Separator: ".",
+	}
+	results, err := Run(context.Background(), []config.Check{{Builtin: config.CheckBaseline}}, deps)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !results[0].OK {
+		t.Errorf("result = %+v, want a pass", results[0])
+	}
+	if got, want := exec.lastSQL(), "db.orders.countDocuments()"; got != want {
+		t.Errorf("statement = %q, want the adapter's declared %q", got, want)
+	}
+}
+
+// TestBaselineWithATableTheEngineCannotName is the one infrastructure
+// failure this check can hit: a name the identifier rule refuses cannot be
+// quoted, so nothing can be asked. The manifest reader refuses such a name
+// first, so reaching this is a defect — but it must abandon the run rather
+// than sign a verdict about a question nobody asked.
+func TestBaselineWithATableTheEngineCannotName(t *testing.T) {
+	exec := &fakeExec{t: t, respond: value("1")}
+	_, err := Run(context.Background(), []config.Check{{Builtin: config.CheckBaseline}},
+		baselineDeps(exec, map[string]manifest.Expectation{"order items": exact(1)}))
+	if err == nil {
+		t.Fatal("an unquotable table produced a verdict instead of an error")
+	}
+	if !strings.Contains(err.Error(), config.CheckBaseline) {
+		t.Errorf("error %q does not name the check", err)
+	}
+}
+
+// TestBaselineWithNothingDeclaredRunsNothing: the core refuses this
+// configuration where the manifest is read, so this package's behaviour is
+// only that it invents no result. A pass here would be a check that
+// validated nothing reporting success.
+func TestBaselineWithNothingDeclaredRunsNothing(t *testing.T) {
+	exec := &fakeExec{t: t, respond: value("1")}
+	results, err := Run(context.Background(), []config.Check{{Builtin: config.CheckBaseline}}, testDeps(exec))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("results = %+v, want none", results)
+	}
+	if len(exec.requests) != 0 {
+		t.Errorf("%d statements ran with nothing to reconcile", len(exec.requests))
+	}
+}
+
+// TestBaselineKeepsWhatRanWhenSomethingBreaks: Run returns partial results
+// on an infrastructure failure, and the tables reconciled before it must
+// survive — a drill that reconciled four tables and then lost the sandbox
+// still found out something about those four.
+func TestBaselineKeepsWhatRanWhenSomethingBreaks(t *testing.T) {
+	var calls int
+	exec := &fakeExec{t: t}
+	// The sandbox survives two counts and then dies, so the run has both
+	// halves: results that were reached, and a failure that stopped the rest.
+	exec.respond = func(string) *sandbox.ExecResult {
+		calls++
+		if calls > 2 {
+			exec.err = errors.New("sandbox died")
+		}
+		return &sandbox.ExecResult{ExitCode: 0, Stdout: []byte("1\n")}
+	}
+	results, err := Run(context.Background(), []config.Check{{Builtin: config.CheckBaseline}},
+		baselineDeps(exec, map[string]manifest.Expectation{
+			"a": exact(1), "b": exact(1), "c": exact(1), "d": exact(1),
+		}))
+	if err == nil {
+		t.Fatal("a dead sandbox produced no error")
+	}
+	if len(results) == 0 {
+		t.Error("the tables reconciled before the failure were discarded")
+	}
+	if len(results) == 4 {
+		t.Error("every table reported despite the sandbox dying")
 	}
 }

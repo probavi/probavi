@@ -120,10 +120,11 @@ func buildContracts(root string) (Contracts, error) {
 		// The second party is a backup job outside this repository, so the
 		// specification is the whole contract: there is nothing here to
 		// negotiate a version with, only a `schema` value to read or refuse.
-		BackupManifest: Contract{
-			Version: manifest.SchemaID,
-			Spec:    "docs/backup-manifest.md",
-			Schema:  "docs/schemas/manifest/manifest.json",
+		BackupManifest: ManifestContract{
+			Version:          manifest.SchemaID,
+			ReadableVersions: manifest.SchemaIDs(),
+			Spec:             "docs/backup-manifest.md",
+			Schema:           "docs/schemas/manifest/manifest.json",
 		},
 	}
 	refs := []struct{ what, path string }{

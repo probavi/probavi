@@ -396,8 +396,12 @@ func (c *Config) validateChecks(p *problems) {
 		p.add(msgChecksRequired)
 		return
 	}
+	// A drill's checks are validated against the rest of the document, not
+	// only against themselves: baseline reconciles a file the target names,
+	// and a config asking for it without naming one is caught here, before
+	// anything exists (§1, principle 4).
 	for i := range c.Checks {
-		c.Checks[i].validate(p, i)
+		c.Checks[i].validate(p, i, c.Target.Source.Manifest != "")
 	}
 }
 
@@ -410,13 +414,13 @@ func (e *Evidence) validate(p *problems) {
 	}
 }
 
-func (ch *Check) validate(p *problems, i int) {
+func (ch *Check) validate(p *problems, i int, hasManifest bool) {
 	at := fmt.Sprintf("checks[%d]", i)
 	switch {
 	case ch.Builtin != "" && ch.SQL != "":
 		p.add(msgCheckBuiltinOrSQLNotBoth, at)
 	case ch.Builtin != "":
-		ch.validateBuiltin(p, at)
+		ch.validateBuiltin(p, at, hasManifest)
 	case ch.SQL != "":
 		ch.validateSQL(p, at)
 	default:
@@ -424,7 +428,7 @@ func (ch *Check) validate(p *problems, i int) {
 	}
 }
 
-func (ch *Check) validateBuiltin(p *problems, at string) {
+func (ch *Check) validateBuiltin(p *problems, at string, hasManifest bool) {
 	if ch.Expect.IsSet() {
 		p.add(msgCheckExpectOnlySQL, at)
 	}
@@ -448,6 +452,8 @@ func (ch *Check) validateBuiltin(p *problems, at string) {
 		ch.validateRowCount(p, at)
 	case CheckFreshness:
 		ch.validateFreshness(p, at)
+	case CheckBaseline:
+		ch.validateBaseline(p, at, hasManifest)
 	default:
 		// A registered built-in with no rules here is a defect in this
 		// package, not a user error; TestEveryBuiltinIsValidated pins it.
@@ -476,6 +482,23 @@ func (ch *Check) validateFreshness(p *problems, at string) {
 	}
 	if ch.MaxAge == 0 {
 		p.add(msgCheckFreshnessMaxAge, at)
+	}
+}
+
+// validateBaseline holds the kind to what it needs. The expectations are
+// in the backup manifest, so the only thing this check can get wrong in a
+// drill configuration is asking for it where there is nothing to
+// reconcile against — and that is worth catching here rather than as a
+// signed error record, because a config can be fixed before a drill runs.
+//
+// What the manifest itself declares is not checked here: this package
+// never reads it. A manifest that names no baseline is refused when it is
+// read, where the message can say what the file actually says
+// (backup-manifest.md §5.1).
+func (ch *Check) validateBaseline(p *problems, at string, hasManifest bool) {
+	ch.forbid(p, at, fields{table: true, column: true, minmax: true, maxAge: true})
+	if !hasManifest {
+		p.add(msgCheckBaselineManifest, at)
 	}
 }
 

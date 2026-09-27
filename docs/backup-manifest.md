@@ -1,7 +1,8 @@
 # Backup manifest — design spec
 
-Status: **v2 — NORMATIVE, specified 2026-09-26; not yet implemented
-(§11.1).** v1 was specified and shipped 2026-09-25 —
+Status: **v2 — NORMATIVE and implemented**, specified and frozen
+2026-09-26, implemented 2026-09-27 (`internal/manifest`, the `baseline`
+check kind, `§11.1`). v1 was specified and shipped 2026-09-25 —
 `target.source.manifest`, `internal/manifest` — and stays exactly as it
 was; v2 adds one optional object and changes nothing else (§11). Every
 decision this document held open is recorded in §9 with the alternatives
@@ -96,16 +97,21 @@ time by the party that knows it**, which is what this section is.
 }
 ```
 
-**Write `probavi-manifest/1` until the core you drill with reads `/2`.**
-A version is governed the moment this document specifies it and read the
-moment a release implements it, and those are not the same day (§11.1).
-A core that does not know a `schema` value refuses the drill — that is
-§2's rule working as intended, not a fault — so a backup job that adopts
-v2 early stops drills rather than degrading quietly. `baseline` also
-never stands alone: a v2 manifest still states a checksum or a size,
-because refusing the drill **before** the restore is what this file is
-for, and an expectation that can only be reconciled afterwards does not
-replace it.
+**Check which versions the build you drill with reads before writing
+`/2`.** A version is governed the moment this document specifies it and
+read the moment a release implements it, and those were not the same day
+here (§11.1). A core that does not know a `schema` value refuses the drill
+— that is §2's rule working as intended, not a fault — so a backup job
+that adopts v2 ahead of the fleet stops drills rather than degrading
+quietly. What a build reads is
+`contracts.backup_manifest.readable_versions` in its
+`docs/capabilities.json`, which is why that list is published beside the
+version rather than only the version.
+
+`baseline` also never stands alone: a v2 manifest still states a checksum
+or a size, because refusing the drill **before** the restore is what this
+file is for, and an expectation that can only be reconciled afterwards
+does not replace it.
 
 Each key names a table the way the drill's engine names one — the same
 vocabulary `table` takes elsewhere (`drill-config.md` §3.5), so it is a
@@ -351,6 +357,7 @@ separately and a reader can see which one moved.
 | the count is outside it | the check | False verdict for that table; the other tables and the other checks still run and still report. |
 | a table the manifest declares is not in the restored database | the check | False verdict for that table. The reconciliation asked a question the restore could not answer, and that is the finding — not an abandoned drill. |
 | the engine has no way to count rows | the adapter | The same limitation `row_count` has, stated in the same place: the adapter's README. `baseline` asks that question and inherits its answer. |
+| the manifest declares a baseline and no check reconciles it | nowhere — this is not an error | The drill decides what it proves. Refusing it would break a working drill the day a backup job elsewhere moved to v2, and the backup job is not the same party as the drill. |
 
 The count comes from the adapter's declared `row_count` statement where
 there is one, and from the core's composition where there is not (adapter
@@ -565,7 +572,11 @@ this repository will write:
   contract only when a build implements it. A regeneration that adds it
   before then would be the capabilities manifest claiming something it
   does not ship, which is the one thing it may never do (AGENTS.md
-  §5.8).
+  §5.8). The same rule decided when `/2` appeared there: specified
+  2026-09-26, declared 2026-09-27, with the implementation — and it is
+  declared as a **list**, because the other party to this contract is a
+  backup job outside this repository and the newest version alone would
+  read as a requirement to move.
 - **The evidence record is not settled there.** What a record carries
   about a backup manifest — §8 and §9.2 above — is the evidence
   schema's question, and it moves `probavi-evidence/N` by that schema's
@@ -575,8 +586,8 @@ this repository will write:
 identifier, not one version of it — the same way ADR 0035 governs
 `probavi-evidence/N` while the evidence schema decides what each N
 contains. What a major bump does owe is §11: the shape difference, the
-migration, and the list of what the version still owes before a build
-claims it.
+migration, and the freeze list a build has to complete before the
+capabilities manifest names it.
 
 ## 11. Versioning and migration
 
@@ -591,32 +602,50 @@ around.
 | Version | Shape difference | Migration |
 |---|---|---|
 | `probavi-manifest/1` | v2 without `baseline`. | None. A v1 manifest is valid forever, and a core that reads v2 reads v1 unchanged. |
-| `probavi-manifest/2` | Current (§2, §2.1). | Write `"schema": "probavi-manifest/2"` and add `baseline`. A backup job with nothing to count stays on v1 rather than writing an empty object: `baseline` is optional in v2, but a job that gains nothing from v2 gains nothing from moving to it. |
+| `probavi-manifest/2` | Current (§2, §2.1). Read since 2026-09-27. | Write `"schema": "probavi-manifest/2"` and add `baseline`. A backup job with nothing to count stays on v1 rather than writing an empty object: `baseline` is optional in v2, but a job that gains nothing from v2 gains nothing from moving to it. |
 
 **Both versions are read, and only one is refused.** A core accepts either
 and acts on what it finds; what it refuses is a `schema` value it does not
 know, because the field exists to pin the shape and honouring an unknown
 one would defeat it.
 
-### 11.1 v2, and what it still owes
+### 11.1 v2 freeze
 
-v2 is **specified and normative as of 2026-09-26**, and not yet
-implemented. Until the list below is complete a correction to this
-specification is a correction rather than a v3.
+**v2 is frozen as of 2026-09-27** — every item below is complete. Any
+further change to this file's shape is a version bump (§11).
 
 - [x] The JSON Schema accepts both versions, with `baseline` constrained
       to what §2.1 states — exact or range, never both, never negative,
       and no other member. Done 2026-09-26, with this specification.
-- [ ] `internal/manifest` reads a v2 manifest and refuses a malformed
-      `baseline` the way it refuses a malformed expectation today: as a
+- [x] `internal/manifest` reads a v2 manifest and refuses a malformed
+      `baseline` the way it refuses a malformed expectation: as a
       configuration failure, `invalid_request`, because a baseline the
       core cannot read is the operator's file being wrong and not a
-      verdict about the backup (§5).
-- [ ] The `baseline` check kind, to §5.1: no parameters, one result per
-      declared table, the table of situations in that section, and the
-      `drill-config.md` §3.5 entry that goes with it. Neither the adapter
-      protocol nor the evidence schema moves for it, and §5.1 says why
-      for each.
+      verdict about the backup (§5). Done 2026-09-27, and the tables are
+      validated in sorted order, so a file with two problems always names
+      the same one first — a message that moved between runs on identical
+      input would be a message nobody trusts.
+- [x] The `baseline` check kind, to §5.1: no parameters, one result per
+      declared table in sorted order, the table of situations in that
+      section, and the `drill-config.md` §3.5 entry that goes with it.
+      Done 2026-09-27. Neither the adapter protocol nor the evidence
+      schema moved, exactly as §5.1 said they would not.
+- [x] `docs/capabilities.json` declares the contract only now that a build
+      implements it (§10), and publishes
+      `contracts.backup_manifest.readable_versions` beside the version.
+      Done 2026-09-27: the other party to this contract is a backup job
+      outside this repository, and the newest version alone would read as
+      a requirement to move.
+
+Two things the build taught rather than the plan. The identifier rule for
+a `baseline` key is the same rule a check's `table` obeys, and §2.1 said
+so — but the rule lived in `internal/checks`, which reads this package's
+output and therefore cannot be read by it. It moved to `internal/config`,
+where both reach it, so the two enforcements cannot drift. And the drill
+configuration's vocabulary is translated: a fifth built-in changed the
+text that lists them, which is itself a catalogue key, so one new check
+kind moved 46 translations in 23 languages. That is the cost of the
+vocabulary being localised, and it is worth knowing before the sixth.
 
 What v2 deliberately does **not** carry, and why it is not an oversight:
 `max(<primary key>)` and `sum(<column>)`, which the ROADMAP names beside

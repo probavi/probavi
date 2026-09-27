@@ -25,31 +25,72 @@ always called out explicitly.
 
 ### Added
 
-- **`probavi-manifest/2` is specified**, and nothing reads it yet. The
-  backup manifest gains one optional object, `baseline`: what the backup
-  job counted, per table, either exactly (`rows`) or as a range
-  (`rows_min`/`rows_max`). `docs/backup-manifest.md` §2.1 is the shape,
-  §5.1 the `baseline` check that reconciles it after the restore, §11
-  the migration and what implementation still owes.
+- **The backup manifest reads `probavi-manifest/2`, and a `baseline`
+  check reconciles it.** The manifest gains one optional object,
+  `baseline`: what the backup job counted, per table, either exactly
+  (`rows`) or as a range (`rows_min`/`rows_max`).
 
-  **Keep writing `probavi-manifest/1` until a release says otherwise.** A
-  core that does not know a `schema` value refuses the drill — that is
-  the rule working, not a fault — so a backup job adopting `/2` early
-  stops drills rather than degrading quietly.
+  ```json
+  {
+    "schema": "probavi-manifest/2",
+    "expected_size_bytes": 4182016,
+    "baseline": {
+      "orders":    {"rows": 100000},
+      "customers": {"rows_min": 4980, "rows_max": 5020}
+    }
+  }
+  ```
 
-  Why a range in the manifest rather than a tolerance in the drill
-  config (§9.3): both express the same uncertainty, but a dial sits in
-  the file edited by whoever wants a green drill, and `manifest_hash`
-  reaches every record — so a range that widened between two drills is
-  visible in the log and a tolerance that widened is not. A job that can
-  state no honest bound states none.
+  ```yaml
+  checks:
+    - builtin: baseline
+  ```
 
-  The published JSON Schema accepts both versions, and `internal/spec`
-  now holds it to both halves of the contract: the shapes a backup job
-  may write, and the ones it may not. That gate did not exist before —
-  the backup manifest is the one published schema whose instances this
-  repository does not produce, so nothing here could have caught a
-  permissive version of it.
+  **It takes no parameters**, and that is the design: the manifest is the
+  list of what to reconcile, so naming the tables in the drill config as
+  well would let a table added to the backup job and not to the drill go
+  silently unreconciled — the gap the check exists to close, one level
+  up. One entry produces one result per declared table, named
+  `baseline:<table>`, in sorted order.
+
+  **What it adds over `row_count`** is who owns the number. A `row_count`
+  bound is written by whoever wants the drill to pass, so a restore that
+  lands ninety per cent of the rows passes a loose one. A baseline is
+  recorded at backup time by the job that counted — and it is pinned:
+  `backup.manifest_hash` reaches every record, so a range that widened
+  between two drills is visible in the append-only log. That is also why
+  the uncertainty is a range in the manifest rather than a tolerance in
+  the drill config (§9.3 of `docs/backup-manifest.md`). A job that can
+  state no honest bound states none, and the table is simply not
+  reconciled.
+
+  **Both versions are read**, and `docs/capabilities.json` now publishes
+  `contracts.backup_manifest.readable_versions` beside the version: the
+  other party to this contract is a backup job outside this repository,
+  and the newest version alone would read as a requirement to move. A
+  manifest with nothing to count stays on `/1`.
+
+  Neither contract below it moved. The count is the adapter's declared
+  `row_count` statement or the core's own composition, so `baseline` runs
+  on exactly the engines `row_count` runs on; and each reconciliation
+  reaches the record as an ordinary check result, which the evidence
+  schema has carried since v0. Declaring a `baseline` statement in a
+  probe response is refused by conformance check 16, because the core
+  would never read it.
+
+  Two configurations are refused rather than run: `builtin: baseline`
+  with no `target.source.manifest` (at load, before anything exists), and
+  a manifest that declares no baseline (`invalid_request`, where the
+  message can say what the file says). The reverse is deliberately not an
+  error — a manifest declaring a baseline no drill reconciles is the
+  drill deciding what it proves.
+
+- **The published JSON Schema accepts both manifest versions**, and
+  `internal/spec` holds it to both halves of the contract: the shapes a
+  backup job may write, and the ones it may not. That gate did not exist
+  before — the backup manifest is the one published schema whose
+  instances this repository does not produce, so nothing here could have
+  caught a permissive version of it.
 
 ## [0.33.0] - 2026-09-26
 

@@ -1,6 +1,6 @@
 package config
 
-// builtins.go is the registry of check kinds: the four built-ins plus the
+// builtins.go is the registry of check kinds: the five built-ins plus the
 // user-defined SQL assertion. It is the single gate for the vocabulary —
 // validate() resolves every configured check through it, so a kind absent
 // here cannot be configured and therefore cannot reach internal/checks —
@@ -16,6 +16,12 @@ const (
 	CheckTableExists    = "table_exists"
 	CheckRowCount       = "row_count"
 	CheckFreshness      = "freshness"
+	// CheckBaseline reconciles the restored data against what the backup
+	// manifest's baseline declared (backup-manifest.md §5.1). It takes no
+	// parameters: the manifest names the tables, and naming them again
+	// here would let a table added to one and not the other go
+	// unreconciled.
+	CheckBaseline = "baseline"
 	// CheckSQL is the user-defined assertion, configured with sql/expect
 	// rather than builtin — hence Builtin false in the registry.
 	CheckSQL = "sql"
@@ -102,6 +108,16 @@ func CheckKinds() []CheckKind {
 				{Name: "column", Type: ParamIdentifier, Required: true, Doc: "The dated field to take the maximum of — a column, property or attribute, named the way the engine names one."},
 				{Name: "max_age", Type: ParamDuration, Required: true, Doc: "Maximum age of the newest row."},
 			},
+		},
+		{
+			ID:      CheckBaseline,
+			Status:  "experimental",
+			Name:    "Restored rows reconcile with the backup manifest's baseline",
+			Builtin: true,
+			// No parameters: what this kind needs is not a value in the
+			// drill configuration but a file beside the backup.
+			Requires: "target.source.manifest, declaring a baseline. The manifest names the tables to reconcile; " +
+				"one entry produces one result per table, named baseline:<table>.",
 		},
 		{
 			ID:     CheckSQL,

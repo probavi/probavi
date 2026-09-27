@@ -14,7 +14,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"regexp"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -22,10 +23,9 @@ import (
 	"github.com/probavi/probavi/internal/adapter"
 	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/evidence"
+	"github.com/probavi/probavi/internal/manifest"
 	"github.com/probavi/probavi/internal/sandbox"
 )
-
-var identPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Execer runs one command inside the sandbox; *docker.Sandbox implements it.
 type Execer interface {
@@ -65,6 +65,11 @@ type Deps struct {
 	// protocol §6.1.1). The zero value is what every v0 adapter means:
 	// the core composes its own statements and quotes SQL-standard.
 	Dialect Dialect
+	// Baseline is what the backup manifest declared, table by table
+	// (backup-manifest.md §2.1). It is what a configured baseline check
+	// reconciles against, and its emptiness is not this package's to
+	// diagnose: a manifest declaring none is refused where it is read.
+	Baseline map[string]manifest.Expectation
 }
 
 // Dialect carries an adapter's §6.1.1 declarations into the check runner.
@@ -123,23 +128,22 @@ func (d Dialect) statement(kind, composed, table, column string) string {
 }
 
 // quote validates a possibly qualified identifier and spells it the way
-// the adapter declared. Validation is the core's and never moves: each
-// part must match identPattern, so a drill configuration cannot inject a
+// the adapter declared. Validation is the core's and never moves: the rule
+// is config.IdentifierParts, so a drill configuration cannot inject a
 // statement and no declared quoting rule can make it able to — a
-// validated part cannot contain any quoting character.
+// validated part cannot contain any quoting character. The rule lives in
+// internal/config because a backup manifest's baseline keys name the same
+// things and are held to the same rule.
 func (d Dialect) quote(name string) (string, error) {
 	open, closing, sep := `"`, `"`, "."
 	if d.Separator != "" {
 		open, closing, sep = d.Open, d.Close, d.Separator
 	}
-	parts := strings.Split(name, ".")
-	if len(parts) > 2 {
-		return "", fmt.Errorf("invalid identifier %s: at most schema.name", name)
+	parts, err := config.IdentifierParts(name)
+	if err != nil {
+		return "", err
 	}
 	for i, part := range parts {
-		if !identPattern.MatchString(part) {
-			return "", fmt.Errorf("invalid identifier: %s", name)
-		}
 		parts[i] = open + part + closing
 	}
 	return strings.Join(parts, sep), nil
@@ -178,6 +182,18 @@ func Run(ctx context.Context, list []config.Check, deps Deps) ([]Result, error) 
 	}
 	results := make([]Result, 0, len(list))
 	for i := range list {
+		// One configured check is one result, with one exception: baseline
+		// is configured once and reconciles every table the backup manifest
+		// declared, so it produces one result per table
+		// (backup-manifest.md §5.1).
+		if list[i].Builtin == config.CheckBaseline {
+			expanded, err := runBaseline(ctx, &deps)
+			results = append(results, expanded...)
+			if err != nil {
+				return results, fmt.Errorf("check %s: %w", config.CheckBaseline, err)
+			}
+			continue
+		}
 		res, err := runOne(ctx, &list[i], i, &deps)
 		if err != nil {
 			return results, fmt.Errorf("check %s: %w", checkName(&list[i], i), err)
@@ -185,6 +201,58 @@ func Run(ctx context.Context, list []config.Check, deps Deps) ([]Result, error) 
 		results = append(results, *res)
 	}
 	return results, nil
+}
+
+// runBaseline reconciles every declared table, in sorted order.
+//
+// Sorted because a record's checks are read side by side across drills: an
+// order that followed Go's map iteration would reshuffle the list on every
+// run, and two records of the same drill would look like different drills.
+//
+// A table the restored database does not have is a false verdict for that
+// table and not an abandoned drill (§5.1). The reconciliation asked a
+// question the restore could not answer, and that is the finding — the
+// remaining tables are still reconciled, and the drill still reaches a
+// verdict on each.
+func runBaseline(ctx context.Context, deps *Deps) ([]Result, error) {
+	tables := slices.Sorted(maps.Keys(deps.Baseline))
+	results := make([]Result, 0, len(tables))
+	for _, table := range tables {
+		ok, detail, err := runOneBaseline(ctx, deps, table, deps.Baseline[table])
+		if err != nil {
+			return results, err
+		}
+		results = append(results, Result{
+			Name:   config.CheckBaseline + ":" + table,
+			OK:     ok,
+			Detail: truncateDetail(detail),
+		})
+	}
+	return results, nil
+}
+
+// runOneBaseline counts one table and compares. It asks the same question
+// row_count asks, through the same declared statement or the same
+// composition — no protocol version moves for this, because the statement
+// that counts rows already exists (§5.1).
+func runOneBaseline(ctx context.Context, deps *Deps, table string, want manifest.Expectation) (bool, string, error) {
+	ident, err := deps.Dialect.quote(table)
+	if err != nil {
+		return false, "", err
+	}
+	stmt := deps.Dialect.statement(config.CheckRowCount, "SELECT count(*) FROM "+ident, ident, "")
+	out, qerr := query(ctx, deps, stmt)
+	if qerr != nil {
+		return false, "", qerr
+	}
+	if !out.succeeded {
+		return false, "count query failed: " + runnerFailure(out), nil
+	}
+	n, perr := strconv.ParseInt(out.value, 10, 64)
+	if perr != nil {
+		return false, "count query returned unexpected output", nil
+	}
+	return want.Satisfied(n), fmt.Sprintf("%d rows (backup manifest states %s)", n, want), nil
 }
 
 func runOne(ctx context.Context, c *config.Check, i int, deps *Deps) (*Result, error) {

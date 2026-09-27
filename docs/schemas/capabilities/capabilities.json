@@ -68,7 +68,23 @@
         },
         "notification_payload": { "$ref": "#/$defs/contract" },
         "evidence_push": { "$ref": "#/$defs/contract" },
-        "backup_manifest": { "$ref": "#/$defs/contract" }
+        "backup_manifest": {
+          "type": "object",
+          "properties": {
+            "version": { "type": "string", "minLength": 1 },
+            "readable_versions": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "Every backup-manifest version this build reads. The other party to this contract is a backup job outside the repository, so the list is the only way for one to tell which shape to write: the newest version alone would read as a requirement to move, and the older shape stays right for a job with nothing to count."
+            },
+            "spec": { "$ref": "#/$defs/repoPath" },
+            "schema": { "$ref": "#/$defs/repoPath" }
+          },
+          "required": ["version", "readable_versions", "spec", "schema"],
+          "additionalProperties": false
+        }
       },
       "required": ["adapter_protocol", "evidence_schema", "notification_payload", "evidence_push", "backup_manifest"],
       "additionalProperties": false

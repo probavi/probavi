@@ -182,6 +182,126 @@ func TestFullDrillViaCLI(t *testing.T) {
 	if !strings.Contains(out, `"name":"postgres"`) {
 		t.Errorf("adapter probe output: %s", out)
 	}
+
+	baselineDrills(t, ctx, probavi, work, fixture, keyPath)
+}
+
+// baselineDrills proves the backup manifest's baseline end to end against a
+// real engine: what the backup job counted, reconciled against what the
+// restore actually holds.
+//
+// It runs on its own evidence log rather than the one above, so the record
+// count that test asserts stays what it asserts. The fixture holds exactly
+// 1000 rows in orders and 5 in customers, which is what makes an honest
+// manifest expressible here at all — and two tables are what make the
+// expansion observable.
+func baselineDrills(t *testing.T, ctx context.Context, probavi, work, fixture, keyPath string) {
+	t.Helper()
+	info, err := os.Stat(fixture)
+	if err != nil {
+		t.Fatalf("stat fixture: %v", err)
+	}
+	logPath := filepath.Join(work, "baseline.jsonl")
+
+	// Drill 3: the manifest states what the backup job counted, and the
+	// restore holds it. One configured check, one result per table.
+	// One exact count and one range, which are the two forms §2.1 allows.
+	cfg := writeBaselineConfig(t, t.TempDir(), fixture, logPath, keyPath, info.Size(),
+		`"orders": {"rows": 1000}, "customers": {"rows_min": 4, "rows_max": 6}`)
+	out := mustRun(t, ctx, probavi, "run", "--config", cfg)
+	summary := struct {
+		Outcome      string `json:"outcome"`
+		ChecksPassed int    `json:"checks_passed"`
+		ChecksTotal  int    `json:"checks_total"`
+	}{}
+	if err := json.Unmarshal([]byte(out), &summary); err != nil {
+		t.Fatalf("run summary is not JSON: %v (%q)", err, out)
+	}
+	// Two declared tables plus service_healthy: the one baseline entry
+	// expanded, which is the design rather than an accident of counting.
+	if summary.Outcome != "pass" || summary.ChecksTotal != 3 || summary.ChecksPassed != 3 {
+		t.Fatalf("summary = %+v, want a pass with three checks (service_healthy + two reconciliations)", summary)
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read evidence log: %v", err)
+	}
+	for _, want := range []string{
+		`"baseline:customers"`, `"baseline:orders"`,
+		"1000 rows (backup manifest states 1000)", "5 rows (backup manifest states 4–6)",
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("the signed record does not carry %s:\n%s", want, raw)
+		}
+	}
+
+	// Drill 4: the backup job counted 2000 and the restore holds 1000.
+	// That is the failure class the feature exists for — a restore that
+	// exits 0 having landed part of the data — and it is a verdict about
+	// the backup, so exit 1 with a signed record.
+	cfg = writeBaselineConfig(t, t.TempDir(), fixture, logPath, keyPath, info.Size(), `"orders": {"rows": 2000}`)
+	out, code := run(t, ctx, probavi, "run", "--config", cfg)
+	if code != 1 {
+		t.Fatalf("a shortfall exited %d (%s), want 1", code, out)
+	}
+	raw, err = os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read evidence log: %v", err)
+	}
+	if !strings.Contains(string(raw), "1000 rows (backup manifest states 2000)") {
+		t.Errorf("the record does not name both numbers:\n%s", raw)
+	}
+
+	// The whole log verifies offline, so a baseline verdict chains like any
+	// other check result — which is the reason v2 needed no evidence-schema
+	// bump.
+	out = mustRun(t, ctx, probavi, "evidence", "verify", "--log", logPath, "--key", keyPath+".pub")
+	verify := struct {
+		Status  string `json:"status"`
+		Records int    `json:"records"`
+	}{}
+	if err := json.Unmarshal([]byte(out), &verify); err != nil {
+		t.Fatalf("verify output: %v", err)
+	}
+	if verify.Status != "VALID" || verify.Records != 2 {
+		t.Fatalf("verify = %+v, want VALID with 2 records", verify)
+	}
+}
+
+// writeBaselineConfig writes a drill that names a probavi-manifest/2
+// document and reconciles it, plus the manifest itself.
+func writeBaselineConfig(t *testing.T, dir, source, logPath, keyPath string, size int64, baseline string) string {
+	t.Helper()
+	manifestPath := filepath.Join(dir, "orders.manifest.json")
+	body := fmt.Sprintf(`{"schema":"probavi-manifest/2","expected_size_bytes":%d,"baseline":{%s}}`, size, baseline)
+	if err := os.WriteFile(manifestPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write backup manifest: %v", err)
+	}
+	cfg := fmt.Sprintf(`target:
+  name: cli-e2e-baseline
+  adapter: postgres
+  source:
+    kind: pgdump
+    path: %s
+    manifest: %s
+sandbox:
+  provider: docker
+  params:
+    image: postgres:16
+    env.POSTGRES_HOST_AUTH_METHOD: trust
+  timeout: 5m
+checks:
+  - builtin: service_healthy
+  - builtin: baseline
+evidence:
+  path: %s
+  sign_key: %s
+`, source, manifestPath, logPath, keyPath)
+	path := filepath.Join(dir, "drill.yaml")
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatalf("write drill config: %v", err)
+	}
+	return path
 }
 
 // TestGameDayViaCLI proves the DR game-day path end to end: three member
@@ -375,8 +495,13 @@ func makeFixture(t *testing.T, ctx context.Context, dest string) {
 		time.Sleep(500 * time.Millisecond)
 	}
 	dockerOut(t, ctx, "exec", id, "psql", "-h", "127.0.0.1", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-c",
+		// Two tables, because one cannot show a baseline check expanding.
+		// The counts are exact and known, which is what lets a manifest
+		// state an honest expectation about this fixture.
 		`CREATE TABLE orders (id bigserial PRIMARY KEY, total numeric(10,2) NOT NULL);
-INSERT INTO orders (total) SELECT (random()*100)::numeric(10,2) FROM generate_series(1,1000);`)
+INSERT INTO orders (total) SELECT (random()*100)::numeric(10,2) FROM generate_series(1,1000);
+CREATE TABLE customers (id bigserial PRIMARY KEY, name text NOT NULL);
+INSERT INTO customers (name) SELECT 'c' || i FROM generate_series(1,5) AS s(i);`)
 	dockerOut(t, ctx, "exec", id, "pg_dump", "-h", "127.0.0.1", "-U", "postgres", "-Fc", "-f", "/tmp/f.dump", "postgres")
 	dockerOut(t, ctx, "cp", id+":/tmp/f.dump", dest)
 }

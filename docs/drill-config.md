@@ -222,13 +222,15 @@ What it catches is corruption, not tampering: whoever can rewrite the
 backup can rewrite the manifest lying beside it. `docs/backup-manifest.md`
 §6 states that, and states what a matching manifest does not prove.
 
-The example says `probavi-manifest/1` because that is what a release
-reads. `probavi-manifest/2` is specified — it adds a `baseline` object
-stating what the backup job counted, for a `baseline` check to reconcile
-after the restore — and no released core reads it yet, so a manifest
-written today stays on `/1`: an unknown `schema` fails the drill by the
-rule in the table above rather than being ignored.
-`docs/backup-manifest.md` §2.1, §5.1 and §11 are the whole of it.
+The example says `probavi-manifest/1`, and either version is read.
+`probavi-manifest/2` adds one optional object, `baseline`, stating what the
+backup job counted per table — that is what the `baseline` check (§3.5)
+reconciles after the restore, and a manifest with nothing to count stays on
+`/1` rather than carrying an empty one. Which versions a build reads is in
+`docs/capabilities.json` as `contracts.backup_manifest.readable_versions`;
+an unknown `schema` fails the drill by the rule in the table above rather
+than being ignored. `docs/backup-manifest.md` §2.1, §5.1 and §11 are the
+whole of it.
 
 ### 3.3 `target.pitr`
 
@@ -272,6 +274,7 @@ Each entry sets exactly one of `builtin` or `sql`:
 | `table_exists` | `table` (required) | The thing `table` names exists and is queryable. |
 | `row_count` | `table` (required), `min`, `max` (at least one, non-negative, `min` ≤ `max`) | The count lies within the inclusive bounds. |
 | `freshness` | `table`, `column`, `max_age` (all required) | The newest value in the dated field is younger than `max_age`. |
+| `baseline` | none | Every table the backup manifest's `baseline` declared holds the number of rows it stated. One entry, one result per table. Requires `target.source.manifest` naming a `probavi-manifest/2` document that declares one. |
 
 **`table` and `column` are named for the relational case and mean the
 engine's own thing.** A table on a SQL engine; a collection, class, label
@@ -307,9 +310,71 @@ round-trip is ambiguous and an assertion is the last place for that.
 
 Check names in the record are derived, not free text: `service_healthy`,
 `table_exists:<table>`, `row_count:<table>`, `freshness:<table>.<column>`,
-and `sql:<name>` — or `sql:<index>` when a SQL check has no `name`. That
-is why `name` is valid only for SQL checks: the built-ins already have
-one.
+`baseline:<table>`, and `sql:<name>` — or `sql:<index>` when a SQL check
+has no `name`. That is why `name` is valid only for SQL checks: the
+built-ins already have one.
+
+#### `baseline`: the count the backup job stated, not one written by hand
+
+`row_count` compares against a bound in this file. A bound in this file is
+written by whoever wants the drill to pass, so a restore that lands ninety
+per cent of the rows passes a loose one. `baseline` compares against what
+the **backup job** counted and recorded in the backup manifest beside the
+backup:
+
+```yaml
+target:
+  source:
+    kind: pgdump
+    path: /backups/pg/nightly.dump
+    manifest: /backups/pg/nightly.manifest.json
+
+checks:
+  - builtin: baseline
+```
+
+```json
+{
+  "schema": "probavi-manifest/2",
+  "expected_size_bytes": 4182016,
+  "baseline": {
+    "orders":    {"rows": 100000},
+    "customers": {"rows_min": 4980, "rows_max": 5020}
+  }
+}
+```
+
+**It takes no parameters, and that is deliberate.** The manifest is the
+list of what to reconcile. Naming the tables here as well would let a table
+added to the backup job and not to this file go silently unreconciled,
+which is the gap the check exists to close. One entry produces one result
+per declared table, so the record shows each table's verdict separately.
+
+Both forms of expectation are inclusive: `rows` is exact, and
+`rows_min`/`rows_max` is the narrowest range the backup job could honestly
+state. A range rather than a tolerance in this file, and
+`docs/backup-manifest.md` §9.3 is the argument — short version: a
+widened range is visible in the evidence log, because `manifest_hash`
+reaches every record; a widened tolerance is not.
+
+Two configurations are refused rather than run:
+
+- `builtin: baseline` with no `target.source.manifest`. Caught at load,
+  before anything exists, like every other configuration mistake.
+- a manifest that declares no `baseline`. Caught when the manifest is
+  read, which is where the message can say what the file actually says: a
+  signed record with outcome `error` and code `invalid_request`. A check
+  that would validate nothing must not report success.
+
+The reverse is not an error. A manifest that declares a baseline no drill
+reconciles is this file deciding what it proves — refusing it would break
+a working drill the day a backup job elsewhere moved to
+`probavi-manifest/2`.
+
+What the count comes from is the adapter's declared `row_count` statement
+where there is one, and the core's own composition where there is not. So
+`baseline` works on exactly the engines `row_count` works on, and each
+adapter's README says what `table` names there.
 
 ### 3.6 `evidence`
 
@@ -407,7 +472,8 @@ different points with deliberately different consequences:
 | Unknown adapter, unknown sandbox provider, missing or too-permissive key file, evidence log already locked, `url_env`/`secret_env` unset | Wiring, before the drill starts | Exit code 3 and **no evidence record** — nothing ran, so there is nothing to prove. |
 | `source.kind` the adapter does not declare; `pitr` against a kind without the capability | The adapter's `probe`, before a sandbox is created | A signed record with outcome `error` and code `unsupported_source`. |
 | `select` against a kind that chooses no backup | The adapter's `provision`, inside the sandbox | A signed record with outcome `error` and code `invalid_request`, naming the kind and what it restores instead. |
-| A `manifest` the core cannot use: absent, unreadable, not JSON, an unknown `schema`, or asserting nothing | The core, before a sandbox exists | A signed record with outcome `error` and code `invalid_request`. The manifest is the config's problem; the backup was never looked at. |
+| A `manifest` the core cannot use: absent, unreadable, not JSON, an unknown `schema`, asserting nothing, or carrying a `baseline` it cannot act on | The core, before a sandbox exists | A signed record with outcome `error` and code `invalid_request`. The manifest is the config's problem; the backup was never looked at. |
+| A `baseline` check configured against a `manifest` that declares none | The core, before a sandbox exists | The same: outcome `error`, code `invalid_request`. A check that would validate nothing is a configuration mistake, not a pass. |
 | The artifact disagrees with the `manifest` | The core, before a sandbox exists | A signed record with outcome `fail` and code `source_corrupt`, whose message names what the artifact is and what the manifest expected. |
 | Backup absent, unreadable, or rejected by the engine's tooling; a check that fails | The adapter, or the check | A signed record with outcome `fail` (`source_not_found`, `source_unreadable`, `source_corrupt`, `restore_failed`, `check_failed`). |
 

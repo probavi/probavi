@@ -38,7 +38,7 @@ type Contracts struct {
 	EvidenceSchema      EvidenceContract `json:"evidence_schema"`
 	NotificationPayload Contract         `json:"notification_payload"`
 	EvidencePush        Contract         `json:"evidence_push"`
-	BackupManifest      Contract         `json:"backup_manifest"`
+	BackupManifest      ManifestContract `json:"backup_manifest"`
 }
 
 // Contract is one versioned contract with its normative document.
@@ -57,6 +57,19 @@ type AdapterContract struct {
 	SpokenVersions []string `json:"spoken_versions"`
 	Spec           string   `json:"spec"`
 	Schema         string   `json:"schema"`
+}
+
+// ManifestContract additionally reports every backup-manifest version this
+// build reads. A backup job is the other party and is outside this
+// repository, so the list is the only way for one to tell which shape to
+// write: publishing the newest version alone would read as a requirement
+// to move, and the older shape stays right for a job with nothing to
+// count (backup-manifest.md §11).
+type ManifestContract struct {
+	Version          string   `json:"version"`
+	ReadableVersions []string `json:"readable_versions"`
+	Spec             string   `json:"spec"`
+	Schema           string   `json:"schema"`
 }
 
 // EvidenceContract additionally reports every schema version the verifier

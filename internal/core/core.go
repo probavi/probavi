@@ -326,7 +326,7 @@ func (d *Drill) execute(ctx context.Context, rec *evidence.Record) {
 	recordProvision(rec, provRes)
 
 	validateStart := d.Now()
-	results, cerr := checks.Run(ctx, d.Config.Checks, d.checkDeps(probe, provRes, sbx))
+	results, cerr := checks.Run(ctx, d.Config.Checks, d.checkDeps(probe, provRes, sbx, res.Baseline))
 	rec.Checks = mapChecks(results)
 	rec.Backup.NewestDataAt = newestDataAt(results)
 	rec.Timings.Validate = msSince(validateStart, d.Now())
@@ -384,7 +384,34 @@ func (d *Drill) checkBackupManifest() (manifest.Result, *manifest.Fault) {
 	if src.Manifest == "" {
 		return manifest.Result{}, nil
 	}
-	return manifest.Check(src.Path, src.Manifest)
+	res, fault := manifest.Check(src.Path, src.Manifest)
+	if fault != nil {
+		return res, fault
+	}
+	// A configured baseline check with nothing to reconcile is a
+	// configuration mistake, not a pass (backup-manifest.md §5.1). It is
+	// caught here because this is where the manifest is read: the loader
+	// knows the check is configured and cannot know what the file says.
+	//
+	// The reverse is deliberately not an error. A manifest that declares a
+	// baseline no drill reconciles is the drill deciding what it proves —
+	// and refusing it would break a working drill the day somebody else's
+	// backup job adopted v2.
+	if len(res.Baseline) == 0 && d.baselineConfigured() {
+		return res, &manifest.Fault{
+			Code: evidence.CodeInvalidRequest,
+			Message: fmt.Sprintf("a baseline check is configured, but the backup manifest at %s declares no baseline; "+
+				"a check that would reconcile nothing is a configuration mistake", src.Manifest),
+		}
+	}
+	return res, nil
+}
+
+// baselineConfigured reports whether any check asks for the reconciliation.
+func (d *Drill) baselineConfigured() bool {
+	return slices.ContainsFunc(d.Config.Checks, func(c config.Check) bool {
+		return c.Builtin == config.CheckBaseline
+	})
 }
 
 // recordFault writes a core-side failure into the record under the same §7
@@ -417,7 +444,8 @@ func (d *Drill) provisionRequest(sbx Sandbox, pitrTarget *string) *adapter.Provi
 	return req
 }
 
-func (d *Drill) checkDeps(probe *adapter.ProbeResult, provRes *adapter.ProvisionResult, sbx Sandbox) checks.Deps {
+func (d *Drill) checkDeps(probe *adapter.ProbeResult, provRes *adapter.ProvisionResult, sbx Sandbox,
+	baseline map[string]manifest.Expectation) checks.Deps {
 	return checks.Deps{
 		Exec: sbx,
 		Healthcheck: func(hctx context.Context) (bool, string, error) {
@@ -434,8 +462,9 @@ func (d *Drill) checkDeps(probe *adapter.ProbeResult, provRes *adapter.Provision
 			Database: provRes.Connection.Database,
 			Password: d.resolvePassword(provRes.Connection.PasswordEnv),
 		},
-		Now:    d.Now,
-		Logger: d.Logger,
+		Now:      d.Now,
+		Logger:   d.Logger,
+		Baseline: baseline,
 	}
 }
 

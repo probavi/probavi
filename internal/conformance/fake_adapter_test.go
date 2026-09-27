@@ -164,6 +164,11 @@ func (f *fakeAdapter) bendV1(payload map[string]any) {
 		payload["checks"] = map[string]any{
 			"row_count": map[string]string{"statement": "SELECT COUNT(*) FROM {{table}}"},
 		}
+	case "v1-undeclarable-check-kind":
+		payload["protocol_versions"] = []string{protocolVersion, protocolV1}
+		payload["checks"] = map[string]any{
+			"baseline": map[string]string{"statement": "SELECT COUNT(*) FROM {{table}}"},
+		}
 	case "v1-unknown-check-kind":
 		payload["protocol_versions"] = []string{protocolVersion, protocolV1}
 		payload["checks"] = map[string]any{
