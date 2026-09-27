@@ -255,3 +255,88 @@ func TestMultipleKeysAccepted(t *testing.T) {
 		t.Fatalf("exit = %d, want 0 (stderr: %s)", code, stderr)
 	}
 }
+
+// witnessScript is one of the committed §9.2.5 scripts, as this command
+// would be given it on the command line. The tests run from the cmd
+// package's directory, so the path reaches up to the module's testdata.
+func witnessScript(name string) string {
+	return filepath.Join("..", "..", "testdata", name)
+}
+
+// The head log_v2.jsonl carries, which §9.2.5's vectors are written
+// against.
+const witnessHead = "3:sha256:6b3e356a9444cf3d7ca6bfdf7ee6bdf35d88928b2d66fcc28a5ceb033308b62d"
+
+// TestWitnessAttestsThroughTheCommand drives §9.2 through the command an
+// auditor actually runs: one invocation that reports both whether the log
+// is intact and whether an outside party attested its content.
+func TestWitnessAttestsThroughTheCommand(t *testing.T) {
+	const at = "2026-09-27T09:00:00Z"
+	t.Setenv("PROBAVI_TEST_HEAD", witnessHead)
+	t.Setenv("PROBAVI_TEST_AT", at)
+
+	code, stdout, stderr := runCLI(t, "--log", examplePath("log_v2.jsonl"), "--key", examplePath("signer.pub"),
+		"--witness", witnessScript("witness-expect.sh"))
+	if code != exitValid {
+		t.Fatalf("exit = %d, want %d (stderr: %s)", code, exitValid, stderr)
+	}
+	var res struct {
+		Witness *struct {
+			Command    string  `json:"command"`
+			Attested   bool    `json:"attested"`
+			AttestedAt *string `json:"attested_at"`
+		} `json:"witness"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("stdout is not JSON (%q): %v", stdout, err)
+	}
+	if res.Witness == nil || !res.Witness.Attested {
+		t.Fatalf("witness = %+v, want an attestation", res.Witness)
+	}
+	if res.Witness.AttestedAt == nil || *res.Witness.AttestedAt != at {
+		t.Errorf("attested_at = %v, want %q", res.Witness.AttestedAt, at)
+	}
+}
+
+// TestNoWitnessIsReportedAsNull: §9.2.3 requires the field on every run,
+// so a reader can tell "none was asked" from "one attested".
+func TestNoWitnessIsReportedAsNull(t *testing.T) {
+	code, stdout, _ := runCLI(t, "--log", examplePath("log_v2.jsonl"), "--key", examplePath("signer.pub"))
+	if code != exitValid {
+		t.Fatalf("exit = %d, want %d", code, exitValid)
+	}
+	if !strings.Contains(stdout, `"witness":null`) {
+		t.Errorf("stdout = %q, want a null witness reported on every run", stdout)
+	}
+}
+
+// TestWitnessRefusalIsInvalidThroughTheCommand: the witness is armed for a
+// head this log does not carry, which is what a log rewritten after it was
+// attested looks like from the outside.
+func TestWitnessRefusalIsInvalidThroughTheCommand(t *testing.T) {
+	t.Setenv("PROBAVI_TEST_HEAD", "2:sha256:"+strings.Repeat("0", 64))
+
+	code, stdout, _ := runCLI(t, "--log", examplePath("log_v2.jsonl"), "--key", examplePath("signer.pub"),
+		"--witness", witnessScript("witness-expect.sh"))
+	if code != exitInvalid {
+		t.Fatalf("exit = %d, want %d (stdout: %s)", code, exitInvalid, stdout)
+	}
+	if !strings.Contains(stdout, "holds no attestation") {
+		t.Errorf("stdout = %q, want a reason naming the refusal", stdout)
+	}
+}
+
+// TestWitnessFailureIsAUsageErrorThroughTheCommand: not exit 2. A witness
+// that could not answer says nothing about the log, and a verifier that
+// turned it into INVALID would teach a reader that INVALID sometimes means
+// nothing.
+func TestWitnessFailureIsAUsageErrorThroughTheCommand(t *testing.T) {
+	code, stdout, _ := runCLI(t, "--log", examplePath("log_v2.jsonl"), "--key", examplePath("signer.pub"),
+		"--witness", witnessScript("witness-fail.sh"))
+	if code != exitUsage {
+		t.Fatalf("exit = %d, want %d (stdout: %s)", code, exitUsage, stdout)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want no status printed at all", stdout)
+	}
+}

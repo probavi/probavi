@@ -160,6 +160,7 @@ func Commands() []Command {
 				{Name: "--log", Required: true, Doc: "Path to the evidence log file."},
 				{Name: "--key", Required: true, Repeatable: true, Doc: "Public key file; repeat to build a keyring."},
 				{Name: "--anchor", Doc: "Chain head from an earlier verification, <seq>:sha256:<hex>; a log that ends before it is INVALID."},
+				{Name: "--witness", Doc: "Command run as <command> <head>, answering whether a party other than the operator attested it: exit 0 attested, 1 not attested (INVALID), anything else could not answer, which is a failure to run rather than a verdict."},
 			},
 			Stdout: "one-line JSON verification result",
 			ExitCodes: []ExitCode{

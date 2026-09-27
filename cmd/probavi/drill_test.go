@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -348,3 +349,95 @@ func TestKeygenSurvivesAnUnwritableStdout(t *testing.T) {
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("stdout is gone") }
+
+// coreWitnessScript is one of the committed §9.2.5 scripts. The core's
+// copy lives beside its own verifier, because sharing a fixture with
+// spec/evidence would be sharing something with the module that exists in
+// order to share nothing.
+func coreWitnessScript(t *testing.T, name string) string {
+	t.Helper()
+	path, err := filepath.Abs(filepath.Join("..", "..", "internal", "evidence", "testdata", name))
+	if err != nil {
+		t.Fatalf("resolve witness script: %v", err)
+	}
+	return path
+}
+
+// witnessFixture sets up a log and returns it with the head it carries,
+// read the way an operator reads one — and asserts on the way through that
+// a run with no witness reports a null one, which §9.2.3 requires on every
+// run.
+func witnessFixture(t *testing.T) (logPath, pubPath, head string) {
+	t.Helper()
+	logPath, _, pubPath = setupLog(t)
+	code, stdout, stderr := runCLI(t, "evidence", "verify", "--log", logPath, "--key", pubPath)
+	if code != exitValid {
+		t.Fatalf("plain verify: exit %d (stderr: %s)", code, stderr)
+	}
+	var out verifyOutput
+	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
+		t.Fatalf("verify output is not JSON: %v (%q)", err, stdout)
+	}
+	if out.Witness != nil {
+		t.Errorf("witness = %+v, want null when none was asked", out.Witness)
+	}
+	return logPath, pubPath, fmt.Sprintf("%d:%s", out.Head.Seq, out.Head.Hash)
+}
+
+// TestVerifyWitnessAttestsThroughTheCLI drives §9.2 through the command an
+// operator runs: one invocation reporting both whether the log is intact
+// and whether an outside party attested its content.
+func TestVerifyWitnessAttestsThroughTheCLI(t *testing.T) {
+	const at = "2026-09-27T09:00:00Z"
+	logPath, pubPath, head := witnessFixture(t)
+	t.Setenv("PROBAVI_TEST_HEAD", head)
+	t.Setenv("PROBAVI_TEST_AT", at)
+
+	code, stdout, stderr := runCLI(t, "evidence", "verify", "--log", logPath, "--key", pubPath,
+		"--witness", coreWitnessScript(t, "witness-expect.sh"))
+	if code != exitValid {
+		t.Fatalf("exit %d, want %d (stderr: %s)", code, exitValid, stderr)
+	}
+	var out verifyOutput
+	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
+		t.Fatalf("verify output is not JSON: %v (%q)", err, stdout)
+	}
+	if out.Witness == nil || !out.Witness.Attested {
+		t.Fatalf("witness = %+v, want an attestation", out.Witness)
+	}
+	if out.Witness.AttestedAt == nil || *out.Witness.AttestedAt != at {
+		t.Errorf("attested_at = %v, want %q", out.Witness.AttestedAt, at)
+	}
+}
+
+// TestVerifyWitnessRefusalIsInvalid: a head no witness will attest is the
+// same class of finding as a head that disagrees with an anchor.
+func TestVerifyWitnessRefusalIsInvalid(t *testing.T) {
+	logPath, pubPath, _ := witnessFixture(t)
+	t.Setenv("PROBAVI_TEST_HEAD", "2:sha256:"+strings.Repeat("0", 64))
+
+	code, stdout, _ := runCLI(t, "evidence", "verify", "--log", logPath, "--key", pubPath,
+		"--witness", coreWitnessScript(t, "witness-expect.sh"))
+	if code != exitInvalid {
+		t.Fatalf("exit %d, want %d (stdout: %s)", code, exitInvalid, stdout)
+	}
+	if !strings.Contains(stdout, "holds no attestation") {
+		t.Errorf("stdout = %q, want a reason naming the refusal", stdout)
+	}
+}
+
+// TestVerifyWitnessFailureIsAUsageError: not exit 2. A witness that could
+// not answer says nothing about the log, and turning that into INVALID
+// would teach an operator that INVALID sometimes means nothing.
+func TestVerifyWitnessFailureIsAUsageError(t *testing.T) {
+	logPath, pubPath, _ := witnessFixture(t)
+
+	code, stdout, _ := runCLI(t, "evidence", "verify", "--log", logPath, "--key", pubPath,
+		"--witness", coreWitnessScript(t, "witness-fail.sh"))
+	if code != exitUsage {
+		t.Fatalf("exit %d, want %d (stdout: %s)", code, exitUsage, stdout)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want no status printed at all", stdout)
+	}
+}

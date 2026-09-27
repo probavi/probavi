@@ -13,10 +13,10 @@ always called out explicitly.
 
 ### Added
 
-- **A witness for the chain head is specified**, and `--witness` is not
-  implemented yet (`docs/evidence-schema.md` §9.2.5 lists what it owes).
-  The anchoring practice the same document describes works today and
-  needs nothing new.
+- **`--witness <command>` in both verifiers**: a party other than the
+  operator can attest the chain head, and one run now reports both
+  whether the log is intact and whether it was attested. Specified and
+  implemented on 2026-09-27 (`docs/evidence-schema.md` §9.2).
 
   The gap it closes: the chain and the signature defend the log against
   everyone who does not hold the signing key, and not against whoever
@@ -43,6 +43,12 @@ always called out explicitly.
   transparency log: the second publishes that this organisation runs
   drills and how often, which is a disclosure a default would make on
   someone's behalf.
+
+  The five vectors of §9.2.5 run in both implementations, which share no
+  code, and need no timestamp authority and no network — two committed
+  scripts and the published example log are enough. The attesting script
+  refuses any head but the one it was armed with, so the vector that
+  passes is also the assertion that the verifier passed the right argv.
 
   No record byte changes and no schema version moves. A witness is an
   input to verification, exactly as an anchor is.
