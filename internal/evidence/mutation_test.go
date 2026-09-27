@@ -1,10 +1,12 @@
 package evidence
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -357,4 +359,67 @@ func TestTruncateLineSurvivesEveryBudgetOnInvalidUTF8(t *testing.T) {
 			}
 		}
 	}
+}
+
+// reopenWithLog opens an existing log again and returns what the store told
+// its logger while resuming.
+func reopenWithLog(t *testing.T, path string) string {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	st, err := Open(path, testSigner(), slog.New(slog.NewTextHandler(buf, nil)))
+	if err != nil {
+		t.Fatalf("reopen %s: %v", path, err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	return buf.String()
+}
+
+// TestTheDamagedLineWarningFiresExactlyWhenThereIsDamage: a log carrying
+// crash artifacts reopens successfully on purpose — the chain continues from
+// the last valid record rather than refusing to append ever again — so this
+// warning is the only thing that tells an operator the file is not what it
+// was, and which lines to go and look at.
+//
+// Both directions matter, and neither was asserted. Warning about a log with
+// nothing wrong teaches an operator to ignore the line, which costs the
+// warning its meaning for the log that does have damage. Staying quiet about
+// a single damaged line hides the commonest case there is: one interrupted
+// append, which is exactly what a crash leaves behind.
+func TestTheDamagedLineWarningFiresExactlyWhenThereIsDamage(t *testing.T) {
+	t.Run("an intact log says nothing", func(t *testing.T) {
+		if out := reopenWithLog(t, buildLog(t)); out != "" {
+			t.Errorf("reopening an intact log logged %q, want silence", out)
+		}
+	})
+	t.Run("one damaged line is named by its line number", func(t *testing.T) {
+		path := buildLog(t)
+		// Appending is how damage arrives: bytes after the last good record
+		// that are not a record. Three were written, so this is line 4.
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			t.Fatalf("open log for append: %v", err)
+		}
+		if _, err := f.WriteString("this line is not a record\n"); err != nil {
+			t.Fatalf("append damage: %v", err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("close log: %v", err)
+		}
+		out := reopenWithLog(t, path)
+		// The line number is asserted as the rendered attribute rather than
+		// as a bare "4": every line of this output carries digits, and a
+		// substring that the timestamp satisfies asserts nothing.
+		for _, want := range []string{
+			"level=WARN",
+			"evidence log contains damaged lines",
+			"chain continues from last valid record",
+			"damaged_lines=[4]",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("the store logged %q, want it to carry %q", out, want)
+			}
+		}
+	})
 }

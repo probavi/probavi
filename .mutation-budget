@@ -19,16 +19,16 @@
 # Every package listed here is run in full, so this file is also the
 # scope: a package joins the run by being declared, with a measured
 # ceiling attached.
-# internal/evidence measured 2026-09-27 at 253 mutants, 241 caught, once the
-# canonical comparison's boundaries and the bound on the walk back to a rune
-# boundary were pinned. The ten survivors were read one by one rather than
-# counted: four are provably equivalent (a comparison the enclosing
-# condition already settled, a file mode the kernel ignores without
-# O_CREATE, and two truncation guards whose branch does what the branch
-# below would have done), one has no input the timestamp layout admits, and
-# five are reached by no test in the suite — a double close failure, a
-# directory sync refusing with EINVAL, a warning line's condition twice
-# over, a key written but unsynced.
+# internal/evidence measured 2026-09-27 at 253 mutants, 243 caught, once the
+# canonical comparison's boundaries, the bound on the walk back to a rune
+# boundary and the damaged-line warning were pinned. The eight survivors
+# were read one by one rather than counted: four are provably equivalent (a
+# comparison the enclosing condition already settled, a file mode the kernel
+# ignores without O_CREATE, and two truncation guards whose branch does what
+# the branch below would have done), one has no input the timestamp layout
+# admits, and three are reached by no test in the suite — a double close
+# failure, a directory sync refusing with something other than EINVAL, a key
+# written but unsynced.
 #
 # One of them used to flip. The loop bound in lessUTF16 was asserted only
 # through Canonicalize, where the sort picks the comparison's argument order
@@ -37,14 +37,13 @@
 # survivor where a local run of the same sweep had not. A ceiling is not a
 # measurement while one of its mutants answers differently one run in six.
 #
-# The next one to close is store.go's condition on the damaged-lines
-# warning, which is two of the ten. It is not the debug-line shape this
-# file's header excuses: the warning is how an operator learns that the log
-# carries crash artifacts and that the chain resumed from the last valid
-# record. Widened, it warns about every clean log; narrowed, it stays quiet
-# for a log with exactly one damaged line. Both are reachable with an
-# injected handler.
-internal/evidence 10
+# The next one to close is Close's rule about which failure it reports. It
+# keeps the log file's error over the lock's, and the mutant reverses that
+# when both fail — a shape store_failure_test.go can already build, because
+# closing a descriptor twice fails and the two errors differ by their path.
+# Assert on the *os.PathError's Path rather than on a substring: the two
+# messages are otherwise the same sentence.
+internal/evidence 8
 # internal/adapter measured 2026-09-27 at 115 mutants, 105 caught. The ten
 # survivors are four shapes: seven error checks that decide nothing but
 # whether a debug line is logged; a channel buffer where both paths receive
