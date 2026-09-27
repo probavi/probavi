@@ -286,3 +286,75 @@ func TestLessUTF16AtItsBoundaries(t *testing.T) {
 		}
 	}
 }
+
+// TestTruncateLineWalksOutOfAStringOfContinuationBytes: the walk back to a
+// rune boundary is bounded by `cut > 0`, and that bound is load-bearing.
+// Every byte of a Go string can be a UTF-8 continuation byte, and the walk
+// then reaches offset 0 with nothing else to stop it — without the bound it
+// indexes s[-1] and panics inside the helper two record fields are built
+// with.
+//
+// No shipped caller can deliver such a string today, and every mechanism
+// that prevents it belongs to someone else: internal/checks composes its
+// details from ASCII and keeps engine output out of them by the redaction
+// rule, adapter-supplied text arrives through encoding/json, and
+// sanitizeMessage runs strings.Map — and both of those coerce an invalid
+// byte to U+FFFD rather than passing it on (measured, not assumed). So the
+// bound is a promise to the next caller rather than a live defect, and it
+// is worth keeping asserted: a panic is the one outcome that leaves no
+// record at all, where a field the record layer rejects at least leaves a
+// drill that failed for a stated reason.
+//
+// What the helper does not promise is repair. It refuses to split a rune;
+// an input that was never valid UTF-8 stays invalid, and the last case
+// below says so rather than leaving it to be assumed.
+func TestTruncateLineWalksOutOfAStringOfContinuationBytes(t *testing.T) {
+	const cont = "\x80" // 10xxxxxx: never the first byte of a rune
+	for name, tc := range map[string]struct {
+		in       string
+		maxBytes int
+		want     string
+	}{
+		// The walk starts at maxBytes-3 and finds no rune start below it,
+		// so it arrives at 0 and keeps nothing. A budget of 4 is the
+		// smallest that walks at all: below that the ellipsis path returns
+		// first.
+		"nothing but continuation bytes": {strings.Repeat(cont, 5), 4, ellipsis},
+		"a longer run, a larger budget":  {strings.Repeat(cont, 40), 20, ellipsis},
+		// A lead byte at offset 0 stops the walk by being a rune start, not
+		// by the bound — the same result reached the other way.
+		"a lead byte under the run": {"\xf0" + strings.Repeat(cont, 5), 4, ellipsis},
+		// Repair is not on offer: the cut lands on a rune start, and a lone
+		// lead byte is one.
+		"a lone lead byte is kept": {"a\xc3" + "bcdefgh", 5, "a\xc3" + ellipsis},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := TruncateLine(tc.in, tc.maxBytes)
+			if got != tc.want {
+				t.Errorf("TruncateLine(%q, %d) = %q, want %q", tc.in, tc.maxBytes, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTruncateLineSurvivesEveryBudgetOnInvalidUTF8 is the property behind
+// the cases above: whatever the bytes are, the helper returns and stays
+// inside its budget. Validity is deliberately not asserted — that is the
+// one promise invalid input does not get, and asserting it here would be
+// asserting a repair the helper does not perform.
+func TestTruncateLineSurvivesEveryBudgetOnInvalidUTF8(t *testing.T) {
+	for _, s := range []string{
+		"\x80\x80\x80\x80\x80\x80\x80\x80",
+		"\xf0\x80\x80\x80\x80\x80\x80\x80",
+		"a\x80b\x80c\x80d\x80",
+		"\xc3\xc3\xc3\xc3\xc3\xc3",
+		"\xff\xfe\xff\xfe\xff\xfe",
+	} {
+		for maxBytes := range len(s) + 4 {
+			got := TruncateLine(s, maxBytes)
+			if len(got) > maxBytes {
+				t.Errorf("TruncateLine(%q, %d) returned %d bytes", s, maxBytes, len(got))
+			}
+		}
+	}
+}

@@ -13,6 +13,35 @@ always called out explicitly.
 
 ### Changed
 
+- **The bound on the walk back to a rune boundary is asserted, and
+  `internal/evidence`'s mutation ceiling goes from 11 to 10.** `TruncateLine`
+  walks back from the cut until it finds a byte that starts a rune, bounded
+  by `cut > 0`. Every byte of a Go string can be a UTF-8 continuation byte,
+  and the walk then reaches offset 0 with nothing else to stop it: without
+  the bound it indexes `s[-1]` and **panics** inside the helper that builds
+  `checks[].detail` and `error.message`. Nothing asserted it — every existing
+  case, the sweep over every budget included, feeds valid UTF-8, where some
+  byte always starts a rune.
+
+  This is a promise to the next caller rather than a live defect, and which
+  one it is was worth establishing. No shipped caller can deliver such a
+  string today, and every mechanism that prevents it belongs to someone
+  else: `internal/checks` composes its details from ASCII and keeps engine
+  output out of them by the redaction rule, adapter-supplied text arrives
+  through `encoding/json`, and `sanitizeMessage` runs `strings.Map` — and
+  both of those coerce an invalid byte to U+FFFD rather than passing it on.
+  Measured, not assumed.
+
+  It stays asserted because of what the two outcomes cost. A field the record
+  layer rejects leaves a drill that failed for a stated reason; a panic
+  leaves no record at all, which is the one result this project does not
+  accept — a failed drill still signs.
+
+  The tests also state the boundary of what the helper offers: it refuses to
+  split a rune, and it does not repair input that was never valid. A cut
+  landing on a lone lead byte keeps that byte. That was true before and
+  undocumented, which made it something to discover rather than rely on.
+
 - **The canonical property-name comparison is pinned at its boundaries, and
   `internal/evidence`'s mutation ceiling goes from 12 to 11.** The scheduled
   Mutation workflow reported 13 survivors against 12 on a tree where a local
