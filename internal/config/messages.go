@@ -35,7 +35,8 @@ const (
 	msgCheckBuiltinOrSQL        = "%s: exactly one of builtin or sql must be set"
 	msgCheckExpectOnlySQL       = "%s: expect is only valid for sql checks"
 	msgCheckNameOnlySQL         = "%s: name is only valid for sql checks (builtin checks are named automatically)"
-	msgCheckUnknownBuiltin      = "%s: unknown builtin %q (supported: service_healthy, table_exists, row_count, freshness)"
+	msgCheckUnknownBuiltin      = "%s: unknown builtin %q (supported: service_healthy, table_exists, row_count, freshness, baseline)"
+	msgCheckBaselineManifest    = "%s: baseline reconciles the restored data against target.source.manifest, which this config does not name"
 	msgCheckRowCountBounds      = "%s: row_count requires min, max, or both"
 	msgCheckRowCountNegative    = "%s: row_count bounds must not be negative"
 	msgCheckRowCountMinMax      = "%s: row_count min (%d) exceeds max (%d)"
@@ -110,6 +111,7 @@ func Messages() []string {
 		msgCheckRowCountMinMax,
 		msgCheckFreshnessColumn,
 		msgCheckFreshnessMaxAge,
+		msgCheckBaselineManifest,
 		msgCheckSQLExpect,
 		msgCheckRequiresTable,
 		msgCheckTableNotValid,

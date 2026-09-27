@@ -138,6 +138,7 @@ func TestLoadRejects(t *testing.T) {
 		{"row_count negative min", strings.Replace(validYAML, "- builtin: service_healthy", "- builtin: row_count\n    table: orders\n    min: -1", 1), []string{"must not be negative"}},
 		{"row_count min above max", strings.Replace(validYAML, "- builtin: service_healthy", "- builtin: row_count\n    table: orders\n    min: 10\n    max: 5", 1), []string{"min (10) exceeds max (5)"}},
 		{"freshness without column", strings.Replace(validYAML, "- builtin: service_healthy", "- builtin: freshness\n    table: orders\n    max_age: 24h", 1), []string{"freshness requires column"}},
+		{"baseline without a manifest", strings.Replace(validYAML, "- builtin: service_healthy", "- builtin: baseline", 1), []string{"baseline reconciles", "target.source.manifest"}},
 		{"freshness without max_age", strings.Replace(validYAML, "- builtin: service_healthy", "- builtin: freshness\n    table: orders\n    column: created_at", 1), []string{"freshness requires max_age"}},
 		{"sql without expect", strings.Replace(validYAML, "- builtin: service_healthy", "- sql: SELECT 1", 1), []string{"require expect"}},
 		{"sql with table", strings.Replace(validYAML, "- builtin: service_healthy", "- sql: SELECT 1\n    expect: 1\n    table: orders", 1), []string{"table is not valid for sql checks"}},
@@ -467,4 +468,108 @@ func TestSourceManifestLoads(t *testing.T) {
 			t.Errorf("manifest = %q, want empty", cfg.Target.Source.Manifest)
 		}
 	})
+}
+
+// baselineYAML is validYAML with the named checks in place of its one,
+// optionally naming a backup manifest — which is what a baseline check
+// reconciles against.
+func baselineYAML(checks string, withManifest bool) string {
+	yaml := strings.Replace(validYAML, "  - builtin: service_healthy", checks, 1)
+	if withManifest {
+		yaml = strings.Replace(yaml, "    path: /backups/test.dump",
+			"    path: /backups/test.dump\n    manifest: /backups/test.manifest.json", 1)
+	}
+	return yaml
+}
+
+// TestBaselineNeedsAManifestAndNothingElse is baseline's whole validation
+// surface, and it is small on purpose: the expectations live in the backup
+// manifest, so the only thing a drill configuration can get wrong is
+// asking for the reconciliation where there is nothing to reconcile
+// against — or handing the kind a parameter it does not take
+// (backup-manifest.md §5.1).
+//
+// Catching it at load rather than as a signed error record is the point: a
+// configuration can be fixed before a drill runs, and principle 4 of
+// drill-config.md validates before anything exists.
+func TestBaselineNeedsAManifestAndNothingElse(t *testing.T) {
+	accepted := []struct{ name, checks string }{
+		{"with a manifest", "  - builtin: baseline"},
+		{"beside other checks", "  - builtin: service_healthy\n  - builtin: baseline"},
+		{"twice, which is pointless but not wrong", "  - builtin: baseline\n  - builtin: baseline"},
+	}
+	for _, tc := range accepted {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, baselineYAML(tc.checks, true)), i18n.English())
+			if err != nil {
+				t.Fatalf("a valid baseline configuration was rejected: %v", err)
+			}
+			if cfg.Target.Source.Manifest == "" {
+				t.Error("the loaded config names no manifest; the fixture is not testing what it claims")
+			}
+		})
+	}
+
+	refused := []struct {
+		name, checks string
+		manifest     bool
+		want         []string
+	}{
+		{"without a manifest", "  - builtin: baseline", false,
+			[]string{"baseline reconciles", "target.source.manifest"}},
+		{"with a table", "  - builtin: baseline\n    table: orders", true,
+			[]string{"table is not valid for baseline"}},
+		{"with bounds", "  - builtin: baseline\n    min: 1\n    max: 9", true,
+			[]string{"min/max are not valid for baseline"}},
+		{"with a column", "  - builtin: baseline\n    column: created_at", true,
+			[]string{"column is not valid for baseline"}},
+		{"with a max_age", "  - builtin: baseline\n    max_age: 24h", true,
+			[]string{"max_age is not valid for baseline"}},
+		{"with a name", "  - builtin: baseline\n    name: rows", true,
+			[]string{"name is only valid for sql checks"}},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, baselineYAML(tc.checks, tc.manifest)), i18n.English())
+			if err == nil {
+				t.Fatal("an invalid baseline configuration was accepted")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not mention %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// TestIdentifierParts is the rule two packages share: internal/checks
+// quotes what it returns, and internal/manifest refuses a baseline key it
+// rejects. Both directions matter, and the negative half is the one that
+// makes injection impossible — a part cannot carry a quoting character, so
+// no declared quoting rule can be escaped out of.
+func TestIdentifierParts(t *testing.T) {
+	valid := []string{"orders", "_orders", "o", "Orders_2024", "public.orders", "_._"}
+	for _, name := range valid {
+		t.Run("valid/"+name, func(t *testing.T) {
+			parts, err := IdentifierParts(name)
+			if err != nil {
+				t.Fatalf("IdentifierParts(%q) = %v, want no error", name, err)
+			}
+			if strings.Join(parts, ".") != name {
+				t.Errorf("parts %q do not rejoin to %q", parts, name)
+			}
+		})
+	}
+	invalid := []string{
+		"", "2024_orders", "order items", "db.public.orders", "orders.", ".orders",
+		`orders"`, "orders'", "orders;DROP TABLE x", "orders`", "órders", "orders-2024",
+	}
+	for _, name := range invalid {
+		t.Run("invalid/"+name, func(t *testing.T) {
+			if _, err := IdentifierParts(name); err == nil {
+				t.Errorf("IdentifierParts(%q) was accepted", name)
+			}
+		})
+	}
 }

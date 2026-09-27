@@ -447,6 +447,10 @@ func TestV1DeclarationsAreChecked(t *testing.T) {
 		mode, check, wantIn string
 	}{
 		{"v1-unknown-check-kind", "probe.checks_keys", "not a built-in check kind"},
+		// baseline is a real kind, and declaring a statement for it is
+		// still refused: the core asks row_count's statement instead, so
+		// the declaration would never take effect.
+		{"v1-undeclarable-check-kind", "probe.checks_keys", "never asks an adapter about"},
 		{"v1-stray-placeholder", "probe.checks_keys", "{{password}}"},
 		{"v1-undeclared-version", "probe.identifier", "probavi-adapter/1"},
 		{"v1-half-quoted", "probe.identifier", "both be empty or both be set"},

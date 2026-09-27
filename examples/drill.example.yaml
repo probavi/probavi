@@ -10,6 +10,13 @@ target:
   source:
     kind: pgdump                  # adapter-defined; see the adapter's probe output
     path: /backups/orders/latest.dump
+    # Optional backup manifest: the JSON file the backup job wrote beside
+    # the backup, stating what it produced. The core checks the artifact
+    # against it before a sandbox exists, so a truncated copy or a
+    # half-finished rsync fails before the restore rather than after it
+    # (docs/backup-manifest.md). Write probavi-manifest/1 unless you also
+    # want the baseline check below.
+    # manifest: /backups/orders/latest.manifest.json
   # Optional point-in-time recovery: prove the backup restores to a chosen
   # instant, not just to its end. The source kind must declare the pitr
   # capability (e.g. the postgres adapter's pgbackrest kind). Exactly one of:
@@ -35,6 +42,11 @@ checks:
     table: orders
     column: created_at
     max_age: 24h
+  # Reconcile the restored rows against what the backup job counted, per
+  # table, in the backup manifest's baseline (probavi-manifest/2). It takes
+  # no parameters: the manifest names the tables, and one entry produces one
+  # result per table. Needs the manifest above.
+  # - builtin: baseline
   # Custom invariant, named for evidence records. `expect` is compared to
   # the engine CLI's textual output — prefer numeric results (count-style
   # queries), which print identically across engines; engine-typed values

@@ -333,11 +333,18 @@ core runs what it is given.
 Rules:
 
 - Keys MUST be built-in check kinds the core publishes
-  (`docs/capabilities.json`, `checks[]`). A core MUST ignore a key it does
-  not know — an adapter written against a newer core must not be
-  unrunnable on an older one — and the conformance suite MUST refuse one
-  (§10, check 16), so a typo is caught where it is cheap rather than at
-  3am as a check that silently kept composing.
+  (`docs/capabilities.json`, `checks[]`) **and asks an adapter about**. A
+  core MUST ignore a key it does not know — an adapter written against a
+  newer core must not be unrunnable on an older one — and the conformance
+  suite MUST refuse one (§10, check 16), so a typo is caught where it is
+  cheap rather than at 3am as a check that silently kept composing.
+  Two published kinds are **not** declarable, and the suite refuses them
+  by name for the same reason a typo is refused: the core never looks up a
+  statement for either, so the declaration would never take effect.
+  `service_healthy` delegates to the `healthcheck` operation.
+  `baseline` asks the `row_count` question, through `row_count`'s own
+  declared statement — which is why the backup manifest gaining a
+  baseline moved no protocol version at all.
 - `statement` is **not required to be SQL.** It is whatever `sql_runner`'s
   argv takes for this engine, which for several engines in the catalogue
   is not SQL at all. The core substitutes and runs; it does not parse.
@@ -690,7 +697,7 @@ may not move. Checks:
 | 14 | `sigterm.cancels` | SIGTERM delivered while provision waits on an outstanding sandbox call: after the call is answered, the adapter issues no further sandbox calls, exits within the grace period, and its final response — if the operation did not complete — carries code `cancelled` (§2.4). |
 | 15 | `framing.discipline` | Aggregated over every operation driven: each stdout line is one well-formed protocol message within the 4 MiB frame limit, `request_id` is echoed on every message, exactly one final response is sent, and nothing follows it (§2.2, §3). |
 
-| 16 | `probe.checks_keys` (v1) | Every key of `probe.checks` is a built-in check kind the core publishes, and every statement uses only placeholders that kind declares — never `{{sql}}` or `{{password}}` (§6.1.1). A misspelled kind is refused here rather than silently ignored at drill time. |
+| 16 | `probe.checks_keys` (v1) | Every key of `probe.checks` is a built-in check kind the core publishes **and asks an adapter about** — not `service_healthy`, not `baseline` — and every statement uses only placeholders that kind declares, never `{{sql}}` or `{{password}}` (§6.1.1). A misspelled kind, or one whose declaration the core would never read, is refused here rather than silently ignored at drill time. |
 | 17 | `probe.identifier` (v1) | If `identifier` is present it carries `open`, `close` and `separator`; `open` and `close` are both empty or both non-empty; `separator` is exactly one character (§6.1.1). |
 
 Checks 8–10 run against the source kind selected with `--source-kind`

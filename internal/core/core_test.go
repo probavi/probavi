@@ -1304,3 +1304,138 @@ func isNilPtr(v any) bool {
 		return v == nil
 	}
 }
+
+// --- baseline reconciliation ------------------------------------------------
+
+// TestBaselineReconcilesWhatTheManifestDeclared is the whole path in one
+// drill: the manifest is read before the sandbox, and its expectations come
+// out the other end as one signed check result per table.
+func TestBaselineReconcilesWhatTheManifestDeclared(t *testing.T) {
+	fa := &fakeAdapter{probe: testProbe(), provRes: testProvision(), healthy: true}
+	fp := &fakeProvider{sbx: &fakeSandbox{execValue: "100"}}
+	d, _ := newDrill(t, fa, fp)
+	d.Config.Checks = []config.Check{{Builtin: config.CheckBaseline}}
+	manifestFixture(t, d.Config, "bytes",
+		`{"schema":"probavi-manifest/2","expected_size_bytes":5,`+
+			`"baseline":{"orders":{"rows":100},"customers":{"rows_min":90,"rows_max":110}}}`)
+
+	rec, err := d.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rec.Outcome != evidence.OutcomePass {
+		t.Fatalf("outcome = %q, want %q (error: %+v)", rec.Outcome, evidence.OutcomePass, rec.Error)
+	}
+	// One configured check, two records — sorted, so an auditor comparing
+	// two drills of the same configuration reads the same order.
+	want := []string{"baseline:customers", "baseline:orders"}
+	if len(rec.Checks) != len(want) {
+		t.Fatalf("checks = %d (%+v), want %d", len(rec.Checks), rec.Checks, len(want))
+	}
+	for i, name := range want {
+		if rec.Checks[i].Name != name {
+			t.Errorf("checks[%d].Name = %q, want %q", i, rec.Checks[i].Name, name)
+		}
+		if !rec.Checks[i].OK {
+			t.Errorf("%s = %+v, want a pass", name, rec.Checks[i])
+		}
+	}
+	// v2 needs no evidence-schema bump precisely because of this: the
+	// reconciliation arrives as an ordinary check result, and the only
+	// manifest-shaped fields in the record are the two v3 already added.
+	if rec.Backup.ManifestHash == nil || rec.Backup.ManifestMatch == nil || !*rec.Backup.ManifestMatch {
+		t.Errorf("manifest fields = %v/%v, want a hash and a match", rec.Backup.ManifestHash, rec.Backup.ManifestMatch)
+	}
+}
+
+// TestBaselineShortfallIsAVerdictNotAnError: a restore that landed part of
+// the data is the failure class this feature exists for. It fails the
+// check, names the numbers, and still produces a signed record.
+func TestBaselineShortfallIsAVerdictNotAnError(t *testing.T) {
+	fa := &fakeAdapter{probe: testProbe(), provRes: testProvision(), healthy: true}
+	fp := &fakeProvider{sbx: &fakeSandbox{execValue: "90000"}}
+	d, _ := newDrill(t, fa, fp)
+	d.Config.Checks = []config.Check{{Builtin: config.CheckBaseline}}
+	manifestFixture(t, d.Config, "bytes",
+		`{"schema":"probavi-manifest/2","expected_size_bytes":5,"baseline":{"orders":{"rows":100000}}}`)
+
+	rec, err := d.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rec.Outcome != evidence.OutcomeFail {
+		t.Fatalf("outcome = %q, want %q", rec.Outcome, evidence.OutcomeFail)
+	}
+	if len(rec.Checks) != 1 || rec.Checks[0].OK {
+		t.Fatalf("checks = %+v, want one false verdict", rec.Checks)
+	}
+	if rec.Checks[0].Detail == nil {
+		t.Fatal("the false verdict carries no detail")
+	}
+	for _, want := range []string{"90000", "100000"} {
+		if !strings.Contains(*rec.Checks[0].Detail, want) {
+			t.Errorf("detail %q does not name %s", *rec.Checks[0].Detail, want)
+		}
+	}
+}
+
+// TestBaselineWithNothingToReconcileIsAConfigurationFailure: §5.1's second
+// row. A check that would validate nothing must not pass, and the loader
+// cannot catch it — it knows the check is configured and cannot know what
+// the file says.
+func TestBaselineWithNothingToReconcileIsAConfigurationFailure(t *testing.T) {
+	tests := []struct{ name, body string }{
+		{"a v1 manifest", `{"schema":"probavi-manifest/1","expected_size_bytes":5}`},
+		{"a v2 manifest with no baseline", `{"schema":"probavi-manifest/2","expected_size_bytes":5}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fa := &fakeAdapter{probe: testProbe(), provRes: testProvision(), healthy: true}
+			fp := &fakeProvider{sbx: &fakeSandbox{execValue: "1"}}
+			d, _ := newDrill(t, fa, fp)
+			d.Config.Checks = []config.Check{{Builtin: config.CheckBaseline}}
+			_, manifestPath := manifestFixture(t, d.Config, "bytes", tc.body)
+
+			rec, err := d.Run(context.Background())
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if rec.Outcome != evidence.OutcomeError {
+				t.Fatalf("outcome = %q, want %q — this says nothing about the backup", rec.Outcome, evidence.OutcomeError)
+			}
+			if rec.Error == nil || rec.Error.Code != evidence.CodeInvalidRequest {
+				t.Fatalf("error = %+v, want %s", rec.Error, evidence.CodeInvalidRequest)
+			}
+			if !strings.Contains(rec.Error.Message, manifestPath) {
+				t.Errorf("message does not name the manifest: %s", rec.Error.Message)
+			}
+			if fp.created != 0 {
+				t.Errorf("sandboxes created = %d, want 0 — this is caught where the manifest is read", fp.created)
+			}
+		})
+	}
+}
+
+// TestADeclaredBaselineNobodyChecksIsNotAnError is the reverse, and it is
+// deliberate: refusing it would break a working drill on the day somebody
+// else's backup job moved to v2.
+func TestADeclaredBaselineNobodyChecksIsNotAnError(t *testing.T) {
+	fa := &fakeAdapter{probe: testProbe(), provRes: testProvision(), healthy: true}
+	fp := &fakeProvider{sbx: &fakeSandbox{execValue: "1"}}
+	d, _ := newDrill(t, fa, fp)
+	manifestFixture(t, d.Config, "bytes",
+		`{"schema":"probavi-manifest/2","expected_size_bytes":5,"baseline":{"orders":{"rows":1}}}`)
+
+	rec, err := d.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rec.Outcome != evidence.OutcomePass {
+		t.Fatalf("outcome = %q, want %q (error: %+v)", rec.Outcome, evidence.OutcomePass, rec.Error)
+	}
+	for _, c := range rec.Checks {
+		if strings.HasPrefix(c.Name, config.CheckBaseline+":") {
+			t.Errorf("a reconciliation ran that no check asked for: %+v", c)
+		}
+	}
+}

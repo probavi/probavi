@@ -99,7 +99,11 @@ value as unreadable rather than guessing.
   so they are never dead links.
 - **`contracts`** carries the five independently versioned contracts this build implements. A contract that is governed but not yet implemented is absent: the manifest states what ships (§2).
   `evidence_schema.readable_versions` is every version the verifier
-  accepts, which is broader than the one version it writes.
+  accepts, which is broader than the one version it writes, and
+  `backup_manifest.readable_versions` is every version of that file the
+  core reads. Read the second before telling a backup job to move: the
+  other party to that contract is outside this repository, and the older
+  shape stays right for a job with nothing to count.
 - **`checks[].kind`** is `builtin` (selected with the `builtin` key in
   drill config) or `sql` (the user-defined assertion).
 - **`cli.commands[].exit_codes`** is the cron/CI contract. It is the

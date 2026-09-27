@@ -218,12 +218,19 @@ func (s *suite) checkProbe() {
 // declaration would simply never take effect.
 // builtinPlaceholders is which placeholders each built-in check kind
 // declares, derived from the check registry that also drives the core, so
-// a kind added there cannot be missed here. service_healthy is absent
-// because it delegates to the adapter's healthcheck and has no statement.
+// a kind added there cannot be missed here.
+//
+// Two kinds are absent, for the same underlying reason: the core never
+// looks up a statement for them, so a declaration naming one would be a
+// declaration that never takes effect — which is exactly what check 16
+// exists to refuse. service_healthy delegates to the adapter's
+// healthcheck. baseline asks the question row_count asks, through
+// row_count's own declared statement, which is why probavi-manifest/2
+// moved no protocol version (backup-manifest.md §5.1).
 var builtinPlaceholders = func() map[string][]string {
 	out := map[string][]string{}
 	for _, kind := range config.CheckKinds() {
-		if !kind.Builtin || kind.ID == config.CheckServiceHealthy {
+		if !kind.Builtin || kind.ID == config.CheckServiceHealthy || kind.ID == config.CheckBaseline {
 			continue
 		}
 		allowed := []string{}
@@ -237,6 +244,15 @@ var builtinPlaceholders = func() map[string][]string {
 	return out
 }()
 
+// undeclarableBuiltins are the registered built-in kinds that have no
+// statement of their own, kept separately so the refusal can say which of
+// the two mistakes an adapter made: a kind that does not exist, or a real
+// one the core never asks the adapter about.
+var undeclarableBuiltins = map[string]string{
+	config.CheckServiceHealthy: "it delegates to the adapter's healthcheck operation",
+	config.CheckBaseline:       "it asks the " + config.CheckRowCount + " question, through that kind's statement",
+}
+
 var placeholderPattern = regexp.MustCompile(`{{[a-z_]+}}`)
 
 func checksKeysProblem(pr *probeResult) string {
@@ -249,6 +265,10 @@ func checksKeysProblem(pr *probeResult) string {
 	for kind, declared := range pr.Checks {
 		allowed, known := builtinPlaceholders[kind]
 		if !known {
+			if why, builtin := undeclarableBuiltins[kind]; builtin {
+				return fmt.Sprintf("checks has key %q, which the core never asks an adapter about — %s, "+
+					"so the declaration would never take effect (§6.1.1)", kind, why)
+			}
 			return fmt.Sprintf("checks has key %q, which is not a built-in check kind (§6.1.1)", kind)
 		}
 		if declared.Statement == "" {

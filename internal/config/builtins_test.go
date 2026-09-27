@@ -69,7 +69,10 @@ func TestEveryRegisteredKindIsValidated(t *testing.T) {
 		t.Run(k.ID, func(t *testing.T) {
 			c := minimalCheck(k)
 			p := &problems{tr: i18n.English()}
-			c.validate(p, 0)
+			// hasManifest is true because the registry is what is under
+			// test here: baseline's one cross-section rule belongs to
+			// TestBaselineRequiresAManifest, not to the vocabulary gate.
+			c.validate(p, 0, true)
 			for _, err := range p.errs {
 				if strings.Contains(err.Error(), "unknown builtin") {
 					t.Fatalf("registered kind %q is rejected as unknown: %v", k.ID, err)
@@ -89,7 +92,7 @@ func TestUnregisteredBuiltinIsRejected(t *testing.T) {
 	for _, name := range []string{"index_valid", "sql", "", "Row_Count"} {
 		c := Check{Builtin: name}
 		p := &problems{tr: i18n.English()}
-		c.validate(p, 0)
+		c.validate(p, 0, true)
 		if len(p.errs) == 0 {
 			t.Errorf("builtin %q was accepted but is not registered", name)
 		}
