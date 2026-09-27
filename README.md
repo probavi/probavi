@@ -258,13 +258,13 @@ They do not have to take Probavi's word for it either. [`spec/evidence`](spec/ev
 ```console
 $ go install github.com/probavi/probavi/spec/evidence/cmd/probavi-evidence-verify@latest
 $ probavi-evidence-verify --log evidence.jsonl --key probavi.key.pub
-{"status":"VALID","records":1,"damaged_lines":[],"head":{"seq":1,"hash":"sha256:4d4e1e16bf3b5b25acbb941048c302d1c4491a0466fc741952bf7119a5e6fbc9"}}
+{"status":"VALID","records":1,"damaged_lines":[],"head":{"seq":1,"hash":"sha256:4d4e1e16bf3b5b25acbb941048c302d1c4491a0466fc741952bf7119a5e6fbc9"},"witness":null}
 ```
 
 The verifier is versioned independently of the `probavi` binary, with its own `spec/evidence/vX.Y.Z` tags. Pin one when the verification itself has to be reproducible — an audit that records which verifier accepted a log has to be able to name it, and `@latest` moves:
 
 ```console
-$ go install github.com/probavi/probavi/spec/evidence/cmd/probavi-evidence-verify@v0.5.0
+$ go install github.com/probavi/probavi/spec/evidence/cmd/probavi-evidence-verify@v0.6.0
 ```
 
 Verification is free permanently and is never part of a commercial offering — paywalling it would destroy the thing the evidence is for.

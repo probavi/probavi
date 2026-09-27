@@ -85,6 +85,13 @@ always called out explicitly.
   refuses any head but the one it was armed with, so the vector that
   passes is also the assertion that the verifier passed the right argv.
 
+  Because that verifier changed, its module moves: **`spec/evidence/v0.6.0`**
+  — `Witnessed`, the `Witness` type, `witness` in the JSON result, and the
+  `--witness` flag — and the documented install pin moves with it. Nothing
+  that already called `Verify` or `VerifyAnchored` breaks: both keep their
+  shapes, and a v0.5.0 verifier still accepts every log a v0.6.0 one does,
+  it simply cannot be asked the witnessed question.
+
   No record byte changes and no schema version moves. A witness is an
   input to verification, exactly as an anchor is.
 
