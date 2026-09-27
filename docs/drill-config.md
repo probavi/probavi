@@ -376,6 +376,40 @@ where there is one, and the core's own composition where there is not. So
 `baseline` works on exactly the engines `row_count` works on, and each
 adapter's README says what `table` names there.
 
+#### What the checks do not read
+
+A drill proves what its checks ask, and nothing beyond it. Two limits are
+worth stating outright, because both are invisible from a passing record.
+
+**A check reads only what it names.** `row_count` on `orders` reads
+`orders`; a cluster with two hundred relations and three checks leaves a
+hundred and ninety-seven unread. Nothing in a record distinguishes "every
+table is fine" from "the three we looked at are fine", and the check names
+in `checks[]` are what tells a reader which it was. Indexes are read by no
+built-in at all: a count is a sequential scan, and a sequential scan does
+not touch an index.
+
+**What the engine verifies on read is the engine's setting, not
+Probavi's.** Where an engine checksums its pages, a check that reads a
+damaged page fails with the engine's own error, so a `row_count` doubles as
+a page check for that table. Where it does not, the same read returns
+damaged data with no error at all, and the check passes on it.
+
+That distinction is decided at the source rather than in a drill, and it
+differs per engine — InnoDB checksums pages with no way to turn it off,
+SQL Server sets `page_verify` to `CHECKSUM` by default, and PostgreSQL
+ships `data_checksums` **off** on every official image before 18. Each
+adapter's README states its own position; the postgres one shows, measured,
+a drill passing in full on a physical backup carrying a corrupted row.
+
+**There is deliberately no `integrity` check** to close this. Probavi
+measured the instruments — `pg_checksums`, `amcheck`, `CHECK TABLE`,
+`DBCC CHECKDB`, `validate()` — and the answer was a precondition rather
+than a check: where page verification is on, a check that reads the page
+already fails; where it is off, no instrument can answer at all. What
+closes the gap is enabling verification at the source, and what states the
+residual limit is this section.
+
 ### 3.6 `evidence`
 
 | Key | Required | Meaning |
