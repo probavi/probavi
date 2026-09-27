@@ -11,6 +11,8 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-09-27
+
 ### Added
 
 - **How to drill an encrypted backup** (`docs/backup-staging.md` §7).
