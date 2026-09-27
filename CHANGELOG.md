@@ -13,6 +13,34 @@ always called out explicitly.
 
 ### Changed
 
+- **The canonical property-name comparison is pinned at its boundaries, and
+  `internal/evidence`'s mutation ceiling goes from 12 to 11.** The scheduled
+  Mutation workflow reported 13 survivors against 12 on a tree where a local
+  run of the same sweep had measured 12. The difference was one mutant, in
+  the loop bound of `lessUTF16` — the RFC 8785 ordering the signed bytes
+  depend on — and it was neither the machine nor the tree.
+
+  The ordering was asserted through `Canonicalize`, with four property
+  names. That is the right assertion for the ordering and cannot reach the
+  boundary on purpose: the sort decides which name is the comparison's first
+  argument and which its second, and the order the names reach the sort in is
+  a map's iteration order, which Go randomises. Measured with the second
+  bound mutated and the package run 25 times: **caught 21, survived 4.** A
+  gate that answers differently one run in six is not reporting.
+
+  Getting a bound wrong is not a misordering — it indexes one past the end of
+  a slice, which panics inside the canonicalizer, the signing path. A record
+  whose `sandbox.params` name two keys where one is a prefix of the other
+  would intermittently produce no record at all, and those keys come from
+  user configuration, which is why the schema requires the RFC rule for them
+  rather than assuming ASCII identifiers.
+
+  The same table closes a second survivor: comparing a name with itself must
+  be false, or the comparator is not the strict order `sort.Slice` is defined
+  against. **The independent verifier already had this test** — both
+  implement the same paragraph, and the one that ships as the reference was
+  the stricter of the two.
+
 - **`internal/adapter` is back under its mutation ceiling, and the ceiling
   is 10 rather than 15.** The ceiling had no margin: the scheduled run of
   2026-09-21 met it exactly, fifteen survivors against fifteen allowed.

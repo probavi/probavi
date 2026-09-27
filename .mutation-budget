@@ -19,7 +19,28 @@
 # Every package listed here is run in full, so this file is also the
 # scope: a package joins the run by being declared, with a measured
 # ceiling attached.
-internal/evidence 12
+# internal/evidence measured 2026-09-27 at 253 mutants, 240 caught, once
+# the canonical comparison's boundaries were pinned directly. The eleven
+# survivors were read one by one rather than counted: four are provably
+# equivalent (a comparison the enclosing condition already settled, a file
+# mode the kernel ignores without O_CREATE, and two truncation guards whose
+# branch does what the branch below would have done), one has no input the
+# timestamp layout admits, and six are reached by no test in the suite — a
+# double close failure, a directory sync refusing with EINVAL, a warning
+# line's condition, a key written but unsynced.
+#
+# One of them used to flip. The loop bound in lessUTF16 was asserted only
+# through Canonicalize, where the sort picks the comparison's argument order
+# and a map's iteration order picks the permutation: mutated, the package
+# caught it 21 times in 25 runs, and the scheduled workflow reported it as a
+# survivor where a local run of the same sweep had not. A ceiling is not a
+# measurement while one of its mutants answers differently one run in six.
+#
+# The next one to close is truncate.go's walk back to a rune boundary: its
+# `cut > 0` guard is load-bearing, and removing it indexes s[-1] for any
+# line beginning with a UTF-8 continuation byte. Nothing reaches it because
+# no test truncates invalid UTF-8.
+internal/evidence 11
 # internal/adapter measured 2026-09-27 at 115 mutants, 105 caught. The ten
 # survivors are four shapes: seven error checks that decide nothing but
 # whether a debug line is logged; a channel buffer where both paths receive

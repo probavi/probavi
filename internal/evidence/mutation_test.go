@@ -240,3 +240,49 @@ func TestCanonicalOrderHoldsWhereOneKeyIsAPrefixOfAnother(t *testing.T) {
 		t.Errorf("Canonicalize = %s, want %s", got, want)
 	}
 }
+
+// TestLessUTF16AtItsBoundaries: the comparison behind the ordering above,
+// called directly, because through Canonicalize its boundaries cannot be
+// reached on purpose.
+//
+// The sort decides which name is the comparison's first argument and which
+// its second, and the order the names reach the sort in is a map's
+// iteration order, which Go randomises. So a case that walks one name past
+// its end is reached, or not, by whatever permutation a run happened to
+// get. Measured with the loop's second bound mutated and the whole package
+// run 25 times: caught 21 times, survived 4 — and the scheduled Mutation
+// workflow reported it as a survivor on a tree where a local run of the
+// same sweep had caught it.
+//
+// Getting this bound wrong is not a misordering. It indexes one past the
+// end of a slice, which panics inside the canonicalizer — the signing path
+// — so a record whose `sandbox.params` happen to name two keys where one
+// is a prefix of the other would intermittently produce no record at all.
+// Those keys come from user configuration, which is why the schema says
+// they MUST be compared by the RFC rule rather than assumed to be ASCII
+// identifiers (docs/evidence-schema.md §4).
+func TestLessUTF16AtItsBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want bool
+	}{
+		// Either name running out first is a bound of its own, and the
+		// argument order is what picks which one the loop reaches.
+		{"", "a", true},
+		{"a", "", false},
+		{"a", "ab", true},
+		{"ab", "a", false},
+		// Neither runs out and no unit differs. A JSON object cannot hold
+		// the pair, but the comparison still has to be a strict order or
+		// the sort above is not well defined.
+		{"a", "a", false},
+		// Why the rule is UTF-16 code units and not bytes: U+10000 encodes
+		// as the surrogate 0xd800, below U+FFFF, while its UTF-8 bytes
+		// (f0 90 80 80) sort above U+FFFF's (ef bf bf).
+		{"\U00010000", "￿", true},
+	} {
+		if got := lessUTF16(tc.a, tc.b); got != tc.want {
+			t.Errorf("lessUTF16(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
