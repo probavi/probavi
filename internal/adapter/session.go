@@ -236,6 +236,12 @@ func (s *session) closeStdin() {
 // wait reaps the process with a hard bound: an adapter that lingers after
 // its final response (or after SIGTERM) is killed rather than waited on
 // forever.
+//
+// Both ways of running out of time reach the verdict through one line
+// rather than a copy each. The drain and the reap share this deadline (see
+// awaitStderr), so a drain that used the grace up leaves the reap none,
+// and which of the two notices first is decided by timing: with the
+// sentence written twice, a test could pin whichever copy happened to run.
 func (s *session) wait() error {
 	s.waited = true
 	close(s.stopWatchdog)
@@ -245,22 +251,24 @@ func (s *session) wait() error {
 
 	done := make(chan error, 1)
 	go func() { done <- s.cmd.Wait() }()
+	var err error
 	select {
-	case err := <-done:
-		if err == nil && killed {
-			err = errors.New("adapter lingered past the grace period and was killed")
-		}
-		return err
+	case err = <-done:
 	case <-time.After(time.Until(deadline)):
 		if kerr := s.cmd.Process.Kill(); kerr != nil {
 			s.logger.Debug("kill lingering adapter", "err", kerr)
 		}
-		err := <-done
-		if err == nil {
-			err = errors.New("adapter lingered past the grace period and was killed")
-		}
-		return err
+		err = <-done
+		killed = true
 	}
+	// A kill is only visible in the exit status when the signal is what
+	// ended the process. An adapter that had already exited cleanly, and
+	// left a child holding the pipe, reports success — so the fact that it
+	// had to be killed is what makes this a failure.
+	if err == nil && killed {
+		err = errors.New("adapter lingered past the grace period and was killed")
+	}
+	return err
 }
 
 // awaitStderr waits for the stderr drain to reach EOF and reports whether

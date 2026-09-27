@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // mutation_test.go holds the cases a mutation run found missing: each one
@@ -207,4 +208,158 @@ func TestEveryWayAPipeClosesIsRecognised(t *testing.T) {
 			}
 		})
 	}
+}
+
+// probeBothVersions is a probe payload from an adapter that speaks the
+// current version as well as the floor, so negotiation has something to
+// choose. Every other fake adapter in this package declares the floor
+// alone, which is why the version a request carries was invisible: floor
+// and negotiated were the same string, and sending every operation at
+// either one looked identical on the wire.
+const probeBothVersions = `{"name":"fake","adapter_version":"0.0.1",` +
+	`"protocol_versions":["probavi-adapter/1","probavi-adapter/0"],"engine":{"name":"fakedb"},` +
+	`"sources":[{"kind":"file","capabilities":{"pitr":true}}],"sql_runner":{"argv":["cat"],"env":{}},` +
+	`"verbs_required":["exec","put_file"]}`
+
+// echoProtocolScript accepts a probe that arrived at the floor and refuses
+// everything else with a final error naming the version and the operation
+// that carried it.
+//
+// A response has to repeat its request's version or the core calls it a
+// violation, so the script echoes what it received: a wrong version then
+// reaches the test as a message it can read rather than as a crash whose
+// text says nothing about which version was wrong.
+const echoProtocolScript = prelude +
+	`OP=$(printf '%s' "$REQ" | sed -n 's/.*"op":"\([^"]*\)".*/\1/p')` + "\n" +
+	`PROTO=$(printf '%s' "$REQ" | sed -n 's/.*"protocol":"\([^"]*\)".*/\1/p')` + "\n" +
+	`if [ "$OP" = probe ] && [ "$PROTO" = probavi-adapter/0 ]; then` + "\n" +
+	`printf '{"protocol":"%s","request_id":"%s","ok":true,"payload":` + probeBothVersions + `}\n' "$PROTO" "$RID"` + "\n" +
+	`else` + "\n" +
+	`printf '{"protocol":"%s","request_id":"%s","ok":false,"error":{"code":"invalid_request",` +
+	`"message":"op=%s protocol=%s","retryable":false}}\n' "$PROTO" "$RID" "$OP" "$PROTO"` + "\n" +
+	`fi` + "\n"
+
+// TestTheProbeAsksAtTheFloorAndTheRestSpeakWhatWasNegotiated: §8 gives the
+// probe a version of its own. It is the one request sent before anything is
+// known about the adapter, so it goes out at the floor — a version every
+// adapter must accept — and what negotiation chooses from its answer
+// governs every request after it.
+//
+// Both halves are asserted on the wire rather than through Protocol(),
+// because the runner reporting the right version and the request carrying
+// it are two different statements: sending every operation at the floor,
+// or the probe at whatever was last negotiated, leaves Protocol() correct
+// and the adapter receiving the wrong thing.
+func TestTheProbeAsksAtTheFloorAndTheRestSpeakWhatWasNegotiated(t *testing.T) {
+	r := fakeRunner(t, echoProtocolScript, nil, nil)
+	ctx := context.Background()
+
+	if _, err := r.Probe(ctx); err != nil {
+		t.Fatalf("Probe: %v — the first probe must go out at the floor", err)
+	}
+	if r.Protocol() != ProtocolVersion {
+		t.Fatalf("Protocol() = %q, want %q negotiated from the probe", r.Protocol(), ProtocolVersion)
+	}
+	// The second probe is the half a single probe cannot show: now that
+	// negotiation has raised the version, a probe must still ask at the
+	// floor. The script refuses any other version, so success is the
+	// assertion.
+	if _, err := r.Probe(ctx); err != nil {
+		t.Errorf("second Probe: %v — a probe asks at the floor however negotiation went", err)
+	}
+
+	_, err := r.Healthcheck(ctx, &Connection{}, nil, &fakeVerbs{})
+	aerr := asAdapterError(t, err)
+	if want := "op=healthcheck protocol=" + ProtocolVersion; !strings.Contains(aerr.Message, want) {
+		t.Errorf("the adapter received %q, want %q", aerr.Message, want)
+	}
+}
+
+// TestAnAdapterWhoseChildHoldsStderrOpenFails: the adapter exits cleanly
+// and on time, and leaves a background child holding the stderr pipe. Its
+// exit status says nothing was wrong — the process that had to be killed to
+// get to EOF was not the one the core waited for — so the fact that the
+// grace period ran out is the only thing left to fail on.
+//
+// Letting it pass would sign a record for a drill whose adapter never
+// finished speaking: the log keeps whatever reached the pipe before the
+// deadline, and the reason it failed is typically the last thing written.
+func TestAnAdapterWhoseChildHoldsStderrOpenFails(t *testing.T) {
+	// The child outlives the grace period by two orders of magnitude, so
+	// the drain reaching EOF on its own would be a bug, not a slow machine.
+	script := prelude + probeFinal(probePayload) + "(sleep 10) &\nexit 0\n"
+	r := fakeRunner(t, script, nil, &Options{Grace: 100 * time.Millisecond})
+
+	_, err := r.Probe(context.Background())
+	aerr := asAdapterError(t, err)
+	if aerr.Code != CodeAdapterCrash {
+		t.Errorf("code = %q, want %q", aerr.Code, CodeAdapterCrash)
+	}
+	if !strings.Contains(aerr.Message, "lingered past the grace period") {
+		t.Errorf("message = %q, want it to name the grace period as what ran out", aerr.Message)
+	}
+}
+
+// TestAGraceTheCallerSetIsKept: the default fills in for a grace of zero or
+// less, and for nothing else. The boundary is pinned at one nanosecond
+// rather than at a plausible setting because that is where the comparison
+// lives: every realistic grace is far enough above zero that a guard
+// reaching one step further would go unnoticed, and a runner that quietly
+// waits ten seconds where the caller asked for less has taken the drill's
+// wall-clock bound away from it.
+func TestAGraceTheCallerSetIsKept(t *testing.T) {
+	if got := newRunner("/nonexistent", nil, &Options{Grace: 1}).opts.Grace; got != 1 {
+		t.Errorf("grace = %v, want the one nanosecond the caller asked for", got)
+	}
+	if got := newRunner("/nonexistent", nil, &Options{Grace: -1}).opts.Grace; got != defaultGrace {
+		t.Errorf("grace = %v, want the default %v where the caller gave none", got, defaultGrace)
+	}
+}
+
+// readerBytes is the size of the bufio buffer the cap boundaries below read
+// through. bufio rounds any smaller request up to this, its own minimum,
+// and these cases turn on where a chunk boundary falls relative to the cap,
+// so the number is named here rather than inherited from a request bufio
+// may not honour.
+const readerBytes = 16
+
+// TestTheCapIsCountedToTheByte: readCappedLine keeps the first limit bytes
+// of a line, and the two boundaries deciding whether it keeps all of them
+// only show up when the cap and the reader's buffer disagree — which is the
+// normal case in the drill log, where the cap is a frame limit and the
+// buffer is 64 KiB.
+//
+// Both were accepted with the count off by one byte: the last byte of a
+// truncated line dropped, and a line that lost nothing reported truncated.
+// Neither loses much on its own; what they cost is the ability to read the
+// log and know whether anything is missing.
+func TestTheCapIsCountedToTheByte(t *testing.T) {
+	t.Run("a cap one byte past a chunk boundary still keeps that byte", func(t *testing.T) {
+		const limit = readerBytes + 1
+		br := bufio.NewReaderSize(strings.NewReader(strings.Repeat("x", limit*3)+"\n"), readerBytes)
+		line, truncated, err := readCappedLine(br, limit)
+		if err != nil || !truncated {
+			t.Fatalf("readCappedLine err = %v, truncated = %v; want a truncated line and no error",
+				err, truncated)
+		}
+		if len(line) != limit {
+			t.Errorf("kept %d bytes of a %d-byte cap — the cap is how many bytes are kept, "+
+				"not roughly how many", len(line), limit)
+		}
+	})
+	t.Run("text filling the cap exactly, with no terminator, lost nothing", func(t *testing.T) {
+		// The complement of the oddity TestALogLineIsKeptToItsCap states:
+		// the cap counts the terminator, so text that exactly fills it is
+		// truncated when a newline follows and intact when the pipe ends.
+		const limit = readerBytes
+		br := bufio.NewReaderSize(strings.NewReader(strings.Repeat("x", limit)), readerBytes)
+		line, truncated, err := readCappedLine(br, limit)
+		if !errors.Is(err, io.EOF) {
+			t.Errorf("err = %v, want io.EOF with the line in hand", err)
+		}
+		if line != strings.Repeat("x", limit) || truncated {
+			t.Errorf("readCappedLine = %q (truncated %v), want the line whole and truncated false",
+				line, truncated)
+		}
+	})
 }

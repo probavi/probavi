@@ -13,6 +13,54 @@ always called out explicitly.
 
 ### Changed
 
+- **`internal/adapter` is back under its mutation ceiling, and the ceiling
+  is 10 rather than 15.** The ceiling had no margin: the scheduled run of
+  2026-09-21 met it exactly, fifteen survivors against fifteen allowed.
+  Protocol negotiation (#354) then added the branch that sends the probe at
+  the floor, nothing asserted the version on the wire, and the count went
+  to 16 — so the next scheduled run was heading for red. Six of the
+  survivors were missing assertions:
+
+  **The version a request carries.** The adapter protocol sends the probe
+  at the floor — it is the one request made before anything is known about
+  the adapter — and everything after it at what negotiation chose from the
+  probe's answer (`docs/adapter-protocol.md` §8). Sending every request at
+  the floor, or a probe at whatever was last negotiated, left `Protocol()`
+  correct and the adapter receiving the wrong version, and no test could
+  see it: every fake adapter in the suite declared the floor alone, so the
+  two versions were the same string.
+
+  **An adapter killed to reach EOF on stderr.** When the adapter exits
+  cleanly and leaves a child holding the pipe, its exit status reports
+  success — the process that had to be killed was not the one the core
+  waited for. Dropping the verdict there signs a record for a drill whose
+  adapter never finished speaking, and the reason a drill failed is
+  usually the last thing written to that pipe.
+
+  **The stderr line cap, at both ends.** A truncated line lost its last
+  byte when the cap fell one byte past a read boundary, and a line whose
+  text exactly filled the cap was reported truncated although nothing was
+  dropped. Also: an environment entry naming no variable at all, which
+  `exec` passes to the kernel as it stands, and a grace period the caller
+  set being replaced by the default.
+
+  115 mutants, **105 caught**, ten left. All ten are unobservable: seven
+  error checks that decide nothing but whether a debug line is logged, a
+  channel buffer where both paths receive exactly once, a `> 0` widened to
+  `>= 0` where the branch it then takes does what the branch it skipped
+  would have done, and a constant whose mutated form is the same number
+  once the integer division truncates.
+
+- **The adapter session reaches its lingering verdict in one place.** The
+  stderr drain and the reap share one deadline, so a drain that used the
+  grace period up leaves the reap none, and which of the two notices first
+  is decided by timing. The sentence "a killed adapter that exited cleanly
+  still failed" was written once per branch, so a test could only pin the
+  copy that happened to run — the same tree reported 16 surviving mutants
+  on one run and 17 on the next, differing by exactly that line, and CI
+  caught on 2026-09-21 what this machine did not. Behaviour is unchanged;
+  the verdict now has one site, reached either way.
+
 - **`internal/checks` joined the mutation run**, and joining it cost three
   assertions rather than a line in `.mutation-budget`. The package decides
   every verdict a record carries, and it had been outside the scheduled
