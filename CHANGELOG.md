@@ -255,6 +255,33 @@ always called out explicitly.
 
 ### Added
 
+- **A fuzz target for `internal/manifest`** (`FuzzCheck`). Four packages
+  carried one — `internal/config`, `internal/evidence`, `internal/adapter`,
+  `spec/evidence` — and they are exactly the packages that read a document
+  somebody else wrote. The backup manifest is the one document in a drill
+  that Probavi does not write: a backup job produces it beside its backup,
+  and this package decides from it whether the drill proceeds at all.
+
+  Survival is the least of what it asserts. An expectation a manifest
+  carries reaches `internal/checks`, where `Satisfied` and `String`
+  dereference `rows_min` and `rows_max` **without checking them**, on the
+  strength of this package's validation and nothing else. So every
+  expectation that survives is exercised against the promise that makes
+  those dereferences safe — exactly one form, both bounds together, neither
+  negative, and a range that is one. The row count it is tested against is
+  computed from the expectation rather than fixed, because an expectation
+  nothing can satisfy is a table that can never reconcile: a drill failing
+  for a reason its operator did not write.
+
+  Two properties beside it. A fault carries a code and a message, since it
+  becomes a record's error object. And the verdict never contradicts the
+  fault — no hash without a manifest, no verdict about a manifest that was
+  never read, no agreement beside a fault — because an append-only log may
+  not carry a sentence its neighbour denies.
+
+  16.5 million executions locally over three minutes, no crasher. The weekly
+  workflow discovers targets by listing them, so it needed no edit.
+
 - **What the checks do not read** (`docs/drill-config.md` §3.5, and the
   measured half in `adapters/postgres/README.md`). Two limits that were
   invisible from a passing record:
