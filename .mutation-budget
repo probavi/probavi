@@ -148,6 +148,14 @@ internal/config     4
 # The one survivor is a map's capacity hint, which Go treats as advice and
 # no program can observe.
 internal/core       1
+# internal/sandbox/registry measured 2026-09-28 at 1 mutant, caught. It is a
+# lookup table with one comparison in it, so it joins at nothing rather than
+# waiting for work it does not need. The six packages measured beside it do
+# need work and are queued in ROADMAP.md: internal/sandbox/cli at 9 mutants
+# with 6 survivors, internal/sandbox at 26 with 11, internal/cli at 39 with
+# 3, and the three providers at 74/12, 96/16 and 101/18. Each joins in its
+# own change, with its assertions.
+internal/sandbox/registry 0
 # Nothing this file used to name is outside the run any more: internal/config
 # and internal/core, the last two, joined on 2026-09-28. Every package that
 # decides what a signed record says is now measured.
