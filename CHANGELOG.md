@@ -13,6 +13,40 @@ always called out explicitly.
 
 ### Changed
 
+- **`internal/config` joined the mutation run**, at a ceiling of 4. It
+  measured 145 mutants with **14 survivors** on the way in, and joining cost
+  six tests closing ten of them rather than a line in `.mutation-budget`.
+  The package decides which checks run and against what, so a change it
+  accepts is a drill proving something other than what was configured.
+
+  What the measurement found, in descending order of consequence:
+
+  **`row_count`'s bounds had no accepting test at their edges.** A minimum of
+  zero is what a table allowed to be empty says, and a minimum equal to its
+  maximum is the most precise count a drill can assert — the two
+  configurations a user is most likely to write, and a validator one step
+  stricter would have refused both while every existing test stayed green.
+
+  **A webhook URL the notifier cannot post to was refused by no test.** Not
+  by scheme — `ftp://`, `mailto:` — and not by having no host at all, which
+  only a URL the scheme condition accepts can reach. The drill would learn
+  this at the moment it had something to report, which is the moment a
+  notification exists for.
+
+  **No game-day test had a dependency chain of three.** Database, then
+  application, then cache is the ordinary shape of one, and a walk that
+  queued a member on the wrong count would have called it a cycle. Also
+  unasserted: that the cycle diagnostic names only the stuck members (a
+  condition listing everyone still contains the right answer, so it is
+  asserted in both directions), and that two members naming one evidence log
+  by a relative and an absolute spelling collide — the case the guard
+  resolves paths for, where every earlier test used identical spellings.
+
+  All four remaining survivors are provably equivalent, and two of them are
+  so because of a guard elsewhere: a member naming itself is refused by its
+  own rule before the cycle walk runs, so the stuck set is never smaller
+  than a cycle of two.
+
 - **`Close`'s choice of failure is asserted, and `internal/evidence`'s
   mutation ceiling goes from 8 to 7.** `Store.Close` releases two things and
   can fail at both, and which failure it then reports is a choice the code
