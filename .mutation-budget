@@ -109,9 +109,20 @@ internal/checks     4
 #     runs, and a member naming itself is refused by its own rule — so the
 #     stuck set is never smaller than a cycle of two.
 internal/config     4
-# Still outside the run: internal/core, and unmeasured, which is the first
-# thing to fix about it — there is no honest ceiling to propose without a
-# number. It assembles every record a drill signs, so it belongs here. It
-# joins in its own change, because joining costs assertions rather than a
-# line in this file: internal/checks went 10 survivors to 4 on the way in
-# and internal/config 14 to 4.
+# internal/core assembles every record a drill signs, which makes it the
+# last package that should have been outside this run. Measured 2026-09-28
+# at 80 mutants, 78 caught. Joining cost four tests closing eight mutants.
+# The one survivor is a map's capacity hint, which Go treats as advice and
+# no program can observe.
+internal/core       1
+# Nothing this file used to name is outside the run any more: internal/config
+# and internal/core, the last two, joined on 2026-09-28. Every package that
+# decides what a signed record says is now measured.
+#
+# What that leaves is a question rather than a queue, and it is in ROADMAP.md
+# rather than here: whether any package never named — internal/sandbox and
+# internal/cli are the candidates, since a sandbox's facts and a command's
+# exit code both reach a record — earns a ceiling of its own. The answer is
+# a measurement, not an opinion, and each one costs assertions rather than a
+# line in this file: internal/checks went from 10 survivors to 4 on the way
+# in, internal/config from 14 to 4, internal/core from 9 to 1.

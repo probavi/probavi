@@ -13,6 +13,44 @@ always called out explicitly.
 
 ### Changed
 
+- **`internal/core` joined the mutation run**, at a ceiling of 1 — and with
+  it, every package that decides what a signed record says is now measured.
+  It assembles every record a drill signs, which makes it the last package
+  that should have been outside the gate. **80 mutants, 9 survivors on the
+  way in**; four tests closed eight of them.
+
+  What the measurement found:
+
+  **The backstop behind `docs/evidence-schema.md` §7 recognised one of its
+  three sentinels in tests.** It fires when the store refused a record for
+  what it contains rather than because writing failed, and the two
+  untested sentinels are the ones a real drill reaches — a record over the
+  size limit, and a number the canonical form cannot represent. A backstop
+  that recognised one in three would leave a drill that ran with no
+  evidence at all, which is the outcome it exists to prevent.
+
+  **A sandbox-creation failure overwrites the verdict only when that verdict
+  means "we do not know".** A drill that ran out of wall clock while
+  creating its sandbox has a verdict already, and it is not the sandbox's —
+  a wider guard puts a signed record on the log blaming the provider for the
+  clock.
+
+  **`env.host_id` hashes the host that answered.** It is how an auditor
+  tells two drill hosts apart in one log, and it is a hash, so a wrong one
+  looks exactly like a right one: a reversed guard gives every host in a
+  fleet the same id, with the records still valid and still signed.
+
+  **The three cleanup paths say what they could not clean.** Nothing
+  downstream changes when a sweep, a teardown or a destroy fails — the
+  verdict is decided and the record composed — so the log line is the whole
+  of what an operator gets. That is enough here on purpose: a sandbox that
+  will not go away holds production data until some later sweep reaches it,
+  and a sweep that itself failed silently is how a leak becomes permanent
+  without anyone deciding that it should.
+
+  The single survivor is a map's capacity hint, which Go treats as advice
+  and no program can observe.
+
 - **`internal/config` joined the mutation run**, at a ceiling of 4. It
   measured 145 mutants with **14 survivors** on the way in, and joining cost
   six tests closing ten of them rather than a line in `.mutation-budget`.
