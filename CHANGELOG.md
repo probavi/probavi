@@ -13,6 +13,32 @@ always called out explicitly.
 
 ### Changed
 
+- **Where a mutation ceiling sits is decided: at the measurement, with no
+  slack** — and deliberately not the way `.coverage-floor` works, whose
+  sentence in `AGENTS.md` §3.1 had said the two files behave the same way.
+
+  The difference is in what the two count. A coverage floor sits just under
+  what its area measures because coverage is a percentage over thousands of
+  statements, and a refactor that improves the code moves it for reasons
+  that are not a missing test; the slack absorbs that noise. A mutation
+  ceiling counts named things — one mutant, at one line, with its reason
+  written beside the number — so there is nothing for slack to absorb, and
+  the one source of noise that did exist now fails the workflow on its own
+  terms rather than hiding inside the number.
+
+  The raise rule follows from that: legitimate for a mutant shown to be
+  unobservable, with its reason written down, and **never to absorb a
+  survivor nobody has looked at** — that survivor is a missing assertion,
+  and the number is the only thing that will say so.
+
+  The cost of no slack is latency rather than noise, and it is named rather
+  than argued away: #354 met this ceiling exactly and a feature took it past
+  by one, four days later, reported a week after the merge. Slack would not
+  have fixed that — it would have hidden the missing assertion permanently
+  rather than for a week, and the assertion was that a probe goes out at the
+  protocol floor. Whether the gate should also run per pull request for the
+  packages a change touches is now its own open question in `ROADMAP.md`.
+
 - **The mutation tool says whether a survivor is stable.** Every survivor is
   now re-run three more times, and a mutant refused on one of those runs
   **fails the workflow on its own terms** rather than as an over-budget
