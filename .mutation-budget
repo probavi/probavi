@@ -16,6 +16,14 @@
 # way .coverage-floor is: the number says how much of this package's
 # behaviour is nailed down, and it may not quietly go up.
 #
+# A survivor is re-run three more times before it is believed, and a mutant
+# that is refused on one of those runs fails the workflow on its own terms —
+# not as an over-budget verdict. A number that depends on which run produced
+# it is a sample rather than a measurement, and the test that refuses the
+# mutant only sometimes is flaky with respect to it: the fix is that test,
+# never a number here. Two of these cost a day of hand measurement in the
+# week of 2026-09-27, so the tool now names them.
+#
 # Every package listed here is run in full, so this file is also the
 # scope: a package joins the run by being declared, with a measured
 # ceiling attached.

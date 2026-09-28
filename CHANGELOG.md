@@ -13,6 +13,31 @@ always called out explicitly.
 
 ### Changed
 
+- **The mutation tool says whether a survivor is stable.** Every survivor is
+  now re-run three more times, and a mutant refused on one of those runs
+  **fails the workflow on its own terms** rather than as an over-budget
+  verdict: the ceiling was met, and what is in doubt is the number behind
+  it. The test that refuses the mutant only sometimes is flaky with respect
+  to it, so the fix is that test and never a number in `.mutation-budget`.
+
+  The week this was written produced two such mutants by hand, on trees
+  where nothing was wrong with the code: one sat in two identical branches a
+  race chose between, and one was reached only for some of the permutations
+  a map's iteration order produces — **caught 21 times in 25 runs**, which
+  is one run in six answering differently. Neither is visible from a single
+  run, and the number drifts with no name attached to the drift.
+
+  The check is one-sided on purpose. Rechecking every mutant costs a
+  multiple of the mutants, which is hours; rechecking only the survivors
+  costs a multiple of the survivors — the full sweep went to 25m16s locally,
+  against a CI job that takes roughly twenty-three minutes and is allowed
+  sixty. It finds the instability on the run where it presented as a
+  survivor, which is the run where it would otherwise have failed the gate
+  for no stated reason.
+
+  Measured on the current tree: **all thirty survivors across the seven
+  declared packages are stable.**
+
 - **`internal/core` joined the mutation run**, at a ceiling of 1 — and with
   it, every package that decides what a signed record says is now measured.
   It assembles every record a drill signs, which makes it the last package
