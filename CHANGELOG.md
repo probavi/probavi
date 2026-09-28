@@ -13,6 +13,23 @@ always called out explicitly.
 
 ### Changed
 
+- **`Close`'s choice of failure is asserted, and `internal/evidence`'s
+  mutation ceiling goes from 8 to 7.** `Store.Close` releases two things and
+  can fail at both, and which failure it then reports is a choice the code
+  makes silently: it keeps the log file's error and drops the lock's. Nothing
+  asserted the rule — the existing test covers only the case where the lock
+  is the sole failure — so the condition accepted being reversed.
+
+  The rule is worth keeping the right way round. A lock that will not release
+  leaves a stale lock file, which the next run resolves on its own terms. A
+  log file that will not close is the evidence itself, with a tail whose
+  durability is now unknown, and an operator told about the lock instead
+  would be told the harmless half of what went wrong.
+
+  The assertion goes through the `*os.PathError` rather than the message,
+  because both failures render the same sentence and differ only in the file
+  they name — a substring matching one matches the other and asserts nothing.
+
 - **The damaged-line warning is asserted in both directions, and
   `internal/evidence`'s mutation ceiling goes from 10 to 8.** A log carrying
   crash artifacts reopens successfully on purpose — the chain continues from

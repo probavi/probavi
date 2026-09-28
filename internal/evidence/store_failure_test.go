@@ -63,6 +63,52 @@ func TestCloseReportsTheLockError(t *testing.T) {
 	}
 }
 
+// closedFile returns a descriptor that has already been closed, so closing
+// it again fails.
+func closedFile(t *testing.T, path string) *os.File {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create %s: %v", path, err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("pre-close %s: %v", path, err)
+	}
+	return f
+}
+
+// TestCloseReportsTheLogsFailureOverTheLocks: Close releases two things and
+// can fail at both, and which failure it then reports is a choice the code
+// makes silently. A lock that will not release leaves a stale lock file,
+// which the next run resolves on its own terms. A log file that will not
+// close is the evidence itself, with a tail whose durability is now
+// unknown — so that is the one an operator has to be told about, and the
+// test above only covers the case where it is the sole failure.
+//
+// A mutation run found this: the condition accepted being reversed, which
+// reports the lock and drops the log. The assertion goes through the
+// *os.PathError rather than the message because both failures render the
+// same sentence and differ only in the file they name, so a substring that
+// matches one matches the other and asserts nothing.
+//
+// It lives beside the lock case rather than with the other mutation
+// findings: a reader of Close needs both halves of the rule in one place.
+func TestCloseReportsTheLogsFailureOverTheLocks(t *testing.T) {
+	dir := t.TempDir()
+	logPath, lockPath := filepath.Join(dir, "log"), filepath.Join(dir, "lock")
+	st := &Store{f: closedFile(t, logPath), lock: closedFile(t, lockPath)}
+
+	err := st.Close()
+	var perr *os.PathError
+	if !errors.As(err, &perr) {
+		t.Fatalf("Close = %v (%T), want an error naming the file that would not close", err, err)
+	}
+	if perr.Path != logPath {
+		t.Errorf("Close reported %s; want the evidence log %s, whose tail state is the unknown one",
+			perr.Path, logPath)
+	}
+}
+
 // TestFsyncFailurePoisonsTheStore appends into a pipe, whose fsync always
 // fails: the bytes left the process but their durability is unknown, so the
 // store must refuse further appends until reopened.
