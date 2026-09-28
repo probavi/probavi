@@ -13,6 +13,31 @@ always called out explicitly.
 
 ### Changed
 
+- **`internal/sandbox/registry` joined the mutation run** at a ceiling of 0,
+  and the six packages measured beside it are queued rather than declared.
+
+  The open question was whether any package never named in `.mutation-budget`
+  earns a ceiling. It was carrying a hypothesis — that these packages drive an
+  external process the tests fake anyway, so a ceiling would measure the fake
+  — and the measurement says that is **false**. At 999 ceilings, so nothing
+  was refused: `internal/sandbox/cli` 9 mutants / **6 survivors**,
+  `internal/sandbox` 26 / 11, `internal/sandbox/docker` 74 / 12,
+  `internal/sandbox/k8s` 96 / 16, `internal/sandbox/remotehost` 101 / 18,
+  `internal/cli` 39 / 3, `internal/sandbox/registry` 1 / 0.
+
+  Reading the survivors is what settles it. They sit in `limitedWriter`'s
+  output cap, in the orphan sweep's liveness decision, in `positiveOrNil` —
+  which turns docker's reported limits into `sandbox.resources` in a signed
+  record, and whose `<= 0` guard exists precisely so that docker's "no limit"
+  does not become a limit of zero — and in a Kubernetes namespace parameter.
+  All are pure functions of inputs the tests already control.
+
+  Cost is not the objection either: all seven added about two minutes to a
+  sweep that takes twenty-seven. The cost is assertions, sixty-six of them,
+  so each package joins in its own change, in `ROADMAP.md` in order of
+  consequence per unit of work. `internal/sandbox/registry` joins here
+  because a lookup table with one caught mutant needs no work to join.
+
 - **Where a mutation ceiling sits is decided: at the measurement, with no
   slack** — and deliberately not the way `.coverage-floor` works, whose
   sentence in `AGENTS.md` §3.1 had said the two files behave the same way.
