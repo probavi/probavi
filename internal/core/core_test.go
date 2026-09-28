@@ -121,6 +121,10 @@ type fakeProvider struct {
 	createErr error
 	created   int
 	swept     int
+	// sweptIDs and sweepErr drive the startup orphan sweep. The zero value
+	// is the sweep that found nothing and failed at nothing.
+	sweptIDs []string
+	sweepErr error
 }
 
 func (f *fakeProvider) Create(context.Context, map[string]string) (Sandbox, error) {
@@ -133,7 +137,7 @@ func (f *fakeProvider) Create(context.Context, map[string]string) (Sandbox, erro
 
 func (f *fakeProvider) SweepOrphans(context.Context) ([]string, error) {
 	f.swept++
-	return nil, nil
+	return f.sweptIDs, f.sweepErr
 }
 
 type failingStore struct{ err error }
