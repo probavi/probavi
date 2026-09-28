@@ -80,11 +80,41 @@ const (
 	invalid                 // the change does not compile: no mutant at all
 )
 
+// survivorRechecks is how many extra runs a surviving mutant gets before it
+// is believed.
+//
+// A mutant whose verdict depends on the run makes a ceiling a sample rather
+// than a measurement, and two of them cost a day of hand measurement in the
+// week of 2026-09-27: one sat in two identical branches a race chose
+// between, and one was reached only for some of the permutations a map's
+// iteration order produces — caught 21 times in 25 runs, which is one run in
+// six answering differently. Neither is visible from a single run, and the
+// number drifts with no name attached to the drift.
+//
+// The check is deliberately one-sided. Rechecking every mutant would cost a
+// multiple of the mutants, which is hours; rechecking only the survivors
+// costs a multiple of the survivors, which is minutes. That finds the
+// instability on the run where it presented as a survivor — the run where it
+// would otherwise have failed the gate for no stated reason — and an
+// unstable mutant presents that way eventually.
+const survivorRechecks = 3
+
+// outcome is what one mutant's runs said. rechecks and refused are zero
+// unless the first run survived; refused above zero is an unstable mutant.
+type outcome struct {
+	v                 verdict
+	rechecks, refused int
+}
+
+// unstable reports whether the mutant answered differently between runs.
+func (o outcome) unstable() bool { return o.refused > 0 }
+
 // tally is one package's run.
 type tally struct {
 	dir                       string
 	caught, survived, invalid int
 	survivors                 []string
+	unstable                  []string
 }
 
 func run(args []string, stdout, stderr io.Writer) error {
@@ -108,7 +138,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 
-	over := []string{}
+	over, wobbly := []string{}, []string{}
 	for _, b := range declared {
 		t, err := mutatePackage(*root, b.Dir, *timeout, stderr)
 		if err != nil {
@@ -118,6 +148,19 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if t.survived > b.Max {
 			over = append(over, fmt.Sprintf("%s: %d survivors, budget %d", b.Dir, t.survived, b.Max))
 		}
+		if len(t.unstable) > 0 {
+			wobbly = append(wobbly, fmt.Sprintf("%s: %d", b.Dir, len(t.unstable)))
+		}
+	}
+	// Instability is reported before the budget, and separately from it. A
+	// ceiling missed by a mutant that answers differently between runs is a
+	// number nobody can reproduce, so saying "over budget" about it would
+	// send the reader to the wrong question.
+	if len(wobbly) > 0 {
+		return fmt.Errorf("a mutant that survives one run and is refused the next makes this ceiling a sample "+
+			"rather than a measurement: the test that refuses it does so only sometimes, which is a flaky "+
+			"assertion rather than a missing one — fix the test, do not move the budget — %s",
+			strings.Join(wobbly, "; "))
 	}
 	if len(over) > 0 {
 		return fmt.Errorf("a change the tests do not notice is a missing assertion or an unobservable change; "+
@@ -394,18 +437,23 @@ func mutatePackage(repoRoot, dir string, timeout time.Duration, stderr io.Writer
 
 	t = tally{dir: dir}
 	for _, e := range edits {
-		v, verr := runMutant(root, module, "./"+filepath.ToSlash(pattern), e, timeout)
+		o, verr := runMutant(root, module, "./"+filepath.ToSlash(pattern), e, timeout, survivorRechecks)
 		if verr != nil {
 			return tally{}, verr
 		}
-		switch v {
+		switch o.v {
 		case caught:
 			t.caught++
 		case invalid:
 			t.invalid++
 		case survived:
 			t.survived++
-			t.survivors = append(t.survivors, e.relativeTo(repoRoot).String())
+			desc := e.relativeTo(repoRoot).String()
+			t.survivors = append(t.survivors, desc)
+			if o.unstable() {
+				t.unstable = append(t.unstable,
+					fmt.Sprintf("%s (refused by %d of %d rechecks)", desc, o.refused, o.rechecks))
+			}
 		}
 	}
 	return t, nil
@@ -446,17 +494,17 @@ func collectDir(dir string) ([]edit, error) {
 // runMutant writes one mutant, runs the package's tests, and puts the file
 // back — including when the run is interrupted, because a tool that leaves
 // a mutated source behind is worse than no tool.
-func runMutant(root *os.Root, module, pattern string, e edit, timeout time.Duration) (v verdict, err error) {
+func runMutant(root *os.Root, module, pattern string, e edit, timeout time.Duration, rechecks int) (o outcome, err error) {
 	// Every write goes through the root, which is the package directory
 	// itself: the tool cannot write outside it even if a name it was
 	// handed tried to, and the name is checked before it is used.
 	name, err := within(root.Name(), e.file)
 	if err != nil {
-		return caught, err
+		return outcome{}, err
 	}
 	src, err := os.ReadFile(filepath.Join(root.Name(), name))
 	if err != nil {
-		return caught, fmt.Errorf("read %s: %w", e.file, err)
+		return outcome{}, fmt.Errorf("read %s: %w", e.file, err)
 	}
 	restore := func() error {
 		if werr := root.WriteFile(name, src, 0o600); werr != nil {
@@ -484,9 +532,22 @@ func runMutant(root *os.Root, module, pattern string, e edit, timeout time.Durat
 	}()
 
 	if werr := root.WriteFile(name, apply(src, e), 0o600); werr != nil {
-		return caught, fmt.Errorf("write mutant into %s: %w", e.file, werr)
+		return outcome{}, fmt.Errorf("write mutant into %s: %w", e.file, werr)
 	}
-	return testVerdict(module, pattern, timeout), nil
+	o = outcome{v: testVerdict(module, pattern, timeout)}
+	if o.v != survived {
+		return o, nil
+	}
+	// The mutant stays written for the rechecks: what is being measured is
+	// whether the same code answers the same way twice, so writing it again
+	// would only measure the filesystem.
+	for range rechecks {
+		o.rechecks++
+		if testVerdict(module, pattern, timeout) == caught {
+			o.refused++
+		}
+	}
+	return o, nil
 }
 
 // within returns a file's name relative to dir, and refuses one that
@@ -585,5 +646,8 @@ func report(w io.Writer, t tally, max int) {
 		t.dir, t.caught, t.survived, max, t.invalid)
 	for _, s := range t.survivors {
 		fmt.Fprintf(w, "    survived: %s\n", s)
+	}
+	for _, s := range t.unstable {
+		fmt.Fprintf(w, "    unstable: %s\n", s)
 	}
 }

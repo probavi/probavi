@@ -14,6 +14,13 @@
 # minutes per package — worth paying on a schedule, not on a keystroke.
 # The packages it covers are declared in .mutation-budget, each with the
 # number of survivors it may carry.
+#
+# Each survivor is then re-run three more times, because a mutant whose
+# verdict depends on the run makes the ceiling a sample rather than a
+# measurement. That is a multiple of the survivors rather than of the
+# mutants — about a quarter more wall clock, against a job that takes
+# roughly twenty-three minutes — and it is what turns "the number drifted"
+# into a named mutant and a named flaky assertion.
 
 name: Mutation
 

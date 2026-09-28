@@ -518,7 +518,7 @@ func TestRunMutantRefusesAFileOutsideTheRoot(t *testing.T) {
 		}
 	})
 	outside := filepath.Join(dir, "..", "elsewhere.go")
-	_, err = runMutant(root, dir, "./...", edit{file: outside, old: "<", new: "<="}, time.Second)
+	_, err = runMutant(root, dir, "./...", edit{file: outside, old: "<", new: "<="}, time.Second, 0)
 	if err == nil || !strings.Contains(err.Error(), "outside the package directory") {
 		t.Errorf("runMutant = %v, want a refusal naming the containment", err)
 	}
@@ -626,5 +626,72 @@ func TestARefusalIsRecognisedByShapeNotByLuck(t *testing.T) {
 				t.Errorf("isRefusal(%s) = %v, want %v", tc.expr, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestAnUnstableMutantIsNamedRatherThanCounted: a mutant whose verdict
+// depends on the run makes a ceiling a sample rather than a measurement,
+// and the number drifts with no name attached to the drift. The tool now
+// re-runs every survivor and says which ones did not answer the same way
+// twice.
+//
+// The fixture makes the instability deterministic: its test asserts nothing
+// the first time it runs and asserts the negation every time after, so the
+// mutant survives once and is refused three times. That is what a flaky
+// assertion looks like from outside, arranged so that this test is not
+// flaky itself.
+func TestAnUnstableMutantIsNamedRatherThanCounted(t *testing.T) {
+	root := fixtureModule(t, fixture{
+		budget: "unstable 1\n",
+		extra: map[string]string{
+			"unstable/unstable.go": `package unstable
+
+// Yes is one negation and nothing else, so the package has exactly one
+// mutant to be unstable about.
+func Yes(ok bool) string {
+	if !ok {
+		return "no"
+	}
+	return "yes"
+}
+`,
+			"unstable/unstable_test.go": `package unstable
+
+import (
+	"os"
+	"testing"
+)
+
+func TestYes(t *testing.T) {
+	if _, err := os.Stat("ran-once"); err != nil {
+		if werr := os.WriteFile("ran-once", nil, 0o600); werr != nil {
+			t.Fatal(werr)
+		}
+		return
+	}
+	if Yes(false) != "no" {
+		t.Fatal("the negation was dropped")
+	}
+}
+`,
+		},
+	})
+
+	var out, errOut strings.Builder
+	err := run([]string{"-root", root, "-timeout", "60s"}, &out, &errOut)
+	if err == nil || !strings.Contains(err.Error(), "sample") {
+		t.Fatalf("run = %v, want the instability reported rather than a budget verdict\n%s", err, out.String())
+	}
+	// The over-budget wording would send the reader to the wrong question:
+	// the ceiling was met, and the number behind it is what is in doubt.
+	if strings.Contains(err.Error(), "survivors, budget") {
+		t.Errorf("run = %v, want instability reported on its own terms", err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "unstable: unstable/unstable.go") {
+		t.Errorf("report = %q, want the unstable mutant named", text)
+	}
+	if !strings.Contains(text, "refused by 3 of 3 rechecks") {
+		t.Errorf("report = %q, want the recheck tally", text)
 	}
 }
