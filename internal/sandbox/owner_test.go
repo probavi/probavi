@@ -44,8 +44,18 @@ func TestOwnerAlive(t *testing.T) {
 	t.Run("a recycled pid is not the owner", func(t *testing.T) {
 		// Same pid, a token that cannot be this process's: exactly what an
 		// unrelated process inheriting the pid looks like.
+		//
+		// Whether this platform offers a token is established first. Reading
+		// the answer out of OwnerAlive instead — skipping when it says true —
+		// cannot tell "there is no token here" from "the comparison was
+		// skipped", and a mutation run found exactly that: dropping the
+		// negation on the cannot-compare branch returns alive without
+		// comparing, and this case skipped rather than failing.
+		if _, ok := processStartToken(self); !ok {
+			t.Skip("no start token on this platform; the pid rule is all there is")
+		}
 		if OwnerAlive(strconv.Itoa(self) + ownerSep + "1") {
-			t.Skipf("no start token on this platform; the pid rule is all there is")
+			t.Error("a token that is not this process's was accepted; a recycled pid owns everything")
 		}
 	})
 

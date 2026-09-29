@@ -13,6 +13,39 @@ always called out explicitly.
 
 ### Changed
 
+- **`internal/sandbox` joined the mutation run**, at a ceiling of 4. It
+  measured 26 mutants with **11 survivors** — the worst rate of the fifteen
+  packages now declared — and it decides whether a sandbox holding restored
+  production data is destroyed or left behind. Seven assertions closed
+  seven.
+
+  **The largest find was a guard that looks redundant and is not.**
+  `OwnerAlive` refuses an id that is *unparseable or not positive*, and the
+  first half appears covered by the second, since `strconv.Atoi` returns
+  zero for a name. It is not covered: **Atoi clamps on overflow**, returning
+  the largest int alongside its error, so a number too wide to be a pid is
+  positive — and a pid that wide truncates to `-1` on its way into
+  `kill(2)`, the wildcard meaning *every process the caller may signal*.
+  Measured, `ProcessAlive` answers **true** for it. Without that half, a
+  sandbox labelled with such a number has a living owner forever and no
+  sweep ever reclaims it.
+
+  **Pid 1 owns its sandbox**, which is not a corner: a drill running inside
+  a container *is* pid 1, so a guard one step stricter would make every
+  sandbox such a drill creates look orphaned — and the next sweep would
+  destroy one whose owner is still restoring into it.
+
+  **The start token distinguishes rather than merely exists.** A parse
+  landing one field early reads `itrealvalue`, which is zero for every
+  process alive, and a token every process shares is the pid rule with extra
+  steps. The stat parse was split from the read of `/proc` to make the
+  hostile-comm defence its comment describes testable at all — no pid
+  produces a name like `(evil) 1 2 3` on demand.
+
+  Two existing tests were **skipping where they should have failed**, which
+  is how two of these survived a suite that appeared to cover them. Both now
+  establish the precondition first and assert afterwards.
+
 - **`internal/sandbox/cli` joined the mutation run**, at a ceiling of 2. It
   measured 9 mutants with **6 survivors** — the worst rate of the fourteen
   packages now declared — and it is `limitedWriter` plus the subprocess

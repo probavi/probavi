@@ -163,6 +163,20 @@ internal/sandbox/registry 0
 # parent environment, and a `room <= 0` widened to `< 0`, where room zero
 # falls through to a branch that writes p[:0] and sets the same flag.
 internal/sandbox/cli 2
+# internal/sandbox decides whether a sandbox holding restored production
+# data is destroyed or left behind, which AGENTS.md §2.2 calls sacred.
+# Measured 2026-09-29 at 26 mutants, 22 caught, after seven assertions
+# closed seven. The four survivors were each checked by running them:
+#
+#   - owner.go's `pid <= 0` widened to `< 0` lets pid zero through to
+#     ProcessAlive, which refuses it — the guard the next line repeats;
+#   - process.go's same widening lets pid zero reach os.Process.Signal,
+#     which refuses Pid 0 with "process not initialized". The answer is
+#     unchanged; it just comes from the runtime rather than from here;
+#   - the two on the stat parse's `end < 0` differ only for a line whose
+#     first byte is ')'. /proc cannot produce one, and picking a behaviour
+#     for it would be inventing a contract rather than asserting one.
+internal/sandbox     4
 # Nothing this file used to name is outside the run any more: internal/config
 # and internal/core, the last two, joined on 2026-09-28. Every package that
 # decides what a signed record says is now measured.
