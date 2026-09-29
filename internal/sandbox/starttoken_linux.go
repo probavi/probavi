@@ -22,13 +22,22 @@ func processStartToken(pid int) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	end := strings.LastIndexByte(string(raw), ')')
+	return startTokenFrom(string(raw))
+}
+
+// startTokenFrom reads the start time out of one /proc/<pid>/stat line. It
+// is separate from the read because it is the half with a decision in it,
+// and the decision is about hostile input: the comm field is a process name
+// the process chose, and a line the kernel produced is not a line this
+// parser may assume anything about.
+func startTokenFrom(raw string) (string, bool) {
+	end := strings.LastIndexByte(raw, ')')
 	if end < 0 {
 		return "", false
 	}
 	// After comm come state (field 3) and the rest; start time is field 22,
 	// so it is the 20th field of what follows.
-	fields := strings.Fields(string(raw)[end+1:])
+	fields := strings.Fields(raw[end+1:])
 	const startTimeOffset = 19
 	if len(fields) <= startTimeOffset {
 		return "", false
