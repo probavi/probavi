@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseHeader(t *testing.T) {
@@ -145,6 +146,17 @@ func TestABackupStillBeingWrittenIsRefused(t *testing.T) {
 	if err := os.WriteFile(path, []byte(asbFile("orders", true, 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The writer has to still be going while the check looks, and arranging
+	// that is the whole difficulty. The previous shape of this case waited
+	// for the goroutine to finish before calling resolveSource, so the file
+	// was always settled by the time it was observed — the refusal never
+	// happened, the case skipped on every run, and the assertion below was
+	// unreachable. It cost the settle window each time to prove nothing.
+	//
+	// Now the writes land inside that window instead: the first one far
+	// enough in that the opening observation is already taken, the last one
+	// far enough before the closing one that a loaded machine still gets
+	// there. What the check compares is size, and size changes.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -153,16 +165,17 @@ func TestABackupStillBeingWrittenIsRefused(t *testing.T) {
 			return
 		}
 		defer f.Close() //nolint:errcheck // fixture writer; the assertion below reads the file
-		for range 40 {
+		for range 2 {
+			time.Sleep(settleWindow / 4)
 			if _, err := f.WriteString("+ k S 2 kx\n"); err != nil {
 				return
 			}
 		}
 	}()
-	<-done
 	_, perr := resolveSource(context.Background(), "asbackup", path)
+	<-done
 	if perr == nil {
-		t.Skip("the write finished before the window could observe it")
+		t.Fatal("a backup that grew while it was being checked was accepted")
 	}
 	if !strings.Contains(perr.Message, "still being written") {
 		t.Errorf("refusal = %+v, want it to name the writer", perr)

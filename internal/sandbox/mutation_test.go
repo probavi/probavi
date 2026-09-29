@@ -17,12 +17,17 @@ import (
 // which is how Probavi is packaged, so the sandboxes such a drill creates
 // would every one of them look orphaned — and the next sweep would destroy
 // a sandbox whose owner is still restoring into it.
+//
+// Written without a skip on purpose. Asking ProcessAlive(1) first and
+// skipping on false would put the answer under test into the condition that
+// decides whether to test it, which is how two tests in this repository
+// came to skip where they should have failed. Comparing the two instead
+// says the thing that matters however this host is arranged: a pid of 1 is
+// decided by whether that process is alive, not by the parse guard.
 func TestPidOneOwnsItsSandbox(t *testing.T) {
-	if !ProcessAlive(1) {
-		t.Skip("pid 1 is not visible from here")
-	}
-	if !OwnerAlive("1") {
-		t.Error("OwnerAlive(\"1\") = false; a containerised drill owns nothing it creates")
+	if got, want := OwnerAlive("1"), ProcessAlive(1); got != want {
+		t.Errorf("OwnerAlive(\"1\") = %v but ProcessAlive(1) = %v; "+
+			"a containerised drill owns nothing it creates", got, want)
 	}
 }
 

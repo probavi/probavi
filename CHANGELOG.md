@@ -13,6 +13,35 @@ always called out explicitly.
 
 ### Changed
 
+- **Three tests that skipped where they should have failed now assert.** A
+  mutation run found the shape in `internal/sandbox`, and the same question
+  asked of the other 85 `Skip` sites in the tree found two more. The rest
+  are honest preconditions — running as root, a binary not on PATH, no
+  symlinks, an image without an extension, an integration suite behind an
+  environment variable — and were left alone.
+
+  **`internal/tools/mutate`** had the worst of them. The whole body of
+  `TestModuleRootRefusesAPathOutsideAnyModule` was a skip: it skipped when
+  `moduleRoot` answered and passed without a single check when it did not,
+  so a `moduleRoot` that stopped refusing anything would have been reported
+  as tested. Whether the temporary directory sits inside a module is now
+  established by looking for a `go.mod` above it, and the refusal is
+  asserted.
+
+  **`adapters/aerospike`** had one that could never assert.
+  `TestABackupStillBeingWrittenIsRefused` waited for its fixture writer to
+  finish before calling the code under test, so the artifact was always
+  settled by the time it was observed — the refusal never happened, the case
+  skipped on **every** run, and it spent the whole settle window each time
+  to prove nothing. The writes now land inside that window, and the test
+  fails if the settle check is broken.
+
+  **`internal/sandbox`** had one introduced the day before, in the very
+  change that fixed two others: a skip on `ProcessAlive(1)` guarding an
+  assertion about `OwnerAlive("1")`. It is now written without a skip at
+  all — the two functions are compared, which says the thing that matters
+  however the host is arranged.
+
 - **`internal/sandbox` joined the mutation run**, at a ceiling of 4. It
   measured 26 mutants with **11 survivors** — the worst rate of the fifteen
   packages now declared — and it decides whether a sandbox holding restored
