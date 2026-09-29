@@ -33,6 +33,12 @@
 #
 # So a pull request touching any of ten declared packages pays seconds, and
 # the worst case is the package where a missing assertion costs the most.
+#
+# .mutation-budget is read twice for two questions: the list says which
+# packages are declared, and the diff says which ceilings this branch moved.
+# The second is not a refinement — the file is at the repository root, so no
+# directory of a changed file points at it, and a ceiling lowered past what
+# its package measures would otherwise pass here and fail a week later.
 
 name: Mutation
 
@@ -130,14 +136,34 @@ jobs:
           set -euo pipefail
           mapfile -t declared < <(grep -E '^[a-z]' .mutation-budget | awk '{print $1}')
           mapfile -t dirs < <(git diff --name-only "$BASE_SHA" HEAD | xargs -r -n1 dirname | sort -u)
+          # A ceiling that moved names its own package, which is how a change
+          # to .mutation-budget alone is measured: the file sits at the
+          # repository root, so no directory of a changed file points at it.
+          # A ceiling lowered past what its package measures would otherwise
+          # pass here and fail a week later.
+          mapfile -t budgeted < <(git diff -U0 "$BASE_SHA" HEAD -- .mutation-budget \
+            | grep -E '^[+-][a-z][^[:space:]]*[[:space:]]+[0-9]+$' \
+            | sed -E 's/^[+-]//' | awk '{print $1}' | sort -u)
           touched=()
           for pkg in "${declared[@]}"; do
+            hit=""
             for dir in "${dirs[@]}"; do
               if [ "$dir" = "$pkg" ]; then
-                touched+=("$pkg")
+                hit=yes
                 break
               fi
             done
+            if [ -z "$hit" ]; then
+              for changed in "${budgeted[@]}"; do
+                if [ "$changed" = "$pkg" ]; then
+                  hit=yes
+                  break
+                fi
+              done
+            fi
+            if [ -n "$hit" ]; then
+              touched+=("$pkg")
+            fi
           done
           if [ "${#touched[@]}" -eq 0 ]; then
             echo "no declared package changed on this branch; nothing to measure"

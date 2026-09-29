@@ -13,6 +13,24 @@ always called out explicitly.
 
 ### Changed
 
+- **A pull request that moves a ceiling and nothing else now measures the
+  package whose ceiling moved.** The per-pull-request job selects packages
+  by the directory of each changed file, and `.mutation-budget` sits at the
+  repository root — so a change to it alone pointed at no package and
+  measured nothing. A ceiling lowered past what its package measures would
+  have passed the pull request and failed a week later, which is the exact
+  latency the job was added to remove.
+
+  The fix is not the full sweep: **a ceiling line that moved names its own
+  package.** The job now reads the file twice — the list for which packages
+  are declared, the diff for which ceilings changed — and measures the
+  union. A comment edit selects nothing; a new package joining selects
+  itself.
+
+  Exercised end to end on a throwaway branch: lowering `internal/cli` from
+  2 to 1 and changing nothing else selects `internal/cli` and the tool exits
+  1, naming both survivors.
+
 - **A key write that could not happen is asserted, and
   `internal/evidence`'s mutation ceiling goes from 6 to 5** — leaving the
   first declared package with **nothing assertable left in it**: every
