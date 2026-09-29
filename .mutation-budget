@@ -51,10 +51,14 @@
 #
 # Every package listed here is run in full, so this file is also the
 # scope: a package joins the run by being declared, with a measured
-# ceiling attached. The pull-request half of the workflow reads that list
-# from here rather than carrying a copy, and measures the entries whose
-# directory the branch touched — so a package added here is measured on a
-# pull request from the moment it is added, with nothing else to remember.
+# ceiling attached. The pull-request half of the workflow reads this file
+# twice rather than carrying a copy of it: the list says which packages are
+# declared, and the diff says which ceilings the branch moved. A package
+# added here is therefore measured from the moment it is added, and a
+# ceiling changed here is measured by the pull request that changes it —
+# which matters because this file is at the repository root, so no
+# directory of a changed file points at it, and a number lowered past what
+# its package measures would otherwise pass and fail a week later.
 # internal/evidence measured 2026-09-29 at 253 mutants, 246 caught. This is
 # the first declared package with nothing assertable left in it: every one
 # of the five survivors is a change no input can distinguish, not a change

@@ -75,10 +75,25 @@ func TestTheMutationGateRunsOnPullRequestsAndCannotSkipItself(t *testing.T) {
 // would make the sentence false the first time the two disagreed, and the
 // disagreement would be silent — the package nobody added to the workflow
 // simply would not be measured on a pull request.
+//
+// The file is read twice, for two different questions, and both matter.
+// Which packages are declared comes from the list. Which ceilings a branch
+// moved comes from the diff: the file sits at the repository root, so no
+// directory of a changed file points at it, and a ceiling lowered past what
+// its package measures would otherwise pass the pull request and fail a
+// week later.
+//
+// This is a claim about the workflow's shape, not its behaviour — a text
+// check cannot run bash. What it prevents is the silent version: somebody
+// simplifying the script back to directories alone, and nothing saying so.
 func TestTheMutationGateReadsItsScopeFromTheBudget(t *testing.T) {
 	raw := read(t, mutationWorkflow)
 	if !strings.Contains(raw, ".mutation-budget") {
 		t.Errorf("%s does not read .mutation-budget; its scope is a copy rather than the list",
 			mutationWorkflow)
+	}
+	if !strings.Contains(raw, "-- .mutation-budget") {
+		t.Errorf("%s does not diff .mutation-budget; a pull request that moves a ceiling and "+
+			"nothing else would measure nothing", mutationWorkflow)
 	}
 }
