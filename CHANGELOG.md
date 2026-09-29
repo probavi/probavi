@@ -517,6 +517,37 @@ always called out explicitly.
 
 ### Added
 
+- **The mutation gate now runs per pull request**, scoped to the declared
+  packages the branch touched (`Mutation (touched packages)`). The weekly
+  sweep stays as the complete answer.
+
+  This is what makes the ceiling policy work in practice. A ceiling that
+  sits at the measurement is spent by the next change that adds a survivor,
+  and a survivor reported a week after the merge is one whose author has
+  moved on — at which point the tempting fix is the number rather than the
+  assertion.
+
+  **The cost is far more lopsided than the question assumed.** Measured:
+  the whole sweep is about 26 minutes and two packages are **65%** of it —
+  `internal/adapter` at 737s and `internal/evidence` at 294s, then
+  `internal/manifest` 255s and `internal/config` 144s. The other **ten are
+  50 seconds down to nothing**. Cost tracks tests that spawn processes and
+  wait on clocks rather than the mutant count: `internal/sandbox/k8s` has
+  more mutants than `internal/manifest` and takes 19 seconds to its 255. A
+  pull request touching any of ten declared packages pays seconds.
+
+  It is a narrowing, not a replacement, and `AGENTS.md` §3.1 says so: a
+  mutant of package P runs against P's own tests, so a change elsewhere can
+  still move P's number through a package P imports, and only the weekly
+  sweep sees that.
+
+  The job reads its scope from `.mutation-budget` rather than carrying a
+  copy, so a package added there is measured on pull requests from the
+  moment it is added. Its name is fixed and its condition is true on every
+  pull request, because a skipped check reports **success** to a branch
+  rule — the trap the version-matrix gate was built around, with a test in
+  `internal/docs` holding both.
+
 - **A gate for a test that asserts nothing but a skip**
   (`internal/docs/skiponly_test.go`). It parses every `_test.go` in both
   modules and reports a test, fuzz target or benchmark that reaches a `Skip`

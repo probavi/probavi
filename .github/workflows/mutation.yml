@@ -21,10 +21,26 @@
 # mutants — about a quarter more wall clock, against a job that takes
 # roughly twenty-three minutes — and it is what turns "the number drifted"
 # into a named mutant and a named flaky assertion.
+#
+# On a pull request only the declared packages the branch touched are
+# measured, and what makes that affordable is how skewed the cost is.
+# Measured 2026-09-29, the whole sweep is about 26 minutes and two packages
+# are 65% of it: internal/adapter 737s and internal/evidence 294s, followed
+# by internal/manifest at 255s and internal/config at 144s. The other ten
+# are 50s down to nothing. The cost tracks tests that spawn processes and
+# wait on clocks rather than the mutant count — internal/sandbox/k8s has
+# more mutants than internal/manifest and takes 19 seconds to its 255.
+#
+# So a pull request touching any of ten declared packages pays seconds, and
+# the worst case is the package where a missing assertion costs the most.
 
 name: Mutation
 
 on:
+  # On a pull request, only the declared packages the branch touched. The
+  # full sweep stays weekly: what a pull request cannot afford is measuring
+  # fourteen packages to learn about the one it changed.
+  pull_request:
   schedule:
     # Weekly, offset from the fuzz and version-matrix runs.
     - cron: "37 4 * * 1"
@@ -40,11 +56,14 @@ permissions:
 
 concurrency:
   group: mutation-${{ github.ref }}
-  cancel-in-progress: false
+  # A superseded pull-request run is waste; a superseded sweep is a week of
+  # measurement nobody else will take.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   mutate:
     name: Mutate the trust core
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -68,6 +87,69 @@ jobs:
           else
             go run ./internal/tools/mutate
           fi
+
+      - name: the working tree is as it was
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::mutation testing left the tree modified — a mutant was not restored"
+            git status --porcelain
+            exit 1
+          fi
+
+  touched:
+    # The name is the check a branch rule can require, so it is fixed: a
+    # rule naming a check that no longer reports does not fail, it waits.
+    name: Mutation (touched packages)
+    # Always true on a pull request, which is the point. A job that is
+    # skipped reports success to a branch rule, so this one may never be
+    # conditioned on having work to do — it runs, and says so when there is
+    # none.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The base commit has to be in the clone for the diff below.
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: measure every declared package this branch touched
+        # A mutant of package P is run against P's own tests, so a change
+        # inside P is what can move P's number. A change elsewhere can move
+        # it too, through a package P imports — that case is the weekly
+        # sweep's, and this job does not pretend to cover it.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t declared < <(grep -E '^[a-z]' .mutation-budget | awk '{print $1}')
+          mapfile -t dirs < <(git diff --name-only "$BASE_SHA" HEAD | xargs -r -n1 dirname | sort -u)
+          touched=()
+          for pkg in "${declared[@]}"; do
+            for dir in "${dirs[@]}"; do
+              if [ "$dir" = "$pkg" ]; then
+                touched+=("$pkg")
+                break
+              fi
+            done
+          done
+          if [ "${#touched[@]}" -eq 0 ]; then
+            echo "no declared package changed on this branch; nothing to measure"
+            exit 0
+          fi
+          failed=0
+          for pkg in "${touched[@]}"; do
+            echo "::group::$pkg"
+            go run ./internal/tools/mutate -only "$pkg" || failed=1
+            echo "::endgroup::"
+          done
+          exit "$failed"
 
       - name: the working tree is as it was
         if: always()
