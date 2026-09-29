@@ -160,10 +160,35 @@ func TestModuleRootFindsTheOwningModule(t *testing.T) {
 	}
 }
 
+// TestModuleRootRefusesAPathOutsideAnyModule: this tool runs `go test` from
+// a package's own module, so a path belonging to none is a refusal rather
+// than a guess about which module to use.
+//
+// Whether this machine's temporary directory sits inside a module is
+// established by looking for a go.mod above it, not by asking moduleRoot.
+// Reading the skip condition out of the function under test is how the
+// previous shape of this case came to assert nothing at all: it skipped
+// when moduleRoot answered, and passed without a single check when it did
+// not.
 func TestModuleRootRefusesAPathOutsideAnyModule(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := moduleRoot(dir); err == nil {
-		t.Skip("the temporary directory sits inside a module on this machine")
+	for d := dir; ; {
+		if _, err := os.Stat(filepath.Join(d, "go.mod")); err == nil {
+			t.Skipf("%s sits inside the module at %s on this machine", dir, d)
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			break
+		}
+		d = parent
+	}
+
+	root, err := moduleRoot(dir)
+	if err == nil {
+		t.Fatalf("moduleRoot(%s) = %q, want a refusal: nothing above it is a module", dir, root)
+	}
+	if !strings.Contains(err.Error(), "belongs to no module") {
+		t.Errorf("err = %v, want it to say the path belongs to no module", err)
 	}
 }
 
