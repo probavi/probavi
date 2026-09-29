@@ -185,6 +185,13 @@ internal/sandbox     4
 # that names one before isGroup is reached — so no argument list can tell
 # the two apart.
 internal/cli         2
+# internal/sandbox/docker turns what the runtime reports into two record
+# fields and enforces the isolation defaults. Measured 2026-09-29 at 74
+# mutants, 71 caught, after six assertions closed nine. The three survivors
+# are provably equivalent: two widen an index test on a string TrimSpace has
+# already stripped, so the index can never be the value they differ at, and
+# one lets a zero through to a division whose result the next guard refuses.
+internal/sandbox/docker 3
 # Nothing this file used to name is outside the run any more: internal/config
 # and internal/core, the last two, joined on 2026-09-28. Every package that
 # decides what a signed record says is now measured.
