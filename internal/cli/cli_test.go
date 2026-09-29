@@ -18,6 +18,12 @@ func TestResolve(t *testing.T) {
 		wantID   string
 		wantArgs []string
 		wantWord string
+		// wantGroup is asserted for every case, empty included: the group
+		// word is what cmd/probavi looks up to pick the diagnostic an
+		// unknown subcommand gets, so a Match that names the wrong one
+		// degrades to "unknown command" in all twenty-three locales — a
+		// plausible sentence about the wrong thing.
+		wantGroup string
 	}{
 		{name: "no arguments", args: nil, want: cli.UnknownCommand},
 		{name: "top-level command", args: []string{"run", "--config", "d.yaml"},
@@ -31,11 +37,13 @@ func TestResolve(t *testing.T) {
 		{name: "unknown command", args: []string{"restore"},
 			want: cli.UnknownCommand, wantWord: "restore"},
 		{name: "group without subcommand", args: []string{"evidence"},
-			want: cli.IncompleteGroup},
+			want: cli.IncompleteGroup, wantGroup: "evidence"},
 		{name: "unknown subcommand", args: []string{"evidence", "sign"},
-			want: cli.UnknownSubcommand, wantWord: "sign"},
+			want: cli.UnknownSubcommand, wantWord: "sign", wantGroup: "evidence"},
+		{name: "unknown subcommand of the other group", args: []string{"adapter", "sign"},
+			want: cli.UnknownSubcommand, wantWord: "sign", wantGroup: "adapter"},
 		{name: "group word is not a command on its own", args: []string{"adapter"},
-			want: cli.IncompleteGroup},
+			want: cli.IncompleteGroup, wantGroup: "adapter"},
 	}
 
 	for _, tc := range cases {
@@ -52,6 +60,11 @@ func TestResolve(t *testing.T) {
 			}
 			if tc.wantArgs != nil {
 				assertArgs(t, m.Args, tc.wantArgs)
+			}
+			// Asserted unconditionally, so that a resolution with no group
+			// carries none rather than whatever happened to be in argv.
+			if m.Group != tc.wantGroup {
+				t.Errorf("group %q, want %q", m.Group, tc.wantGroup)
 			}
 		})
 	}
