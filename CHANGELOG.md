@@ -13,6 +13,23 @@ always called out explicitly.
 
 ### Changed
 
+- **`internal/cli` joined the mutation run**, at a ceiling of 2. It measured
+  39 mutants with 3 survivors, and one assertion closed one.
+
+  `Match.Group` was never asserted — only `Match.Word` was — and the group
+  word is what `cmd/probavi` looks up to choose the diagnostic an unknown
+  subcommand gets. A Match naming the subcommand as its own group finds no
+  entry in that table and falls back to *unknown command*, so
+  `probavi evidence sign` would answer with a plausible sentence about the
+  wrong thing, **in all twenty-three locales**, with every other test green.
+  The group is now asserted for every case in the table, the empty ones
+  included, so that a resolution with no group carries none rather than
+  whatever happened to be in argv.
+
+  Both survivors widen `isGroup`'s bound to admit a one-word command, and
+  `Resolve` has already returned for any word that names one before
+  `isGroup` is reached — no argument list can tell the two apart.
+
 - **Three tests that skipped where they should have failed now assert.** A
   mutation run found the shape in `internal/sandbox`, and the same question
   asked of the other 85 `Skip` sites in the tree found two more. The rest

@@ -177,6 +177,14 @@ internal/sandbox/cli 2
 #     first byte is ')'. /proc cannot produce one, and picking a behaviour
 #     for it would be inventing a contract rather than asserting one.
 internal/sandbox     4
+# internal/cli declares the command tree and the exit codes docs/capabilities.json
+# states as the CLI surface. Measured 2026-09-29 at 39 mutants, 35 caught
+# and 2 that do not compile, after one assertion closed one.
+# Both survivors widen isGroup's bound to
+# admit a one-word command, and Resolve has already returned for any word
+# that names one before isGroup is reached — so no argument list can tell
+# the two apart.
+internal/cli         2
 # Nothing this file used to name is outside the run any more: internal/config
 # and internal/core, the last two, joined on 2026-09-28. Every package that
 # decides what a signed record says is now measured.
