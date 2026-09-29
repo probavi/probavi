@@ -156,6 +156,13 @@ internal/core       1
 # 3, and the three providers at 74/12, 96/16 and 101/18. Each joins in its
 # own change, with its assertions.
 internal/sandbox/registry 0
+# internal/sandbox/cli is limitedWriter and the subprocess plumbing every
+# provider that shells out shares. Measured 2026-09-29 at 9 mutants, 7
+# caught, after four assertions closed four. The two survivors are provably
+# equivalent: setting cmd.Env to os.Environ() where nil already means the
+# parent environment, and a `room <= 0` widened to `< 0`, where room zero
+# falls through to a branch that writes p[:0] and sets the same flag.
+internal/sandbox/cli 2
 # Nothing this file used to name is outside the run any more: internal/config
 # and internal/core, the last two, joined on 2026-09-28. Every package that
 # decides what a signed record says is now measured.
