@@ -13,6 +13,35 @@ always called out explicitly.
 
 ### Changed
 
+- **`internal/sandbox/docker` joined the mutation run**, at a ceiling of 3.
+  It measured 74 mutants with 12 survivors, and six assertions closed nine.
+  The provider turns what the runtime reports into two record fields and
+  enforces the isolation defaults.
+
+  **`positiveOrNil` is where docker's reported limits become
+  `sandbox.resources` in a signed record.** Zero means *no limit applied*
+  and has to stay absent rather than become a limit of zero, which its
+  comment says. The other end was the gap: a value too large to parse comes
+  back from `ParseInt` **clamped to the largest int alongside its error**,
+  so a guard reading the error and the sign the wrong way round records a
+  limit nobody set.
+
+  **An exec timeout of zero means no bound was asked for**, not a bound of
+  zero — attaching one gives every exec a context that has already expired.
+  And a bound the guard steps past is a command the drill's own clock cannot
+  reach. Both ends are asserted now, through the runner fake, which records
+  whether the context it was handed carried a deadline.
+
+  **A single byte of stdin still opens it.** `docker exec` delivers stdin
+  only when asked with `-i`, so a guard that steps past one byte drops the
+  smallest input there is while the caller believes it was fed.
+
+  Also: `Facts` stays absent when `inspect` did not answer — a non-zero exit
+  is not an error by the Runner contract, so a check reading only `err`
+  believes whatever was printed on the way to failing — and the log line
+  naming a container leaked by a create that could not be undone, which is
+  the only trace of an id nothing outside the call knows.
+
 - **`internal/cli` joined the mutation run**, at a ceiling of 2. It measured
   39 mutants with 3 survivors, and one assertion closed one.
 

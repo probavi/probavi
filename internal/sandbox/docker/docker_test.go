@@ -31,10 +31,17 @@ type fakeRunner struct {
 	calls     [][]string
 	stdins    []string
 	responses []response
+	// bounded records, per call, whether the context carried a deadline.
+	// Whether one was attached is the observable half of a timeout that a
+	// fake can see at all: the duration is the caller's, the presence is
+	// the provider's decision.
+	bounded []bool
 }
 
-func (f *fakeRunner) Run(_ context.Context, stdin io.Reader, env []string, name string, args ...string) ([]byte, []byte, bool, int, error) {
+func (f *fakeRunner) Run(ctx context.Context, stdin io.Reader, env []string, name string, args ...string) ([]byte, []byte, bool, int, error) {
 	f.envs = append(f.envs, env)
+	_, hasDeadline := ctx.Deadline()
+	f.bounded = append(f.bounded, hasDeadline)
 	f.t.Helper()
 	in := ""
 	if stdin != nil {
