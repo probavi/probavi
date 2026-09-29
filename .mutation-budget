@@ -55,16 +55,16 @@
 # from here rather than carrying a copy, and measures the entries whose
 # directory the branch touched — so a package added here is measured on a
 # pull request from the moment it is added, with nothing else to remember.
-# internal/evidence measured 2026-09-29 at 253 mutants, 245 caught, once the
-# canonical comparison's boundaries, the bound on the walk back to a rune
-# boundary, the damaged-line warning, Close's choice of failure and the
-# directory-sync tolerance were all pinned. The six survivors were read one
-# by one rather than counted: four are provably equivalent (a comparison the
+# internal/evidence measured 2026-09-29 at 253 mutants, 246 caught. This is
+# the first declared package with nothing assertable left in it: every one
+# of the five survivors is a change no input can distinguish, not a change
+# nobody has got round to. Four are provably equivalent — a comparison the
 # enclosing condition already settled, a file mode the kernel ignores
 # without O_CREATE, and two truncation guards whose branch does what the
-# branch below would have done), one has no input the timestamp layout
-# admits, and one is reached by no test in the suite — a key written but
-# unsynced.
+# branch below would have done — and the fifth has no input the timestamp
+# layout admits. The number below is an irreducible remainder rather than a
+# budget for unfinished work, which is what every ceiling here is meant to
+# become.
 #
 # One of them used to flip. The loop bound in lessUTF16 was asserted only
 # through Canonicalize, where the sort picks the comparison's argument order
@@ -73,17 +73,20 @@
 # survivor where a local run of the same sweep had not. A ceiling is not a
 # measurement while one of its mutants answers differently one run in six.
 #
-# One of the two decisions this list used to carry is settled, and the way
-# it went is worth recording. The directory-sync tolerance did not need a
-# seam after all: what could not be reached was a condition, not a
-# filesystem, and giving the condition a name — durabilityUnknown — made it
-# reachable without adding anything to the production path. The other one is
-# not that shape. keys.go's "sync only if the write succeeded" is a
-# sequencing decision, and reaching it means making a write to a freshly
-# created O_EXCL file fail, which no naming can arrange. It stays itemised
-# in ROADMAP.md with both answers stated, so it is not quietly carried as a
-# number.
-internal/evidence 6
+# Both decisions this list used to carry are settled, and neither went the
+# way the question was framed. Each was recorded as needing a seam in
+# production code or permanent acceptance, and each turned out to need
+# neither — but for different reasons, so the pair is worth keeping written
+# down.
+#
+# The directory-sync tolerance was a condition, not a filesystem: naming it
+# durabilityUnknown made it reachable with nothing added to the production
+# path. The key write really was about making a write fail, and the way in
+# was that the failure need not come from the filesystem — RLIMIT_FSIZE at
+# zero refuses every write to a regular file while open, sync and close all
+# still succeed. Both were called unreachable after looking at the
+# filesystem and stopping there.
+internal/evidence 5
 # internal/adapter measured 2026-09-27 at 115 mutants, 105 caught. The ten
 # survivors are four shapes: seven error checks that decide nothing but
 # whether a debug line is logged; a channel buffer where both paths receive
