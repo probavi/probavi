@@ -51,7 +51,10 @@
 #
 # Every package listed here is run in full, so this file is also the
 # scope: a package joins the run by being declared, with a measured
-# ceiling attached.
+# ceiling attached. The pull-request half of the workflow reads that list
+# from here rather than carrying a copy, and measures the entries whose
+# directory the branch touched — so a package added here is measured on a
+# pull request from the moment it is added, with nothing else to remember.
 # internal/evidence measured 2026-09-28 at 253 mutants, 244 caught, once the
 # canonical comparison's boundaries, the bound on the walk back to a rune
 # boundary, the damaged-line warning and Close's choice of failure were all
