@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"errors"
+	"math"
 	"os"
 	"syscall"
 )
@@ -25,8 +26,10 @@ import (
 // alive, so a sandbox whose owner died can survive until its pid is free
 // again. That errs toward leaving a sandbox behind rather than destroying
 // a live one, which is the right direction for a sweep to be wrong in.
+//
+// What it refuses before asking is representableAsPid's business, below.
 func ProcessAlive(pid int) bool {
-	if pid <= 0 {
+	if !representableAsPid(pid) {
 		return false
 	}
 	proc, err := os.FindProcess(pid)
@@ -35,4 +38,28 @@ func ProcessAlive(pid int) bool {
 	}
 	err = proc.Signal(syscall.Signal(0))
 	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+// representableAsPid reports whether a number is one kill(2) could be asked
+// about at all.
+//
+// It refuses two things, and they are the same thing twice. Zero and the
+// negatives are kill's wildcards — signalling every process in the group,
+// or every process the caller may signal, is not a question this function
+// may ever ask. A number too large is that same question through a
+// different door: kill takes a pid_t, which is 32 bits wide, so a wider
+// number arrives truncated and MaxInt64 arrives as -1. Measured before this
+// existed, ProcessAlive answered alive for it.
+//
+// MaxInt32 is that width rather than a line somebody drew. The more direct
+// way to say it — whether the number survives int32 — is what gosec reads
+// as the overflow itself rather than as the check for one, and a //nolint
+// on correct code is what AGENTS.md §3 forbids in the same breath as
+// weakening a linter. So the width is named instead.
+//
+// It is a function rather than a condition because the kernel hides its
+// answer: a pid this refuses would be refused by the kernel too, for its
+// own reasons, so the only place the rule can be read is here.
+func representableAsPid(pid int) bool {
+	return pid > 0 && pid <= math.MaxInt32
 }
