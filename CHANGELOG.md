@@ -13,6 +13,29 @@ always called out explicitly.
 
 ### Changed
 
+- **`internal/sandbox/remotehost` joined the mutation run**, at a ceiling of
+  4 — the last of the six packages the scope measurement queued. Every
+  package that decides what a signed record says, or whether a sandbox
+  holding production data is destroyed, is now measured. It had 101 mutants
+  with 18 survivors; seven assertions closed fourteen.
+
+  **The systemd floor is a floor at both ends.** A target running exactly
+  the minimum supported version was never accepted by a test — only one
+  below and one well above were — and the version line was only ever fed in
+  its chatty form. `systemctl --version` omits the bracketed release on
+  stripped builds, and two fields is all the rule needs, so the shorter line
+  is the one a parser gets wrong and the one nothing exercised.
+
+  The rest are the twins of what the docker and Kubernetes providers gave:
+  an exec timeout of zero meaning *no bound asked for* rather than *a bound
+  of zero*; a slice answering with fewer fields than the script asked for
+  being a missing field rather than a panic; the smallest reported limit
+  still being a limit, in bytes and in the percentage systemd reports a CPU
+  quota as; a suffix that does not repeat; facts that stay absent when the
+  target did not answer; and the cleanup log line that is the only trace of
+  a slice and a workspace left behind on a host Probavi does not otherwise
+  touch.
+
 - **`internal/sandbox/k8s` joined the mutation run**, at a ceiling of 4. It
   measured 96 mutants with 16 survivors, and nine assertions closed twelve.
 

@@ -208,6 +208,14 @@ internal/sandbox/docker 3
 # answers agree. A port to a platform that saturates upward instead would
 # make this mutant observable, and it would then be a missing assertion.
 internal/sandbox/k8s  4
+# internal/sandbox/remotehost measured 2026-09-29 at 101 mutants, 97 caught,
+# after seven assertions closed fourteen. Its four survivors are the same
+# four the k8s provider carries, for the same reasons: two widen an index
+# test on a string TrimSpace has already stripped, one lets a zero through
+# to a conversion the next guard refuses, and one turns on what an
+# out-of-range float becomes as an int64 — equivalent by measurement rather
+# than by construction, as the k8s entry above explains at length.
+internal/sandbox/remotehost 4
 # Nothing this file used to name is outside the run any more: internal/config
 # and internal/core, the last two, joined on 2026-09-28. Every package that
 # decides what a signed record says is now measured.
