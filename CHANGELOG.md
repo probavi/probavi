@@ -13,6 +13,27 @@ always called out explicitly.
 
 ### Changed
 
+- **The directory-sync tolerance has a name, and `internal/evidence`'s
+  mutation ceiling goes from 7 to 6.** A directory fsync is how this package
+  promises that the *name* pointing at a fsynced file survives a crash, and
+  exactly one failure is forgiven: `EINVAL`, which is what a filesystem that
+  does not implement the operation answers. Everything else is a promise it
+  cannot make.
+
+  The condition had no test and could not have had one where it sat, because
+  no ordinary filesystem answers a directory fsync with anything but success
+  or `EINVAL`. The open question was a seam or a permanent survivor, and the
+  answer turned out to be neither: what could not be reached was **a
+  condition, not a filesystem**. It is now `durabilityUnknown(err)`, a
+  function with the reasoning as its doc comment, and a test calls it with
+  the errors themselves — nothing added to the production path, nothing
+  injected, no parameter that exists for a test.
+
+  The wrapped cases are the ones that earn their place. `os.File.Sync`
+  reports through a `*fs.PathError`, so a comparison against the bare errno
+  would pass over nothing at all, and every host without directory fsync
+  would fail its drills.
+
 - **`internal/sandbox/remotehost` joined the mutation run**, at a ceiling of
   4 — the last of the six packages the scope measurement queued. Every
   package that decides what a signed record says, or whether a sandbox
