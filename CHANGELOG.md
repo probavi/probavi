@@ -13,6 +13,33 @@ always called out explicitly.
 
 ### Changed
 
+- **A key write that could not happen is asserted, and
+  `internal/evidence`'s mutation ceiling goes from 6 to 5** — leaving the
+  first declared package with **nothing assertable left in it**: every
+  remaining survivor is a change no input can distinguish.
+
+  `writeExclusive` syncs only when the write succeeded, and the order
+  matters more than it looks. Reversed, a failed write has its error
+  replaced by the sync's — and syncing a file nothing was written to
+  **succeeds** — so the function reports success and keeps the empty key
+  file. A signing key that is not the key is worse than no key: the records
+  naming its id already exist, so it cannot be rotated away from and nobody
+  can verify what it signed.
+
+  This was recorded as unreachable and was not. The file is opened
+  `O_CREATE|O_EXCL` at a path the caller names, and no ordinary filesystem
+  fails the write that follows — but **the failure does not have to come
+  from the filesystem**. `RLIMIT_FSIZE` is the process's own limit on how
+  large a file it may write, and at zero every write to a regular file is
+  refused with `EFBIG` while open, sync and close all still succeed. No
+  seam, no injection, no parameter that exists for a test.
+
+  Both decisions `.mutation-budget` carried are now settled, and neither
+  went the way the question was framed. The directory-sync tolerance was a
+  condition wearing no name; this one really was about making a write fail.
+  What they share is how they came to be called unreachable: by looking at
+  the filesystem and stopping there.
+
 - **The directory-sync tolerance has a name, and `internal/evidence`'s
   mutation ceiling goes from 7 to 6.** A directory fsync is how this package
   promises that the *name* pointing at a fsynced file survives a crash, and
