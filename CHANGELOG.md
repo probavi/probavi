@@ -13,6 +13,35 @@ always called out explicitly.
 
 ### Changed
 
+- **`internal/sandbox/cli` joined the mutation run**, at a ceiling of 2. It
+  measured 9 mutants with **6 survivors** — the worst rate of the fourteen
+  packages now declared — and it is `limitedWriter` plus the subprocess
+  plumbing every provider that shells out shares. Four assertions closed
+  four:
+
+  **A single environment entry reaches the child.** Those entries exist so a
+  secret can reach a CLI without appearing in argv, where every local user
+  could read it out of the process list, and every case before this passed
+  nil — so nothing said a non-nil one arrives. The mutant that dropped
+  exactly one entry dropped the common case of exactly one secret.
+
+  **A run the context ended is identifiable as one, and a command that never
+  started names its own cause.** The second is asserted through
+  `errors.Unwrap` rather than a message substring: an error naming no cause
+  is one a caller can only match on wording.
+
+  **Both edges of the capture cap.** A write that exactly fills it lost
+  nothing, and the last byte of room is still used. Every case before this
+  crossed the cap in a single oversized write — the one shape that never
+  leaves one byte of room and never fills it exactly.
+
+  One sharp edge was found and **written down rather than changed**: a
+  deadline that expires *while* the command runs kills it, so `cmd.Run`
+  reports an `ExitError` and `Runner`'s documented contract turns that into
+  an exit code with no error at all. The caller consults its own context,
+  which is what `internal/core` does. It is now asserted instead of being a
+  thing to discover.
+
 - **`internal/sandbox/registry` joined the mutation run** at a ceiling of 0,
   and the six packages measured beside it are queued rather than declared.
 
