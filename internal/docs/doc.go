@@ -18,4 +18,10 @@
 // named in install instructions, and the refusal to carry key material.
 // They are collected here rather than beside what they check because none
 // of them belongs to a package: they are claims about the tree.
+//
+// One of them is a claim about the tests themselves, which is a different
+// thing and says so: a test function that reaches a Skip and nothing that
+// could fail it reports as tested whatever the code does. That shape was
+// found in this repository, and it is the narrowest of three — the other
+// two took reading, and the gate does not pretend to catch them.
 package docs

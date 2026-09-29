@@ -517,6 +517,27 @@ always called out explicitly.
 
 ### Added
 
+- **A gate for a test that asserts nothing but a skip**
+  (`internal/docs/skiponly_test.go`). It parses every `_test.go` in both
+  modules and reports a test, fuzz target or benchmark that reaches a `Skip`
+  and nothing that could fail it — asserting directly, or through a helper
+  the repository's own convention names `assert*`, `must*`, `require*` or
+  `want*`. A helper outside the convention reports its caller, and both ways
+  out are improvements: rename it, or assert in the test that owns the claim.
+
+  A test that skips on a false answer cannot tell *this platform cannot do
+  that* from *the thing under test stopped working*, and the worst of the
+  three found in this repository had a skip guard for its entire body: it
+  skipped when the function it was named for answered, and passed without a
+  single check when it did not.
+
+  What the gate deliberately does not catch is the other two shapes — a skip
+  whose condition calls the function under test where the rest of the
+  function does assert, and a skip sitting in front of an assertion it makes
+  unreachable. Neither is mechanically distinguishable from a legitimate
+  precondition, so it closes the class that can be closed and the package's
+  doc comment says exactly that.
+
 - **A fuzz target for `internal/manifest`** (`FuzzCheck`). Four packages
   carried one — `internal/config`, `internal/evidence`, `internal/adapter`,
   `spec/evidence` — and they are exactly the packages that read a document
