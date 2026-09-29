@@ -76,3 +76,11 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+// Probe exists to verify that the branch rule refuses a merge when a change
+// adds a surviving mutant, and nothing asserts it on purpose. It ships on a
+// throwaway branch and is deleted with it — if this reaches main, the
+// mutation gate did not do the one thing it was built for.
+func Probe(n int) bool {
+	return n > 0
+}
