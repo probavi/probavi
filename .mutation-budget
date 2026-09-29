@@ -192,6 +192,22 @@ internal/cli         2
 # already stripped, so the index can never be the value they differ at, and
 # one lets a zero through to a division whose result the next guard refuses.
 internal/sandbox/docker 3
+# internal/sandbox/k8s measured 2026-09-29 at 96 mutants, 92 caught, after
+# nine assertions closed twelve. Three survivors are provably equivalent:
+# two widen an index test on a string TrimSpace has already stripped, and
+# one lets a zero through to a conversion whose result the next guard
+# refuses.
+#
+# The fourth is equivalent by measurement rather than by construction, and
+# says so here because that is a weaker claim than the rest of this file
+# makes. Reading the parse error and the sign the wrong way round matters
+# only for a quantity too large for a float64, which ParseFloat returns as
+# an infinity — and Go leaves the conversion of an out-of-range float to an
+# int64 implementation-defined. On the platforms this builds for it lands
+# on the most negative int64, which the next guard refuses, so the two
+# answers agree. A port to a platform that saturates upward instead would
+# make this mutant observable, and it would then be a missing assertion.
+internal/sandbox/k8s  4
 # Nothing this file used to name is outside the run any more: internal/config
 # and internal/core, the last two, joined on 2026-09-28. Every package that
 # decides what a signed record says is now measured.

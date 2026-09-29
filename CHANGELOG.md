@@ -13,6 +13,32 @@ always called out explicitly.
 
 ### Changed
 
+- **`internal/sandbox/k8s` joined the mutation run**, at a ceiling of 4. It
+  measured 96 mutants with 16 survivors, and nine assertions closed twelve.
+
+  **Requests are set equal to limits so that a pod holding restored
+  production data is not evicted under node pressure** — and the guard that
+  decides whether to emit them at all accepted waiting for a *second* limit.
+  A drill configured with only memory, or only cpus, would have landed in
+  the burstable class, where the eviction the code was written to prevent is
+  exactly what happens.
+
+  **An empty namespace is no namespace.** A drill naming `namespace: ""`
+  says the same thing as one naming none, and taking it literally sends the
+  Job to `-n ""` — not the default namespace but no namespace at all.
+
+  **`Facts` stays absent when kubectl did not answer.** The existing case
+  could not see this: its failing call printed nothing, so a failure that
+  was believed parsed to the same emptiness. A non-zero exit that still
+  printed a perfectly good pod is what distinguishes them.
+
+  Also: a pod answering with fewer fields than the jsonpath asked for is a
+  missing field rather than a panic; the smallest quantity that survives
+  the conversion to thousandths is kept while one that rounds away stays
+  absent; `Ti` joined the quantity table, which covered five of the eight
+  suffixes; and the same exec-timeout, stdin-flag, suffix-uniqueness and
+  cleanup-log statements the docker provider gained.
+
 - **`internal/sandbox/docker` joined the mutation run**, at a ceiling of 3.
   It measured 74 mutants with 12 survivors, and six assertions closed nine.
   The provider turns what the runtime reports into two record fields and
