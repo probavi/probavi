@@ -6,10 +6,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -422,4 +425,42 @@ func TestTheDamagedLineWarningFiresExactlyWhenThereIsDamage(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestOnlyTheFilesystemThatCannotBeAskedIsPassedOver: a directory sync is
+// how this package promises that the *name* pointing at a fsynced file
+// survives a crash, and exactly one failure is forgiven — the filesystem
+// that does not implement the operation. Everything else is a promise it
+// cannot make.
+//
+// The condition had no test and could not have had one while it lived
+// inside syncDir: no ordinary filesystem answers a directory fsync with
+// anything but success or EINVAL, so the tolerance was reachable only by
+// the errors themselves. Naming the decision is what makes it reachable,
+// and the mutation run is what asked for the name.
+//
+// The wrapped cases are the ones that matter. os.File.Sync reports through
+// a *fs.PathError, so a comparison against the bare errno would pass over
+// nothing at all and every host without directory fsync would fail its
+// drills.
+func TestOnlyTheFilesystemThatCannotBeAskedIsPassedOver(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"nothing failed":                  {nil, false},
+		"the bare errno":                  {syscall.EINVAL, false},
+		"the errno Sync reports":          {&fs.PathError{Op: "sync", Path: "/d", Err: syscall.EINVAL}, false},
+		"a wrapped errno":                 {fmt.Errorf("sync: %w", syscall.EINVAL), false},
+		"an I/O error":                    {syscall.EIO, true},
+		"an I/O error as Sync reports it": {&fs.PathError{Op: "sync", Path: "/d", Err: syscall.EIO}, true},
+		"a permission error":              {fs.ErrPermission, true},
+		"something with no errno":         {errors.New("the disk went away"), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := durabilityUnknown(tc.err); got != tc.want {
+				t.Errorf("durabilityUnknown(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
 }

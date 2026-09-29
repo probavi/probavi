@@ -196,10 +196,7 @@ func (s *Store) closeTornTail() error {
 // it is worse: the records naming that key id already exist, so the key
 // cannot be rotated away from, and nobody can verify what it signed.
 //
-// EINVAL means the filesystem does not support syncing a directory. That
-// is not a reason to refuse to run a drill, so it is the one error passed
-// over; anything else is a durability guarantee this package cannot make
-// and says so rather than pretending.
+// Which sync errors are passed over is durabilityUnknown's business, below.
 func syncDir(path, what string) error {
 	d, err := os.Open(filepath.Dir(path))
 	if err != nil {
@@ -207,13 +204,32 @@ func syncDir(path, what string) error {
 	}
 	serr := d.Sync()
 	cerr := d.Close()
-	if serr != nil && !errors.Is(serr, syscall.EINVAL) {
+	if durabilityUnknown(serr) {
 		return errors.Join(fmt.Errorf("sync %s directory: %w", what, serr), cerr)
 	}
 	if cerr != nil {
 		return fmt.Errorf("close %s directory: %w", what, cerr)
 	}
 	return nil
+}
+
+// durabilityUnknown reports whether a directory sync left this package
+// unable to promise what it promises.
+//
+// EINVAL means the filesystem does not support syncing a directory. That is
+// not a reason to refuse to run a drill, so it is the one error passed
+// over; anything else is a durability guarantee this package cannot make,
+// and it says so rather than pretending. Sync reports through a
+// *fs.PathError, so the test is errors.Is rather than equality — a
+// comparison against the bare errno would pass over nothing at all.
+//
+// It is a function rather than a condition inside syncDir because it is a
+// decision with a reason, and a decision no test could reach was the only
+// thing wrong with it: no ordinary filesystem answers a directory fsync
+// with anything but success or EINVAL, so the tolerance could only be
+// exercised by the errors themselves.
+func durabilityUnknown(err error) bool {
+	return err != nil && !errors.Is(err, syscall.EINVAL)
 }
 
 // errLockHeld is the one lock failure with a meaning of its own: another
