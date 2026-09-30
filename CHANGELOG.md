@@ -11,6 +11,40 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Changed
+
+- **A sandbox parameter naming an isolation class is configuration, never
+  evidence.** The second of the three sandbox doors
+  (`docs/sandbox-providers.md` §7) is answered, and the narrower branch
+  was taken: such a parameter — `runtime: runsc`, `runtimeClassName: kata`
+  — may ship, and **no surface may describe it as evidence of isolation**.
+  `sandbox.params` records what was *requested*, never what ran; what a
+  record says about a sandbox is what §6.1 asks a provider to read back,
+  and an isolation class is not in that set.
+
+  §6.2 states why the other branch was not taken rather than only that it
+  was not. Reading the class back would be `probavi-evidence/4` for a
+  claim only one of the two candidate surfaces can honestly make: the
+  docker CLI reports the runtime a container ran under, while a Kubernetes
+  pod's `runtimeClassName` is read back out of the spec that *requested*
+  it — which §6.1's first rule forbids reporting as a fact. A schema
+  version spent to record one provider's answer and the other's null, for
+  a parameter nobody has asked for yet, is a one-way door taken early.
+  Nothing in the narrow answer needs undoing if a runtime later becomes
+  readable back on both: a parameter documented as configuration can gain
+  a fact beside it without contradicting anything already signed.
+
+  Two consequences are recorded with it. The `runsc`/`kata` parameter is
+  no longer blocked by this door — what remains in front of it is the
+  ordinary one-way door of a new config key, and the per-engine table it
+  still owes, because an isolation class changes the syscall surface an
+  engine runs against and `docs/capabilities.md` forbids widening
+  "verified against" into "supports". And the podman/provider-id question
+  — an operator running podman through its docker-compatible shim gets
+  records reading `provider: docker` — stops waiting on this door and
+  stands on its own, with one of its two answers now constrained to a
+  §6.1 fact read back from the runtime.
+
 ### Added
 
 - **An endpoint is not a parameter — now enforced, not only written.**
