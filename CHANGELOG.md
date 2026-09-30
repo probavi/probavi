@@ -11,6 +11,37 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **An endpoint is not a parameter — now enforced, not only written.**
+  `docs/sandbox-providers.md` §5 and `docs/drill-config.md` §3.4 both say
+  that `sandbox.params` is copied into the signed record verbatim and
+  unfiltered, so no connection detail and nothing secret may be declared
+  there. Nothing checked it: a provider declaring `host` or `endpoint`
+  would have compiled, validated, and signed it.
+
+  `internal/sandbox/registry` now reads every shipped descriptor and fails
+  the build gate on a declared parameter whose name carries an endpoint
+  word (`host`, `endpoint`, `url`, `socket`, `target` and their kind) or a
+  credential word (`password`, `token`, `key`, `secret` and theirs).
+  Matching is over whole segments of the key, so `keyspace` and `network`
+  pass while `repo.host` and `daemon_socket` do not, and the matcher has
+  its own table test — a gate that recognises nothing passes just as
+  quietly as the rule it replaces.
+
+  This answers the first of the three sandbox doors in §7, in the
+  direction all three shipped providers already take: the endpoint lives
+  in the environment (`DOCKER_HOST`, `KUBECONFIG`, `PROBAVI_SSH_TARGET`).
+  It does not decide that an endpoint may never be configured — it decides
+  that acquiring one means removing a word from a named list, with a
+  reason, in a pull request, which is what a one-way door asks for.
+
+  **What the gate cannot reach is stated where it matters** rather than
+  left implied: it reads what a provider *declares*, not what an operator
+  *writes*, and the `env.` family accepts any key, so `env.PGPASSWORD`
+  still reaches a record verbatim. No inspection tells that from an
+  ordinary string.
+
 ### Security
 
 - **The drill's secrets are masked out of everything a record carries.**

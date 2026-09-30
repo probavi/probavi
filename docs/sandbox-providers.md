@@ -166,11 +166,31 @@ host from `PROBAVI_SSH_TARGET`, all environment-only. Most candidate
 providers address a remote system by name, so each of them meets this
 first: either the endpoint stays in the environment as it does for all
 three, or the descriptor gate learns to refuse a parameter that carries
-one. A provider that declared `host` or `endpoint` would compile,
-validate, and sign it.
+one. **It has.** `internal/sandbox/registry` reads every shipped
+descriptor and fails the build gate on a declared parameter whose name
+carries an endpoint word — `host`, `endpoint`, `url`, `socket`, `target`
+and their kind — matched as whole segments of the key, so `keyspace` and
+`network` are unaffected while `repo.host` and `daemon_socket` are not.
+Before that gate, a provider declaring `host` would have compiled,
+validated, and signed it.
+
+The word list is where the conversation has to happen. A provider that
+genuinely needs an endpoint in configuration cannot acquire one quietly:
+it removes a word from that list and says why, in a pull request, which
+is what the door above asks to happen before such a provider exists
+rather than during it.
 
 Credentials are not parameters either, for the same reason and more
-sharply: no provider accepts a secret through config.
+sharply: no provider accepts a secret through config, and the same gate
+refuses a declared parameter named like one.
+
+**What that gate cannot reach, stated rather than implied:** it reads
+what a *provider declares*, not what an *operator writes*. The `env.`
+family accepts any key, so `env.PGPASSWORD` is a value an operator can
+put into `sandbox.params` and therefore into a signed record. No
+inspection distinguishes that from an ordinary string, which is why the
+rule is stated where the operator writes it — `docs/drill-config.md` §3.4
+— rather than enforced here.
 
 ## 6. What a record may say about a sandbox
 
@@ -232,11 +252,16 @@ below is.
 ## 7. Three doors, each answered before the provider that needs it
 
 These are one-way doors. Each is to be answered in a spec change *before*
-the first provider that needs it, not during it.
+the first provider that needs it, not during it. One of the three is
+answered; two are open.
 
-1. **Where a remote provider's endpoint lives** — §5. Either the
-   environment, as for all three shipped providers, or the descriptor gate
-   grows a refusal.
+1. **Where a remote provider's endpoint lives** — §5. **Answered
+   2026-09-30: the environment, as for all three shipped providers, and
+   the descriptor gate grew the refusal that makes it true.** What the
+   answer settles is not that an endpoint may never be configured — it is
+   that acquiring one means removing a word from a named list, with a
+   reason, in a pull request, rather than declaring a parameter nobody
+   looks at. §5 states the gate and the one thing it cannot reach.
 2. **What a sandbox parameter proves** — §6. Either the core reads such a
    value back from the runtime and records what it observed, which is a
    schema question and therefore a spec change first, or a parameter of
