@@ -8,11 +8,10 @@
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/probavi/probavi/badge)](https://scorecard.dev/viewer/?uri=github.com/probavi/probavi)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14080/badge)](https://www.bestpractices.dev/projects/14080)
 
-[![Release](https://img.shields.io/github/v/release/probavi/probavi?sort=semver&label=release)](https://github.com/probavi/probavi/releases/latest)
+[![Release](https://img.shields.io/github/v/release/probavi/probavi?label=release)](https://github.com/probavi/probavi/releases/latest)
 [![License](https://img.shields.io/github/license/probavi/probavi?label=license)](LICENSE)
 [![Go](https://img.shields.io/github/go-mod/go-version/probavi/probavi?label=go)](go.mod)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS-informational)](docs/packaging.md)
-[![Downloads](https://img.shields.io/github/downloads/probavi/probavi/total?label=downloads)](https://github.com/probavi/probavi/releases)
 
 <!-- capabilities:engine-badges:start -->
 [![Aerospike](https://img.shields.io/badge/Aerospike-4B5563)](adapters/aerospike/README.md)
