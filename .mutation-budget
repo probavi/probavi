@@ -176,17 +176,24 @@ internal/sandbox/registry 0
 internal/sandbox/cli 2
 # internal/sandbox decides whether a sandbox holding restored production
 # data is destroyed or left behind, which AGENTS.md §2.2 calls sacred.
-# Measured 2026-09-29 at 26 mutants, 22 caught, after seven assertions
-# closed seven. The four survivors were each checked by running them:
+# Measured 2026-09-29 at 29 mutants, 25 caught. The four survivors were each
+# checked by running them:
 #
 #   - owner.go's `pid <= 0` widened to `< 0` lets pid zero through to
 #     ProcessAlive, which refuses it — the guard the next line repeats;
-#   - process.go's same widening lets pid zero reach os.Process.Signal,
-#     which refuses Pid 0 with "process not initialized". The answer is
-#     unchanged; it just comes from the runtime rather than from here;
+#   - owner.go's `err != nil || pid <= 0` narrowed to `&&` lets a number
+#     too wide to be a pid through, and ProcessAlive now refuses that too.
+#     This one is newly equivalent: it was caught until representableAsPid
+#     existed, by the test that still asserts the behaviour. Two guards for
+#     one hazard is what belt and braces costs, and the outer one's mutant
+#     is the price;
 #   - the two on the stat parse's `end < 0` differ only for a line whose
 #     first byte is ')'. /proc cannot produce one, and picking a behaviour
 #     for it would be inventing a contract rather than asserting one.
+#
+# process.go's own guard used to be a fifth. Naming it representableAsPid
+# put both its edges where a test can read them, because the kernel answers
+# the same numbers for its own reasons and hides which of the two spoke.
 internal/sandbox     4
 # internal/cli declares the command tree and the exit codes docs/capabilities.json
 # states as the CLI surface. Measured 2026-09-29 at 39 mutants, 35 caught

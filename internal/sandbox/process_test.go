@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"math"
 	"os"
 	"os/exec"
 	"testing"
@@ -45,6 +46,48 @@ func TestProcessAliveRejectsNonPositive(t *testing.T) {
 	for _, pid := range []int{0, -1, -1000} {
 		if ProcessAlive(pid) {
 			t.Errorf("ProcessAlive(%d) = true, want false", pid)
+		}
+	}
+}
+
+// TestProcessAliveRejectsANumberTooLargeToBeAPid: the same wildcard, reached
+// through a different door. kill(2) takes a pid_t, which is 32 bits wide, so
+// a wider number arrives truncated — math.MaxInt64 arrives as -1, which is
+// "every process the caller may signal", and the call succeeds.
+//
+// Measured before this guard existed: ProcessAlive(math.MaxInt64) answered
+// true. It was unreachable, because OwnerAlive refuses such an id before the
+// pid is ever used and TestAnOwnerIdNoPidCouldHaveOwnsNothing says so — but
+// this function is exported, states the rule in its own comment, and is the
+// place the rule belongs.
+func TestProcessAliveRejectsANumberTooLargeToBeAPid(t *testing.T) {
+	for _, pid := range []int{math.MaxInt32 + 1, math.MaxInt64, math.MinInt64} {
+		if ProcessAlive(pid) {
+			t.Errorf("ProcessAlive(%d) = true; no pid is that wide, and truncated into a "+
+				"pid_t it asks kill(2) a question this function may never ask", pid)
+		}
+	}
+}
+
+// TestRepresentableAsPidIsAskedOfTheNumberNotTheKernel: both edges of the
+// rule are invisible through ProcessAlive, because the kernel refuses the
+// same numbers for its own reasons — ESRCH for one too large to name a
+// process, "not initialized" for zero. Asking the rule directly is the only
+// way to see which of the two answered, and a rule nobody can see is a rule
+// nobody can keep.
+func TestRepresentableAsPidIsAskedOfTheNumberNotTheKernel(t *testing.T) {
+	for pid, want := range map[int]bool{
+		1:                 true,  // the smallest pid there is
+		4194304:           true,  // Linux's default pid_max, comfortably inside
+		math.MaxInt32:     true,  // the widest a pid_t holds: this rule's business ends here
+		math.MaxInt32 + 1: false, // one past it, and truncation begins
+		math.MaxInt64:     false, // arrives as -1: every process the caller may signal
+		0:                 false, // the process group
+		-1:                false, // the other wildcard
+		math.MinInt64:     false,
+	} {
+		if got := representableAsPid(pid); got != want {
+			t.Errorf("representableAsPid(%d) = %v, want %v", pid, got, want)
 		}
 	}
 }

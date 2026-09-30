@@ -13,6 +13,28 @@ always called out explicitly.
 
 ### Changed
 
+- **`ProcessAlive` refuses a number too wide to be a pid.** Its own comment
+  says that signalling a wildcard *is not a question this function may ever
+  ask* — and it guarded zero and the negatives while the same wildcard was
+  reachable from the other end: `kill(2)` takes a `pid_t`, 32 bits wide, so
+  `math.MaxInt64` arrived as `-1`, which means *every process the caller may
+  signal*. Measured before the fix, it answered **alive**.
+
+  Unreachable today — `OwnerAlive` is the only caller and refuses such an id
+  first — so this was a latent hazard behind an exported function rather
+  than a live defect. Fixing the function rather than narrowing its doc
+  comment keeps it correct for any caller; unexporting it would have moved
+  the guarantee to the package boundary, where a second in-package caller
+  reintroduces the hazard silently.
+
+  The rule is `representableAsPid`, a function rather than a condition,
+  because **the kernel hides its answer**: a number this refuses would be
+  refused by the kernel too, for its own reasons, so the only place the rule
+  can be read is where it is written. Both its edges are asserted there.
+  `gosec` reads the direct expression — whether the number survives `int32`
+  — as the overflow rather than the check for one, so the `pid_t` width is
+  named instead of silencing the linter on correct code.
+
 - **A pull request that moves a ceiling and nothing else now measures the
   package whose ceiling moved.** The per-pull-request job selects packages
   by the directory of each changed file, and `.mutation-budget` sits at the
