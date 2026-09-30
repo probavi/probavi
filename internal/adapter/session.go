@@ -99,6 +99,8 @@ type session struct {
 	// protocol is the version this operation is speaking. Every message
 	// of one operation carries the same one, in both directions.
 	protocol string
+	// audit notices an adapter writing a secret into an exec call (§4.1).
+	audit *execAudit
 }
 
 func (r *Runner) start(ctx context.Context) (*session, error) {
@@ -132,6 +134,7 @@ func (r *Runner) start(ctx context.Context) (*session, error) {
 		cmd: cmd, stdin: stdin, stdout: scanner, rawStdout: stdout, rawStderr: stderr,
 		stderrDone: done, stopWatchdog: make(chan struct{}),
 		logger: r.logger, grace: r.opts.Grace,
+		audit: &execAudit{logger: r.logger, secrets: r.secretValues()},
 	}
 	// Watchdog: cmd.Cancel SIGTERMs on context cancellation, but a stubborn
 	// adapter — or a grandchild holding the pipe open — would leave the
@@ -172,7 +175,7 @@ func (s *session) readLoop(ctx context.Context, op, requestID string, verbs Sand
 			if verbs == nil {
 				return nil, crashf("%s: sandbox_call is a protocol violation in this operation", op)
 			}
-			result := dispatchVerb(ctx, verbs, guard, env.SandboxCall)
+			result := dispatchVerb(ctx, verbs, guard, env.SandboxCall, s.audit)
 			if err := s.writeSandboxResult(requestID, result); err != nil && !closedPipe(err) {
 				return nil, crashf("%s: write sandbox_result: %v", op, err)
 			}
@@ -350,6 +353,31 @@ func (r *Runner) buildEnv() []string {
 	}
 	sort.Strings(extra)
 	return append(env, extra...)
+}
+
+// secretValues resolves what this drill's messages must never contain:
+// the values of the variables named in source.credential_env, plus the
+// explicit extras the core generated (the ephemeral sandbox password).
+// Empty values are dropped — a variable the drill declared and the
+// environment does not set is no secret, and would otherwise match every
+// empty exec.env value.
+//
+// It reads the same environment buildEnv passes through, which is the
+// point: what an adapter is given and what it may not write down are two
+// halves of one allow-list.
+func (r *Runner) secretValues() []string {
+	values := make([]string, 0, len(r.opts.CredentialEnv)+len(r.opts.Env))
+	for _, name := range r.opts.CredentialEnv {
+		if v, ok := os.LookupEnv(name); ok && v != "" {
+			values = append(values, v)
+		}
+	}
+	for _, v := range r.opts.Env {
+		if v != "" {
+			values = append(values, v)
+		}
+	}
+	return values
 }
 
 func mustMarshal(v any) json.RawMessage {

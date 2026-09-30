@@ -116,8 +116,10 @@ The adapter process environment is allowlisted by the core:
   `connection.password_env` (§6.2).
 
 Adapters MUST NOT print secret values to stderr and MUST NOT include them in
-any protocol message. `error.message` and `detail` fields are shown to
-humans and stored in logs: redact.
+any protocol message — `exec.env` included, which §4.1 states outright
+because it is the one field that looks like an exception and is not.
+`error.message` and `detail` fields are shown to humans and stored in
+logs: redact.
 
 The core masks the values it knows — those named in `source.credential_env`
 and `PROBAVI_SANDBOX_PASSWORD` — out of every adapter-originated string it
@@ -196,7 +198,7 @@ Args:
 | Field             | Type      | Req. | Meaning |
 |-------------------|-----------|------|---------|
 | `argv`            | string[]  | yes  | Command and arguments; executed directly, no shell. |
-| `env`             | object    | no   | Extra environment for the command (string → string). |
+| `env`             | object    | no   | Extra environment for the command (string → string). **Values are not secret material** — see below. |
 | `stdin_b64`       | string    | no   | Standard input for the command, base64. |
 | `timeout_seconds` | number    | no   | Per-command limit enforced by the core; on expiry the command is killed and the call fails with `timeout`. |
 
@@ -209,6 +211,49 @@ Value:
 | `stderr_b64`       | string  | Captured stderr, same cap. |
 | `truncated`        | boolean | True if either capture hit the cap. |
 | `duration_seconds` | number  | Measured by the core. |
+
+**`env` values MUST NOT carry a secret.** This is §2.5 applied to the one
+field where an adapter could break it: `env` is a JSON object of values
+inside a protocol message, and `put_file` is confined to the drill's
+backup source, so `env` is the only route a secret could take into a
+sandbox. It is closed, deliberately, and what that buys is a property
+worth more than the route: **no protocol message ever contains a secret**,
+so a trace of one is safe to attach to a bug report.
+
+The confusion this invites is worth naming, because §2.5 says secrets
+travel *in environment variables* and this is an environment variable. The
+distinction is who puts it there. An adapter **is** given the values of the
+variables the drill declared in `source.credential_env` — that is §2.5's
+second bullet, and it is how an adapter reads an encrypted backup at all.
+It may use them. It may not write them down, and a value in `env` is
+written down: into a message, where a reader of the conversation sees it.
+
+What an adapter does instead, in the two cases that arise:
+
+- **A password the adapter chooses.** Use a publicly documented constant
+  and say so where an operator will read it. Several adapters do —
+  `couchdb`, `mssql` and `neo4j` — and it is sound rather than a
+  concession: the sandbox publishes no ports and defaults to no network
+  (`sandbox-providers.md` §4), so the credential protects nothing
+  reachable. This is also why §2.5's `SHOULD` about
+  `PROBAVI_SANDBOX_PASSWORD` is unfollowed by every adapter in the
+  catalogue: setting an engine's password to that value would require
+  sending the value, so the `SHOULD` cannot be met without breaking the
+  `MUST`. The core still uses the secret itself — it substitutes it into
+  `sql_runner.env` for checks — but no adapter can.
+- **A credential the operator holds**, such as a passphrase that decrypts
+  a repository the engine's own tool would read. There is no route today,
+  and the answer is not to open one narrowly: decrypt while staging
+  (`backup-staging.md` §7.1, which needs no code), or build the sandbox
+  image so the tool is there and the operator's own arrangement supplies
+  the key (§7.3). §11.2 records the two shapes a future version would use
+  and what they wait on.
+
+The core notices a violation rather than refusing it: an `env` value equal
+to a secret it holds is reported as a warning naming the variable, never
+the value. Refusing would fail the drill of an operator who cannot fix
+someone else's adapter, for a value that reaches no record and no log by
+this route — so the report goes to the party that can act on it.
 
 ### 4.2 `put_file`
 
@@ -773,12 +818,47 @@ What v1 deliberately does **not** carry, each for a stated reason:
   `docs/engine-catalog.md` whose cost falls on the evidence schema
   (a measured `fetch` phase), not here. A verb added against no demand is
   a verb every adapter author reads forever.
+- **A protocol-clean way to put a secret inside a sandbox.** §4.1 closes
+  `exec.env` to secret values and keeps the invariant that no message
+  carries one. Two shapes would open the route without breaking it, and
+  both are recorded here rather than shipped, because **no adapter in the
+  catalogue needs either** — the same reason the streaming verb is absent,
+  and it carries the same weight: an argument added against no demand is
+  an argument every adapter author reads forever.
+
+  The first is `exec.env_from`: a second map on the verb, sandbox variable
+  name → the name of a variable the drill declared in
+  `source.credential_env`, which the core resolves against the allow-list
+  it already applies to `connection.password_env`. Values never cross;
+  a name in both `env` and `env_from` is `invalid_request`.
+
+  The second is narrower and answers the `SHOULD` in §2.5 that no adapter
+  can follow: a `probe` declaration naming the variable under which the
+  core should inject `PROBAVI_SANDBOX_PASSWORD` into the sandbox at
+  creation — `POSTGRES_PASSWORD` for one engine, `MYSQL_ROOT_PASSWORD` for
+  another. A name is not a secret, the core creates the sandbox and so
+  needs no message to set its environment, and an adapter could then
+  declare `connection.password_env: PROBAVI_SANDBOX_PASSWORD` truthfully.
+  What it would replace is three adapters' publicly documented constants,
+  which are already sound behind a sandbox that publishes no ports — so
+  the gain is real but small, and smaller than a major version.
+
 - **New error codes.** §5's registry is unchanged, and that is deliberate:
   everything v1 adds is refused with `invalid_request` or is a core-side
   configuration refusal that never reaches an adapter.
 
 ## Changelog
 
+- 2026-09-30 (clarification within v1, no wire change): §4.1 states
+  outright that `exec.env` values may not carry a secret, which §2.5
+  already required of every message and which nothing said of the one
+  field where an adapter could break it. No message, verb, field or error
+  code changes; what the core added is a warning when it notices a
+  violation, which is not observable to an adapter. §2.5 gains the
+  cross-reference and the reason its `PROBAVI_SANDBOX_PASSWORD` `SHOULD`
+  is unfollowed by the whole catalogue: meeting it would require sending
+  the value. §11.2 records the two shapes that would open the route in a
+  later version, and what they wait on.
 - v1 (2026-09-25): three optional `probe` declarations and nothing else.
   `checks` lets an adapter declare the statement for a named built-in in
   its own engine's language, replacing SQL the core composed for engines

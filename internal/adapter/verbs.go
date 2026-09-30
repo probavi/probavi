@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -52,13 +55,50 @@ type putFileValue struct {
 	DurationSeconds float64 `json:"duration_seconds"`
 }
 
+// execAudit holds what one drill needs to notice an adapter writing a
+// secret into a protocol message, which §2.5 and §4.1 forbid. A nil
+// *execAudit audits nothing, which is what an operation with no
+// credentials wants.
+type execAudit struct {
+	logger *slog.Logger
+	// secrets are the values of the variables the drill declared in
+	// source.credential_env plus the core's ephemeral sandbox password —
+	// the same closed list internal/redact masks with.
+	secrets []string
+}
+
+// check reports an adapter that put a secret value into exec.env.
+//
+// It warns rather than failing the call, deliberately. The call is
+// well-formed and the sandbox needs what it asks for; the mistake belongs
+// to whoever wrote the adapter, and an adapter is an external process the
+// drill's operator may not control — so failing the drill would punish
+// the party that cannot fix it, for a value that reaches no record and no
+// log by this route. The warning names the variable and never the value:
+// a message written because a secret was mishandled must not be the place
+// it finally leaks.
+func (a *execAudit) check(env map[string]string) {
+	if a == nil || len(a.secrets) == 0 {
+		return
+	}
+	for _, name := range slices.Sorted(maps.Keys(env)) {
+		if slices.Contains(a.secrets, env[name]) {
+			a.logger.Warn("adapter put a declared credential's value into exec.env, "+
+				"which the protocol forbids (§2.5, §4.1): secrets travel in environment variables, "+
+				"never inside a protocol message — report it to the adapter's author",
+				"variable", name)
+		}
+	}
+}
+
 // dispatchVerb fulfills one sandbox call. Errors returned as (result.ok ==
 // false) do not abort the operation — the adapter decides (§3.3); only a
 // nil return with error means the core itself must give up.
-func dispatchVerb(ctx context.Context, verbs SandboxVerbs, guard func(string) (string, error), call *sandboxCall) sandboxResult {
+func dispatchVerb(ctx context.Context, verbs SandboxVerbs, guard func(string) (string, error),
+	call *sandboxCall, audit *execAudit) sandboxResult {
 	switch call.Verb {
 	case "exec":
-		return dispatchExec(ctx, verbs, call)
+		return dispatchExec(ctx, verbs, call, audit)
 	case "put_file":
 		return dispatchPutFile(ctx, verbs, guard, call)
 	default:
@@ -66,11 +106,12 @@ func dispatchVerb(ctx context.Context, verbs SandboxVerbs, guard func(string) (s
 	}
 }
 
-func dispatchExec(ctx context.Context, verbs SandboxVerbs, call *sandboxCall) sandboxResult {
+func dispatchExec(ctx context.Context, verbs SandboxVerbs, call *sandboxCall, audit *execAudit) sandboxResult {
 	args := execArgs{}
 	if err := json.Unmarshal(call.Args, &args); err != nil || len(args.Argv) == 0 {
 		return verbError(call.CallID, CodeInvalidRequest, false, "malformed exec args")
 	}
+	audit.check(args.Env)
 	stdin, err := base64.StdEncoding.DecodeString(args.StdinB64)
 	if err != nil {
 		return verbError(call.CallID, CodeInvalidRequest, false, "exec stdin_b64 is not valid base64")

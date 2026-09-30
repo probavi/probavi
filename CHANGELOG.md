@@ -13,6 +13,52 @@ always called out explicitly.
 
 ### Changed
 
+- **`exec.env` may not carry a secret, and the core says so when one does.**
+  A clarification within `probavi-adapter/1` — no message, verb, field or
+  error code changes, which is what §8 permits inside a frozen version.
+
+  Adapter-protocol §2.5 has always said secrets travel only in environment
+  variables and never inside a JSON payload. Nothing said it of the one
+  field where an adapter could break it: `exec.env` is a JSON object of
+  values, and `put_file` is confined to the drill's backup source, so
+  `exec.env` was the only route a secret could take into a sandbox. §4.1
+  now closes it outright, and states what that buys — **no protocol
+  message ever contains a secret**, so a trace of one is safe to attach to
+  a bug report.
+
+  §4.1 also names the confusion the rule invites, because §2.5 says secrets
+  travel *in environment variables* and this is one. The distinction is who
+  writes it down: an adapter **is** given the values of the variables the
+  drill declared in `source.credential_env` — that is how it reads an
+  encrypted backup at all — and may use them. It may not put one in a
+  message, where a reader of the conversation sees it.
+
+  **A measured consequence, now written where it will be read:** no adapter
+  in the catalogue references `PROBAVI_SANDBOX_PASSWORD`, not even by name.
+  §2.5's `SHOULD` about setting the restored engine's password to it cannot
+  be met without sending the value, so meeting the `SHOULD` breaks the
+  `MUST`. That is why `couchdb`, `mssql` and `neo4j` ship publicly
+  documented constants, and §4.1 now says that is sound rather than a
+  concession: a sandbox that publishes no ports and defaults to no network
+  leaves the credential protecting nothing reachable. The core still uses
+  the ephemeral secret itself, substituting it into `sql_runner.env` for
+  checks.
+
+  The rule is detectable rather than only written: the core logs a warning
+  when an `exec.env` value equals a secret it holds, naming the variable
+  and never the value. **A warning and not a refusal** — refusing would
+  fail the drill of an operator who cannot fix someone else's adapter, for
+  a value that reaches no record and no log by this route, so the report
+  goes to the party that can act on it.
+
+  §11.2 records the two shapes that would open the route in a later
+  version — `exec.env_from`, and a `probe` declaration naming the variable
+  under which the core injects the ephemeral password at sandbox creation —
+  and why neither ships: no adapter needs either, and an argument added
+  against no demand is one every adapter author reads forever.
+
+### Changed
+
 - **The drill host is not a sandbox target without an isolation boundary.**
   The third and last of the sandbox doors
   (`docs/sandbox-providers.md` §7) is answered: **no provider may place
