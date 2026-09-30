@@ -232,28 +232,59 @@ holds `postgres:16`, which points at different bytes over time; the
 digest is what makes a record say which engine performed the restore.
 That completes the set `adapter.digest` and `env.probavi_digest` began.
 
-What this does **not** close is the other half of the gap above: an
-isolation class is still not evidence, and §7's door is still shut.
+### 6.2 A parameter is configuration, never evidence of isolation
 
-That is exactly right for an image or a memory cap, and not obviously
-right for a parameter naming an isolation class, which an auditor will
-read as a fact about the drill. Until that door is answered (§7), no
-parameter of that kind may ship, and no surface may describe a sandbox
-parameter as evidence of isolation.
+What `probavi-evidence/3` does **not** close is the other half of the gap
+above. Recording what was *requested* is exactly right for an image or a
+memory cap, and not obviously right for a parameter naming an isolation
+class — `runtime: runsc`, `runtimeClassName: kata` — which an auditor
+will read as a fact about the drill.
 
-The provider id has the same property, and the podman measurement sharpened
-it: an operator running podman through its docker-compatible shim gets
-records that read `provider: docker`, because the id names the code path
-and not the runtime that answered it — the same way a remote daemon over
-SSH already does. Recording the observed runtime is one answer and a
-separate provider id is another; neither is worth taking before the door
-below is.
+**Decided 2026-09-30, and it is the narrower of the two answers §7's door
+offered: such a parameter is configuration and nothing more.** A
+parameter of that kind may ship, and **no surface may describe it as
+evidence of isolation** — not this document, not `docs/capabilities.json`,
+not a README, not a report built on a record. What a record says about
+isolation is what §6.1 asks a provider to read back, and an isolation
+class is not in that set.
+
+The other answer — the core reads the class back from the runtime and
+records what it observed — was not taken, and the reason is worth keeping
+because it may change. It would be a new record field, so
+`probavi-evidence/4` and a spec change first, for a claim only one of the
+two candidate surfaces can actually make: the docker CLI can report the
+runtime a container ran under, while a Kubernetes pod's
+`runtimeClassName` is read back out of the spec that *requested* it —
+which §6.1's first rule forbids reporting as a fact. A schema version
+spent to record one provider's answer and the other's null, for a
+parameter nobody has asked for yet, is a one-way door taken early. If a
+runtime later becomes readable back on both, this decision is the thing
+to revisit; nothing in it needs undoing first, because a parameter
+documented as configuration can gain a fact beside it without contradicting
+anything already signed.
+
+**The parameter still owes the per-engine table.** An isolation class
+changes the syscall surface an engine runs against, and
+`docs/capabilities.md` forbids widening "verified against" into
+"supports", so the shipping unit is the parameter plus a measured table of
+which engines were exercised under it — never a blanket statement.
+
+The provider id has the same property as a parameter, and the podman
+measurement sharpened it: an operator running podman through its
+docker-compatible shim gets records that read `provider: docker`, because
+the id names the code path and not the runtime that answered it — the same
+way a remote daemon over SSH already does. That question is no longer
+waiting on a door; it stands on its own, as a catalog question needing a
+demand signal rather than a schema one. The decision above does constrain
+one of its two answers: recording the observed runtime would have to be
+read back from the runtime as a §6.1 fact, never inferred from the
+configured provider id.
 
 ## 7. Three doors, each answered before the provider that needs it
 
 These are one-way doors. Each is to be answered in a spec change *before*
-the first provider that needs it, not during it. One of the three is
-answered; two are open.
+the first provider that needs it, not during it. Two of the three are
+answered; one is open.
 
 1. **Where a remote provider's endpoint lives** — §5. **Answered
    2026-09-30: the environment, as for all three shipped providers, and
@@ -262,10 +293,13 @@ answered; two are open.
    that acquiring one means removing a word from a named list, with a
    reason, in a pull request, rather than declaring a parameter nobody
    looks at. §5 states the gate and the one thing it cannot reach.
-2. **What a sandbox parameter proves** — §6. Either the core reads such a
-   value back from the runtime and records what it observed, which is a
-   schema question and therefore a spec change first, or a parameter of
-   that kind is documented as configuration and nothing more.
+2. **What a sandbox parameter proves** — §6.2. **Answered 2026-09-30: a
+   parameter naming an isolation class is documented as configuration and
+   nothing more, and no surface may describe it as evidence of
+   isolation.** The other branch — the core reads the class back and
+   records what it observed — would be `probavi-evidence/4` for a claim
+   only the docker side can honestly make; §6.2 states the reason and what
+   would make it worth revisiting.
 3. **Whether a drill may run on the host that signs its record.** Every
    provider today puts the restored copy of production data on a machine
    other than the one holding the signing key, and the bare-host provider
