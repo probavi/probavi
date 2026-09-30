@@ -11,6 +11,8 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-09-30
+
 ### Changed
 
 - **`exec.env` may not carry a secret, and the core says so when one does.**
@@ -911,6 +913,20 @@ always called out explicitly.
   case it exists for is not a check. What the decision costs is stated
   with it: the coverage breadth across relations no check names, and
   indexes, is documented rather than closed.
+
+### Added
+
+- **A gate for the CHANGELOG's own link references.** Every `## [X.Y.Z]`
+  section must have a matching `[X.Y.Z]:` reference at the foot of the
+  file, `[Unreleased]` must compare from the newest release, and no
+  reference may name a section that does not exist.
+
+  It exists because the thing it checks had already gone wrong three times:
+  0.33.0, 0.34.0 and 0.35.0 each shipped without their reference, and
+  `[Unreleased]` still compared from `v0.32.0` four releases later. Nothing
+  noticed, because a missing reference does not break a build — it only
+  makes a heading a reader cannot click, in the file that *is* the release
+  record. All four references are added with this release.
 
 ## [0.35.0] - 2026-09-27
 
@@ -7087,7 +7103,11 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.32.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.36.0...HEAD
+[0.36.0]: https://github.com/probavi/probavi/compare/v0.35.0...v0.36.0
+[0.35.0]: https://github.com/probavi/probavi/compare/v0.34.0...v0.35.0
+[0.34.0]: https://github.com/probavi/probavi/compare/v0.33.0...v0.34.0
+[0.33.0]: https://github.com/probavi/probavi/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/probavi/probavi/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/probavi/probavi/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/probavi/probavi/compare/v0.29.0...v0.30.0
