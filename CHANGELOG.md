@@ -11,6 +11,36 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The release and downloads badges rendered "invalid" in every README.**
+  Both needed shields.io to fetch the whole releases list, and it cannot:
+  measured 2026-09-30, this repository has 38 releases carrying **367
+  assets each — 7827 in total**, so the full list is **12.8 MB** against
+  612 KB for `/releases/latest`. Every release adds 367 more assets, so it
+  gets less servable rather than more.
+
+  The release badge carried `sort=semver`, which makes shields fetch and
+  sort all releases where the default reads `/releases/latest` alone.
+  Dropping it costs nothing: this project releases linearly from `main`, so
+  latest-by-date *is* highest-by-semver, and GitHub's own
+  `/releases/latest` already excludes drafts and prereleases. It now reads
+  `release: v0.36.0`.
+
+  The downloads badge is **removed** rather than narrowed to the latest
+  release. `…/latest/total` does work, but it reads `0` for days after
+  every release while being labelled "downloads", and a number that means
+  one thing and says another does not belong on the front page of a trust
+  product.
+
+  Every other badge was measured rather than assumed: `license:
+  Apache-2.0`, `go: v1.25.0`, `platform: linux | macOS`, `openssf
+  scorecard: 7.8`, `openssf best practices: passing`, `codecov: 87%` — all
+  render. And `TestNoBadgeNeedsTheWholeReleaseList` now refuses either
+  fragment in any README, in all five languages, because neither failure
+  looks like a mistake in the URL and the alternative to an assertion is
+  noticing by eye.
+
 ## [0.36.0] - 2026-09-30
 
 ### Changed

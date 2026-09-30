@@ -135,3 +135,44 @@ func TestTranslationsCarryTheSameBadges(t *testing.T) {
 		})
 	}
 }
+
+// releaseListBadges matches the two shields.io endpoints that cannot be
+// served for this repository, because each needs the whole releases list
+// rather than one release:
+//
+//   - the total download count sums every asset of every release, and
+//   - sort=semver fetches all releases in order to sort them, where the
+//     default reads /releases/latest alone.
+//
+// Both rendered "invalid" in the README after v0.36.0, and neither failure
+// looks like a mistake in the URL. The measurements, 2026-09-30: 38
+// releases carrying 367 assets each, 7827 in total; the full releases list
+// is 12.8 MB against 612 KB for /releases/latest. Every release adds 367
+// more assets, so this gets less servable rather than more.
+var releaseListBadges = []struct{ fragment, why string }{
+	{"/github/downloads/" + repoSlug + "/total",
+		"the total download count is summed over every asset of every release"},
+	{"sort=semver", "sort=semver fetches the whole releases list to sort it"},
+}
+
+// TestNoBadgeNeedsTheWholeReleaseList keeps a badge that renders "invalid"
+// from being pasted back in. The alternative to this assertion is noticing
+// by eye, which is how long the two it names survived: the README is the
+// first thing a reader sees, and a badge reading "invalid" there says the
+// project does not watch its own front page.
+func TestNoBadgeNeedsTheWholeReleaseList(t *testing.T) {
+	badges := readmeBadges(read(t, sourceDoc))
+	if len(badges) == 0 {
+		t.Fatalf("%s carries no badges — this gate would pass vacuously", sourceDoc)
+	}
+	for _, file := range append([]string{sourceDoc}, translationFiles(t)...) {
+		for _, b := range readmeBadges(read(t, file)) {
+			for _, bad := range releaseListBadges {
+				if strings.Contains(b.image, bad.fragment) {
+					t.Errorf("%s: the %s badge uses %q, which shields.io cannot serve here — %s",
+						file, b.alt, bad.fragment, bad.why)
+				}
+			}
+		}
+	}
+}
