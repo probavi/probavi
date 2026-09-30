@@ -34,6 +34,19 @@ nothing you would mind a restored production copy briefly living next to.
 Every residual risk in §6 assumes this premise; without it the provider
 must not be used.
 
+**The drill host is never the target.** It follows from the premise and is
+worth saying separately, because it is one environment variable away:
+`PROBAVI_SSH_TARGET=drill@localhost` works, and it is exactly the
+arrangement `docs/sandbox-providers.md` §4.1 forbids. The drill host holds
+the ed25519 signing key and the append-only evidence log, so it is by
+definition not a host that "holds nothing you would mind a restored
+production copy living next to" — and this provider, alone among the
+three, puts that copy beside them with no boundary. Nothing checks it: no
+mechanical test separates a loopback target from an operator's own name
+for the same machine, and this repository's integration suite exercises
+the provider against `127.0.0.1` on purpose, because a CI runner has no
+second machine, a throwaway key and no production data.
+
 ## 2. Model
 
 One sandbox = one **transient systemd slice** plus one **per-drill
@@ -164,6 +177,10 @@ Three independent layers, mirroring the k8s provider's philosophy:
 - Restored production data resides on the target's disks for the drill's
   duration and is deleted, not shredded (§4). tmpfs/FDE recommendations
   become part of the README section.
+- The target being the drill host itself would put that data beside the
+  signing key with no boundary between them — refused by
+  `docs/sandbox-providers.md` §4.1, enforced by the premise in §1 rather
+  than by a check, for the reason stated there.
 
 ## 7. Configuration sketch
 

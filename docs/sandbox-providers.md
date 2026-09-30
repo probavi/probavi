@@ -142,6 +142,45 @@ workspace under the workspace root, mode 0700, deleted (not shredded) at
 teardown". Note the last one says *deleted, not shredded*: a residual
 stated plainly is worth more than a guarantee nobody can keep.
 
+### 4.1 The drill host is not a target without a boundary
+
+The drill host holds the ed25519 signing key, the append-only evidence
+log, and the configuration whose bytes `drill.config_hash` signs. A
+restored backup is a database started from an artifact the drill exists
+to be suspicious of. **Decided 2026-09-30: no provider may place restored
+production data on the drill host without an isolation boundary between
+the two.**
+
+First, what is already true, because the rule is easy to misread as
+stricter than it is. The docker provider drives a *local* daemon unless
+`DOCKER_HOST` says otherwise, and that is the README's first example — so
+the commonest deployment already puts the restored copy on the drill host.
+That is not what this rule forbids, and §4's defaults are why: the
+restored engine sits inside a container, on `none` networking, with no
+published ports, ephemeral storage and forced teardown. Until now nothing
+said that the boundary is *the reason* that arrangement is acceptable.
+This section says it.
+
+What the rule forbids is the combination with no boundary at all: a
+provider that starts the engine as an ordinary process on the drill host,
+beside the key. `systemd-nspawn` and Incus/LXD are unaffected — a
+namespace boundary is a boundary. A plain local systemd provider is not,
+and the ROADMAP's catalog records it as refused for this reason rather
+than as a backlog entry.
+
+**One residual, and no gate for it.** The bare-host provider has no
+isolation boundary by design, and its target is an environment variable:
+`PROBAVI_SSH_TARGET=drill@localhost` is the forbidden arrangement, one
+variable away. No mechanical check separates it from the permitted one.
+This repository's own integration suite is the proof — it exercises that
+provider against `127.0.0.1`, deliberately, because a second machine is
+not available to it, and a CI runner holds a throwaway key and no
+production data. A refusal of loopback targets would refuse that suite
+while an operator's `drill@backup-box` that happens to resolve home would
+sail through. So the rule lives where the operator meets it: in the
+provider's published constraints, in `docs/sandbox-bare-host.md` §1's
+premise, and here.
+
 ## 5. The descriptor is the only place a parameter may be declared
 
 Every provider resolves each configured parameter through
@@ -283,8 +322,8 @@ configured provider id.
 ## 7. Three doors, each answered before the provider that needs it
 
 These are one-way doors. Each is to be answered in a spec change *before*
-the first provider that needs it, not during it. Two of the three are
-answered; one is open.
+the first provider that needs it, not during it. **All three are now
+answered**; what follows is each answer and where it is specified.
 
 1. **Where a remote provider's endpoint lives** — §5. **Answered
    2026-09-30: the environment, as for all three shipped providers, and
@@ -300,13 +339,16 @@ answered; one is open.
    records what it observed — would be `probavi-evidence/4` for a claim
    only the docker side can honestly make; §6.2 states the reason and what
    would make it worth revisiting.
-3. **Whether a drill may run on the host that signs its record.** Every
-   provider today puts the restored copy of production data on a machine
-   other than the one holding the signing key, and the bare-host provider
-   makes a dedicated target its stated premise rather than a
-   recommendation. A provider on the drill host itself ends both. Decide
-   whether that co-residency is acceptable, and under what premise, before
-   any local provider — not after one exists.
+3. **Whether a drill may run on the host that signs its record** — §4.1.
+   **Answered 2026-09-30: only behind an isolation boundary.** The
+   question's premise needed correcting first — a local Docker daemon is
+   the README's first example, so the restored copy already shares the
+   drill host with the key in the commonest deployment, inside a
+   container. The axis is therefore not which machine but which boundary,
+   and the answer keeps the door shut in the only direction that cannot be
+   undone: a provider starting the engine as an ordinary process beside
+   the signing key may not ship. §4.1 states the rule and the one residual
+   no gate can reach.
 
 ## 8. Shipping a provider
 

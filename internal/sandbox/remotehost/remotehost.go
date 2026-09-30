@@ -148,7 +148,7 @@ var Descriptor = sandbox.Descriptor{
 			hardDeadlineSeconds),
 	},
 	Constraints: []string{
-		"No container isolation. A dedicated drill host is a premise of this provider, not a recommendation.",
+		"No container isolation. A dedicated target host is a premise of this provider, not a recommendation, and the drill host itself is never an acceptable target: it holds the signing key and the evidence log, and this provider puts restored production data beside them with no boundary between the two (sandbox-providers.md §4.1).",
 		fmt.Sprintf("systemd %d or newer on the target, probed at first contact.", minSystemdVersion),
 		"Engine and tool versions are whatever the target host has installed; the version match a sandbox image guarantees does not apply here.",
 		"Requires the right to run transient systemd units as the drill user — the polkit rule the README ships.",
