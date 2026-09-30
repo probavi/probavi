@@ -84,12 +84,14 @@ func logRunnerFailure(deps *Deps, runner string, res *sandbox.ExecResult) {
 	deps.Logger.Warn("sql_runner exited non-zero",
 		"runner", runner,
 		"exit_code", res.ExitCode,
-		"stderr", mask(strings.TrimSpace(string(res.Stderr)), deps.Target.Password),
+		"stderr", deps.Redact.String(mask(strings.TrimSpace(string(res.Stderr)), deps.Target.Password)),
 		"stderr_truncated", res.Truncated)
 }
 
-// mask removes the ephemeral sandbox password wherever an engine echoed it
-// back into its diagnostic.
+// mask removes this run's connection password wherever an engine echoed
+// it back into its diagnostic. It is applied even when Deps.Redact is
+// nil, because that password is resolved here and a caller cannot forget
+// to declare it.
 func mask(s, secret string) string {
 	if secret == "" {
 		return s

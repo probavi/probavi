@@ -329,7 +329,20 @@ MUST NOT appear anywhere in a record:
 
 The core passes every adapter-originated string destined for a record
 (error messages, check details) through a redactor that masks the values of
-all secrets it holds; truncation limits (§3) apply after redaction.
+all secrets it holds; truncation limits (§3) apply after redaction. That
+order is normative, not an implementation note: a limit applied first can
+cut a secret in half, and the half left behind matches no replacement
+afterwards.
+
+The secrets it holds are the values of the variables the drill named in
+`source.credential_env` and the ephemeral sandbox password the core
+generated for the run (adapter-protocol.md §2.5) — a closed list, so what
+a record may not carry is decidable rather than a matter of judgement.
+Each is replaced wherever it appears by `[redacted]`. This is a second
+line: adapters are required to keep secrets out of protocol messages in
+the first place, and a value an engine re-encoded before printing survives
+masking, so it protects against an adapter that got it wrong, not against
+one that tries.
 
 ## 9. Verification
 
