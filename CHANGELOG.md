@@ -13,6 +13,48 @@ always called out explicitly.
 
 ### Changed
 
+- **The drill host is not a sandbox target without an isolation boundary.**
+  The third and last of the sandbox doors
+  (`docs/sandbox-providers.md` §7) is answered: **no provider may place
+  restored production data on the drill host without a boundary between it
+  and the ed25519 signing key.** New §4.1 is the rule.
+
+  The question's own premise needed correcting first. It was written as
+  *"every provider today puts the restored copy of production data on a
+  machine other than the one holding the signing key"* — and that is not
+  so: the docker provider drives a **local** daemon unless `DOCKER_HOST`
+  says otherwise, which is the README's first example. The commonest
+  deployment already keeps the restored copy and the key on one machine.
+  The axis is therefore not which machine but **which boundary**.
+
+  Local Docker is unaffected, and now has a stated reason where before it
+  had none: §4's defaults are why that arrangement is acceptable — a
+  container, `none` networking, no published ports, ephemeral storage,
+  forced teardown. `systemd-nspawn` and Incus/LXD are unaffected too; a
+  namespace boundary is a boundary. What the rule refuses is a provider
+  that starts the restored engine as an ordinary process beside the key,
+  which is the **local systemd provider** — moved from the catalog's
+  "needs a decision" list to "recommended against", with the reasoned
+  answer this catalog exists to give instead of a backlog entry.
+
+  **One residual, and deliberately no gate for it.** The bare-host
+  provider has no boundary by design and its target is an environment
+  variable, so `PROBAVI_SSH_TARGET=drill@localhost` is the forbidden
+  arrangement one variable away. No mechanical check separates it from the
+  permitted one: this repository's own integration suite runs that
+  provider against `127.0.0.1` on purpose — a CI runner has no second
+  machine, a throwaway key and no production data — while an operator's
+  `drill@backup-box` that happens to resolve home would pass any loopback
+  test. The rule therefore lives where the operator meets it: the
+  provider's published constraints in `docs/capabilities.json`, which now
+  say the drill host is never an acceptable target, plus
+  `docs/sandbox-bare-host.md` §1 and §6.
+
+  With this, all three sandbox doors are answered, and the catalog's
+  remaining candidates wait on a demand signal rather than on a decision.
+
+### Changed
+
 - **A sandbox parameter naming an isolation class is configuration, never
   evidence.** The second of the three sandbox doors
   (`docs/sandbox-providers.md` §7) is answered, and the narrower branch
