@@ -11,6 +11,46 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Security
+
+- **The drill's secrets are masked out of everything a record carries.**
+  `docs/evidence-schema.md` §8 has required the core to pass every
+  adapter-originated string bound for a record through a redactor that masks
+  the values of all secrets it holds, and `docs/sandbox-providers.md` §5
+  tells a provider author that the redactor covers exactly those strings.
+  Neither was true: one log line in `internal/checks` masked one secret —
+  the ephemeral sandbox password — and nothing masked anything reaching a
+  record.
+
+  The gap becomes a leak the moment `source.credential_env` carries what
+  encrypted backups need it to carry: the passphrase that decrypts the
+  artifact. An engine quoting its own configuration back at a failure is
+  ordinary behaviour, not misbehaviour, and an adapter is an external
+  process anybody may write. An evidence log is append-only and signed, so
+  a credential that reaches one can be rotated, never removed.
+
+  `internal/redact` holds the closed list — the values the drill named in
+  `source.credential_env`, plus the password the core generated itself —
+  and masks each wherever it appears in `error.message`, a `checks[].detail`
+  or the drill host's log. Secrets are ordered longest first: masking a
+  shorter one that sits inside a longer one would leave the remainder of the
+  longer one in the text.
+
+  **Masking runs before the byte caps**, which is what §8 already said and
+  the only order that holds twice over — a cut applied first slices a
+  passphrase in half and leaves a head no later replacement will match, and
+  masking lengthens text, so the cap has to be last. `checks[].detail` is
+  capped inside `internal/checks`, so the masking moved there rather than
+  sitting at the record boundary beside the error message.
+
+  It is defence in depth and not permission: a value an engine hex-encoded
+  or wrapped across lines passes straight through, and adapter-protocol
+  §2.5 still binds adapters. `docs/backup-staging.md` §7.4 gains it as the
+  fourth rule keeping key material out of a record, with the operator
+  consequence that a *non*-secret declared in `source.credential_env` is
+  masked too — so that list should hold credentials and nothing else, or
+  the diagnostics you need stop being readable.
+
 ### Changed
 
 - **`ProcessAlive` refuses a number too wide to be a pid.** Its own comment
