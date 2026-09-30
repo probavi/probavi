@@ -75,14 +75,7 @@ func testDeps(exec *fakeExec) Deps {
 
 func runSingle(t *testing.T, c config.Check, exec *fakeExec) Result {
 	t.Helper()
-	results, err := Run(context.Background(), []config.Check{c}, testDeps(exec))
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("results = %d, want 1", len(results))
-	}
-	return results[0]
+	return runSingleWithDeps(t, c, testDeps(exec))
 }
 
 func i64(n int64) *int64 { return &n }

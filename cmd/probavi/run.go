@@ -231,13 +231,14 @@ func wireDrill(configPath string, logger *slog.Logger, tr *i18n.T) (*core.Drill,
 		return nil, nil, "", nil, err
 	}
 	drill := &core.Drill{
-		Config:          cfg,
-		Adapter:         runner,
-		Provider:        provider,
-		Store:           store,
-		Logger:          logger,
-		Version:         version,
-		SandboxPassword: password,
+		Config:           cfg,
+		Adapter:          runner,
+		Provider:         provider,
+		Store:            store,
+		Logger:           logger,
+		Version:          version,
+		SandboxPassword:  password,
+		CredentialValues: credentialValues(cfg.Target.Source.CredentialEnv),
 	}
 	cleanup := func() {
 		if cerr := store.Close(); cerr != nil {
@@ -450,4 +451,25 @@ func randomHex(n int) string {
 		panic("probavi: crypto/rand unavailable: " + err.Error())
 	}
 	return hex.EncodeToString(b)
+}
+
+// credentialValues resolves the variables the drill declared in
+// source.credential_env to the values this process holds, for the core to
+// mask out of anything it records (evidence-schema.md §8).
+//
+// This is where the lookup belongs: the same environment is what
+// adapter.Runner passes through to the adapter, so the two halves of
+// source.credential_env — what the adapter may read, and what a record
+// may never show — are decided from one place. A variable the
+// configuration names and the environment does not set contributes
+// nothing; that mismatch is already reported where it matters, by the
+// adapter finding the value empty.
+func credentialValues(names []string) []string {
+	values := make([]string, 0, len(names))
+	for _, name := range names {
+		if v, ok := os.LookupEnv(name); ok {
+			values = append(values, v)
+		}
+	}
+	return values
 }

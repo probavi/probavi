@@ -24,6 +24,7 @@ import (
 	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/evidence"
 	"github.com/probavi/probavi/internal/manifest"
+	"github.com/probavi/probavi/internal/redact"
 	"github.com/probavi/probavi/internal/sandbox"
 )
 
@@ -61,6 +62,12 @@ type Deps struct {
 	// Logger receives what a check must not record: the engine's own
 	// diagnostics on a failed runner. Nil discards them.
 	Logger *slog.Logger
+	// Redact masks the drill's secrets out of a detail and out of that
+	// diagnostic. The engine wrote both, so it may quote whatever it was
+	// handed — a connection string, a repository passphrase — back into
+	// its own words. Nil masks nothing beyond Target.Password, which
+	// runner.go removes unconditionally.
+	Redact *redact.Redactor
 	// Dialect is what the adapter declared about how to ask (adapter
 	// protocol §6.1.1). The zero value is what every v0 adapter means:
 	// the core composes its own statements and quotes SQL-standard.
@@ -225,7 +232,7 @@ func runBaseline(ctx context.Context, deps *Deps) ([]Result, error) {
 		results = append(results, Result{
 			Name:   config.CheckBaseline + ":" + table,
 			OK:     ok,
-			Detail: truncateDetail(detail),
+			Detail: truncateDetail(deps, detail),
 		})
 	}
 	return results, nil
@@ -283,7 +290,7 @@ func runOne(ctx context.Context, c *config.Check, i int, deps *Deps) (*Result, e
 	return &Result{
 		Name:       checkName(c, i),
 		OK:         ok,
-		Detail:     truncateDetail(detail),
+		Detail:     truncateDetail(deps, detail),
 		NewestData: newest,
 	}, nil
 }
@@ -413,11 +420,18 @@ func boundsText(minBound, maxBound *int64) string {
 	}
 }
 
-// truncateDetail keeps details inside the evidence limit. It delegates to
-// the evidence package rather than slicing: the service_healthy detail
-// comes from the adapter and may be any UTF-8, and a cut inside a
-// multi-byte rune produces invalid UTF-8 that the record layer rejects —
-// turning a completed drill into one with no evidence at all.
-func truncateDetail(s string) string {
-	return evidence.TruncateLine(s, evidence.MaxDetailBytes)
+// truncateDetail masks the drill's secrets out of a detail and keeps it
+// inside the evidence limit. It delegates the cut to the evidence package
+// rather than slicing: the service_healthy detail comes from the adapter
+// and may be any UTF-8, and a cut inside a multi-byte rune produces
+// invalid UTF-8 that the record layer rejects — turning a completed drill
+// into one with no evidence at all.
+//
+// Masking comes first. That is the order evidence-schema.md §8 requires,
+// and the only one that works twice over: a cut applied first can leave
+// half a passphrase behind, where no later replacement will match it
+// again — and masking can lengthen the text, so the cap has to be the
+// last thing applied.
+func truncateDetail(deps *Deps, s string) string {
+	return evidence.TruncateLine(deps.Redact.String(s), evidence.MaxDetailBytes)
 }

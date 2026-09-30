@@ -280,12 +280,31 @@ without attesting what it was. It would also be a new configuration key for
 a job the same cron entry already does, which is §9's argument applied one
 level down.
 
-**No key material can reach a record, and three rules keep it out.**
+**No key material can reach a record, and four rules keep it out.**
 Credentials are names in `source.credential_env` and the core passes only
 the named variables. `sandbox.params` are recorded verbatim, so nothing
 secret belongs there — which is why `DOCKER_HOST` and `PROBAVI_SSH_TARGET`
 are environment variables (§8). And a record carries checksums, sizes and
 durations, never bytes of the artifact.
+
+The fourth covers what the first three cannot. Those three keep the value
+out of the places the core *chooses* what to write; the remaining route in
+is text the core did not compose — an adapter's error message, an engine's
+healthcheck reply — and an engine quoting its own configuration back at a
+failure is ordinary behaviour, not misbehaviour. So the core masks the
+values of the variables named in `source.credential_env`, together with
+the ephemeral sandbox password, out of every such string before it reaches
+a record, a log line or a notification (`docs/evidence-schema.md` §8). It
+is defence in depth and not permission: an adapter still must not put a
+secret in a protocol message, because masking only catches a value that
+arrives recognisable — one an engine hex-encoded or wrapped across lines
+passes straight through.
+
+This has a consequence for what you name in `source.credential_env`.
+Declare what an adapter needs in order to read the backup, and nothing
+else: a variable declared there is masked wherever its value appears, so
+declaring a non-secret — a user name, a database name, a path — replaces
+that word with `[redacted]` in the diagnostics you will want to read.
 
 One consequence worth knowing before it surprises you: **a backup
 manifest's checksum is over the bytes the drill is handed.** If the backup

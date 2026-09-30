@@ -234,6 +234,13 @@ internal/sandbox/k8s  4
 # out-of-range float becomes as an int64 — equivalent by measurement rather
 # than by construction, as the k8s entry above explains at length.
 internal/sandbox/remotehost 4
+# internal/redact masks the drill's secrets out of every string bound for a
+# record, a log or a notification (evidence-schema.md §8). Measured
+# 2026-09-30 at 6 mutants, all caught. A ceiling of zero is not ambition
+# here: the package is twenty lines of ordering and replacement, every
+# branch of it is a rule a record depends on, and a survivor would mean one
+# of those rules is unasserted rather than unobservable.
+internal/redact      0
 # Nothing this file used to name is outside the run any more: internal/config
 # and internal/core, the last two, joined on 2026-09-28. Every package that
 # decides what a signed record says is now measured.

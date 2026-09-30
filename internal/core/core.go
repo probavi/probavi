@@ -27,6 +27,7 @@ import (
 	"github.com/probavi/probavi/internal/config"
 	"github.com/probavi/probavi/internal/evidence"
 	"github.com/probavi/probavi/internal/manifest"
+	"github.com/probavi/probavi/internal/redact"
 	"github.com/probavi/probavi/internal/sandbox"
 )
 
@@ -89,6 +90,21 @@ type Drill struct {
 	// (adapter protocol §2.5); checks use it when the adapter's connection
 	// names it as password_env.
 	SandboxPassword string
+	// CredentialValues holds the values of the variables the drill named in
+	// source.credential_env, resolved by the caller from its own
+	// environment. The core never looks them up itself: which process
+	// holds a credential is a composition decision, and a package that
+	// reads the environment on its own cannot be tested without one.
+	//
+	// They are here to be masked. Every string bound for a record or a log
+	// goes through redactor first (evidence-schema.md §8), because a
+	// backup that needs a passphrase to read puts that passphrase within
+	// reach of an engine's own diagnostics.
+	CredentialValues []string
+
+	// redactor masks CredentialValues and SandboxPassword. Built in
+	// defaults; nil until then, which redact.Redactor tolerates.
+	redactor *redact.Redactor
 
 	Now      func() time.Time
 	Hostname func() (string, error)
@@ -178,7 +194,7 @@ func (d *Drill) appendDegraded(rejected *evidence.Record, cause error) (*evidenc
 		Outcome: evidence.OutcomeError,
 		Error: &evidence.DrillError{
 			Code: "internal",
-			Message: sanitizeMessage(fmt.Sprintf(
+			Message: d.recordMessage(fmt.Sprintf(
 				"evidence record replaced: the composed record was rejected (%v); the drill reached outcome %q",
 				cause, rejected.Outcome)),
 		},
@@ -212,6 +228,20 @@ func (d *Drill) defaults() {
 	if d.Executable == nil {
 		d.Executable = os.Executable
 	}
+	// The password is added here rather than by the caller: it is the one
+	// secret the core generated itself, so forgetting it at a call site
+	// must not be possible.
+	d.redactor = redact.New(append(slices.Clone(d.CredentialValues), d.SandboxPassword)...)
+}
+
+// recordMessage prepares one failure message for a record: secrets masked
+// first, shape applied second. The order is the specification's
+// (evidence-schema.md §8 — truncation limits apply after redaction) and
+// it is the only one that works twice over. A cut applied first can slice
+// a passphrase in half, leaving a head no replacement will match again;
+// and masking can lengthen the text, so the cap has to come last.
+func (d *Drill) recordMessage(s string) string {
+	return sanitizeMessage(d.redactor.String(s))
 }
 
 // baseRecord pre-fills everything knowable before the drill starts, so any
@@ -422,7 +452,7 @@ func (d *Drill) recordFault(rec *evidence.Record, fault *manifest.Fault) {
 	if failCodes[fault.Code] {
 		rec.Outcome = evidence.OutcomeFail
 	}
-	rec.Error = &evidence.DrillError{Code: fault.Code, Message: sanitizeMessage(fault.Message)}
+	rec.Error = &evidence.DrillError{Code: fault.Code, Message: d.recordMessage(fault.Message)}
 	d.Logger.Error("drill did not pass", "code", fault.Code, "outcome", rec.Outcome)
 }
 
@@ -465,6 +495,7 @@ func (d *Drill) checkDeps(probe *adapter.ProbeResult, provRes *adapter.Provision
 		Now:      d.Now,
 		Logger:   d.Logger,
 		Baseline: baseline,
+		Redact:   d.redactor,
 	}
 }
 
@@ -570,7 +601,7 @@ func (d *Drill) classify(ctx context.Context, rec *evidence.Record, err error) {
 			d.Config.Target.Adapter, code, message)
 		code = evidence.CodeInternal
 	}
-	message = sanitizeMessage(message)
+	message = d.recordMessage(message)
 	switch {
 	case failCodes[code]:
 		rec.Outcome = evidence.OutcomeFail
@@ -617,6 +648,10 @@ func recordProvision(rec *evidence.Record, res *adapter.ProvisionResult) {
 	rec.Timings.Restore = secondsToMS(res.Timings.RestoreSeconds)
 }
 
+// mapChecks turns check results into record content. Details arrive
+// already masked and already inside the evidence limit: internal/checks
+// does both, in that order, because it is where the text enters and a cap
+// applied before masking can cut a secret in half.
 func mapChecks(results []checks.Result) []evidence.Check {
 	out := make([]evidence.Check, 0, len(results))
 	for _, r := range results {

@@ -119,6 +119,15 @@ Adapters MUST NOT print secret values to stderr and MUST NOT include them in
 any protocol message. `error.message` and `detail` fields are shown to
 humans and stored in logs: redact.
 
+The core masks the values it knows — those named in `source.credential_env`
+and `PROBAVI_SANDBOX_PASSWORD` — out of every adapter-originated string it
+records or logs (evidence-schema.md §8). That is a safety net under the
+rule above, not a relaxation of it: it matches a value that arrives
+verbatim, and an adapter that hex-encodes, re-quotes or line-wraps a
+secret on its way out defeats it. An evidence log is append-only and
+signed, so a credential that reaches one can only be rotated, never
+removed.
+
 ## 3. Messages
 
 Four message shapes exist. Every message carries `protocol` and
