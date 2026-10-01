@@ -607,21 +607,53 @@ func buildPgBackRestImage(t *testing.T, ctx context.Context) string {
 	}
 	const tag = "probavi-it-pgbackrest:16"
 	dir := t.TempDir()
-	// The expiry check is waived for this one build because an image's
-	// own base can outlive its distribution's support and nothing here
-	// controls when. Measured 2026-09-10: the postgis variant is Debian
-	// 11, whose security suite stopped being refreshed — `apt-get update`
-	// exits 100 on "Release file for …/bullseye-security/InRelease is
-	// expired (invalid since 2d 22h)" — and the `&&` then keeps the
-	// install from running at all. Nothing about the image or the package
-	// had changed; the clock had. pgbackrest itself comes from the
-	// PostgreSQL project's own repository, which is current
-	// (2.59.1-1.pgdg11+1, measured), and this image is a throwaway the
-	// drill never ships: waiving the check says that out loud where
-	// deleting the stale suite from the image would hide it.
+	// Two waivers, both because an image's own base can outlive its
+	// distribution's support and nothing here controls when. This image
+	// is a throwaway the drill never ships, so saying that out loud here
+	// beats hiding it by editing the base.
+	//
+	// The expiry check is waived. Measured 2026-09-10: the postgis
+	// variant is Debian 11, whose security suite stopped being refreshed
+	// — `apt-get update` exits 100 on "Release file for
+	// …/bullseye-security/InRelease is expired (invalid since 2d 22h)" —
+	// and the `&&` then keeps the install from running at all.
+	//
+	// And the PostgreSQL project's own repository is allowed to fall back
+	// to its archive. That line used to read "which is current
+	// (2.59.1-1.pgdg11+1, measured)", and on 2026-10-01 it stopped being
+	// true: apt.postgresql.org retired the bullseye suite outright, so
+	// `apt-get update` takes a 404 on it and reports "does not have a
+	// Release file" — which the expiry waiver above cannot cover, because
+	// nothing expired, the suite is gone. Debian's own pgbackrest is no
+	// answer either: bullseye carries 2.33, which refuses a PostgreSQL 17
+	// cluster with "[046]: unexpected control version = 1700" (measured).
+	// The retired suite's last packages live on apt-archive.postgresql.org,
+	// where this build finds the same 2.59.1-1.pgdg11+1 it always
+	// installed.
+	//
+	// The fallback is conditional rather than a rewrite, so an image whose
+	// suite is still live keeps using it and only a retired one moves:
+	// `apt-get update` reports failure while still having fetched the
+	// sources that answered, which is exactly the signal to try the
+	// archive and update again. Measured both ways on 2026-10-01 —
+	// postgres:16 is trixie, its first update succeeds, pgdg.list is
+	// untouched and pgbackrest comes from the live repository at
+	// 2.59.2-1.pgdg13+1; the postgis variant falls through and installs
+	// 2.59.1-1.pgdg11+1 from the archive.
+	//
+	// The residual is that any update failure moves this one build to the
+	// archive, a transient outage of the live repository included. That is
+	// acceptable here and would not be in a shipped image: the archive
+	// carries the same packages a retired suite ended on, the version is
+	// asserted nowhere, and a total network failure fails the second
+	// update too.
+	const aptUpdate = "apt-get -o Acquire::Check-Valid-Until=false update"
 	dockerfile := "FROM " + verifiedImage(t) + "\n" +
-		"RUN apt-get -o Acquire::Check-Valid-Until=false update" +
-		" && apt-get install -y --no-install-recommends pgbackrest && rm -rf /var/lib/apt/lists/*\n"
+		"RUN " + aptUpdate + " || { " +
+		"sed -i 's#//apt\\.postgresql\\.org#//apt-archive.postgresql.org#' " +
+		"/etc/apt/sources.list.d/pgdg.list && " + aptUpdate + "; }\n" +
+		"RUN apt-get install -y --no-install-recommends pgbackrest" +
+		" && rm -rf /var/lib/apt/lists/*\n"
 	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o600); err != nil {
 		t.Fatalf("write dockerfile: %v", err)
 	}

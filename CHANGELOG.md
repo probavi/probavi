@@ -15,6 +15,41 @@ always called out explicitly.
 
 ### Fixed
 
+- **The release could not be built: upstream retired the APT suite one
+  matrix image installs pgBackRest from.** `apt.postgresql.org` dropped
+  its Debian 11 "bullseye" suite, measured as gone on 2026-10-01 — the
+  repository now carries bookworm, trixie, forky, jammy, noble and sid,
+  and `dists/bullseye-pgdg/Release` is a 404. `postgis/postgis:17-3.5` is
+  bullseye-based and the only such image in the version matrix, so
+  `apt-get update` inside the pgBackRest tool image reported "does not
+  have a Release file", the `&&` kept the install from running, and four
+  `TestPgBackRest*` tests failed. That stopped the first attempt to tag
+  this release: the version-matrix gate failed, so the build-and-draft job
+  never ran and the tag was moved here once the cause was fixed.
+
+  Nothing in this repository had changed — the same job passed at
+  `v0.36.0` twenty-three hours earlier, and nothing between the two
+  releases touches an adapter at all. The existing waiver could not cover it
+  either: `Acquire::Check-Valid-Until=false` forgives an *expired*
+  Release file, and this one is absent.
+
+  Two routes were measured and rejected. There is no bookworm-based
+  `postgis/postgis` image — the repository publishes none, so the
+  non-Alpine PostgreSQL 17 tags are bullseye or nothing. And Debian's own
+  pgbackrest is 2.33, which refuses a PostgreSQL 17 cluster outright:
+  `ERROR: [046]: unexpected control version = 1700 and catalog version =
+  202406281`.
+
+  A retired suite's last packages stay on `apt-archive.postgresql.org`,
+  which still serves bullseye and carries `2.59.1-1.pgdg11+1` — the exact
+  pgbackrest this build has always installed. The tool image now prefers
+  the live repository and falls back to the archive only when the first
+  `apt-get update` fails, so an image whose suite is current is
+  unaffected: verified both ways, `postgres:16` keeps installing
+  2.59.2-1.pgdg13+1 from `apt.postgresql.org` with its sources untouched.
+
+### Fixed
+
 - **The README's packaged-install command named an asset no release
   carries.** The v0.36.0 bump moved the core package to
   `probavi_0.36.0_amd64.deb` and left the adapter beside it at
