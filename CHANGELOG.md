@@ -11,6 +11,39 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`sandbox.resources.cpus_milli` was null in every bare-host record**
+  ([#419](https://github.com/probavi/probavi/issues/419)). The provider
+  asked systemd for `CPUQuota` — the name of the *setting*, which is what
+  a unit file and `systemctl set-property` take and what the provider
+  writes — while the manager exposes the quota it holds as
+  `CPUQuotaPerSecUSec`. Asked for a property it does not know,
+  `systemctl show` prints nothing for it and still exits 0, so the answer
+  arrived one value short and the positional read left the CPU limit
+  absent beside a filled `memory_bytes`.
+
+  Null never failed a drill and the schema allows it, so nothing broke.
+  What was lost is the field's meaning: `docs/sandbox-providers.md` §6.1
+  gives null the sense "the provider cannot read back what it set, or
+  nothing was applied", and here it could and a limit was. A reader of a
+  `remotehost` record concluded that no CPU limit held.
+
+  The quota is now read from `CPUQuotaPerSecUSec` and converted from the
+  span of CPU-per-second systemd prints it as — `1s` is 1000 thousandths,
+  `1.500000s` is 1500, `500ms` is 500, and a large quota arrives in
+  several components (`1min 40s`) which are summed. **The answers are also
+  read back by name rather than by position**, which is the half of this
+  that was structural: with `--value` one unknown property silently
+  shifted every value after it, and measured on systemd 257 and 261 the
+  manager returns the properties in its own order anyway. A percentage is
+  deliberately not accepted, so the wrong property name cannot look right
+  again.
+
+  Evidence records written before this carry `cpus_milli: null` and stay
+  exactly as signed; nothing is rewritten. No schema change — the field
+  has existed since `probavi-evidence/3` and was always nullable.
+
 ### Added
 
 - **The README's YAML examples are now loaded by the loader that reads

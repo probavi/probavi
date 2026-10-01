@@ -640,13 +640,41 @@ func randomSuffix() string {
 }
 
 // factsScript asks systemd what the drill's slice actually carries. The
-// values come back from the manager rather than from the properties this
-// provider set, which is the distinction §6.1 draws: a property systemd
-// accepted and did not apply would read back differently here.
+// values come back from the manager's record of the slice rather than from
+// the properties this provider set, which is the distinction §6.1 draws
+// between a limit read back and a request echoed.
+//
+// Two things about this question are load-bearing, and the first cost
+// every bare-host record its cpus_milli (#419). **The applied CPU quota is
+// not called CPUQuota.** That is the name of the *setting* — what a unit
+// file and `systemctl set-property` take, which is what Create writes —
+// while the manager exposes the quota it holds as CPUQuotaPerSecUSec, a
+// time span of CPU per second. Asked for a property it does not know,
+// systemctl show prints nothing for it and still exits 0.
+//
+// **So the answers are read back by name, not by position.** With --value
+// they arrive as a bare list, one unknown name silently shifts every value
+// after it, and the gap is unobservable from the output alone. Measured on
+// systemd 257 and 261: the names also come back in the manager's own order
+// rather than the order asked, so position was never a safe reading of
+// this even with every name spelled right.
 //
 // "infinity" is systemd's word for no limit, and it stays an absence
 // rather than becoming a number.
-const factsScript = `systemctl show --property=MemoryMax --property=CPUQuota --value -- "$1" 2>/dev/null || true`
+//
+// The names are constants the script and the reader share, so the script
+// cannot come to ask for one thing while Facts reads another. What that
+// does not close is the defect #419 actually was — a name systemd does not
+// know — and nothing here can: these tests hand Facts a fabricated stdout,
+// so they cannot see which property was asked for. Only a real manager can
+// answer that, which is why the assertion lives in the integration suite.
+const (
+	propMemoryMax = "MemoryMax"
+	propCPUQuota  = "CPUQuotaPerSecUSec"
+)
+
+const factsScript = `systemctl show --property=` + propMemoryMax +
+	` --property=` + propCPUQuota + ` -- "$1" 2>/dev/null || true`
 
 // Facts reports what the drill's transient slice actually carries
 // (sandbox-providers.md §6.1).
@@ -664,15 +692,27 @@ func (s *Sandbox) Facts(ctx context.Context) sandbox.Facts {
 			"err", err, "stderr", firstLine(stderr))
 		return sandbox.Facts{}
 	}
-	lines := strings.Fields(string(stdout))
-	facts := sandbox.Facts{}
-	if len(lines) > 0 {
-		facts.MemoryBytes = bytesOrNil(lines[0])
+	props := unitProperties(string(stdout))
+	return sandbox.Facts{
+		MemoryBytes: bytesOrNil(props[propMemoryMax]),
+		CPUsMilli:   quotaMilli(props[propCPUQuota]),
 	}
-	if len(lines) > 1 {
-		facts.CPUsMilli = quotaMilli(lines[1])
+}
+
+// unitProperties reads the Name=value lines systemctl show prints without
+// --value. A property the manager does not know is simply absent, which
+// is the whole reason for reading them this way: the caller asks for a
+// name and gets either the manager's answer or nothing, never the next
+// property's value. The first "=" separates them, because a value may
+// contain more.
+func unitProperties(out string) map[string]string {
+	props := make(map[string]string)
+	for line := range strings.SplitSeq(out, "\n") {
+		if name, value, ok := strings.Cut(strings.TrimSpace(line), "="); ok && name != "" {
+			props[name] = value
+		}
 	}
-	return facts
+	return props
 }
 
 // bytesOrNil reads MemoryMax, which systemd reports as a plain byte count
@@ -685,21 +725,69 @@ func bytesOrNil(v string) *int64 {
 	return &n
 }
 
-// quotaMilli reads CPUQuota, which systemd reports as a percentage with a
-// trailing "%" — 150% is one and a half CPUs, which the schema counts as
-// 1500 thousandths.
+// quotaUnitsUsec are the time units systemd's span formatter can emit for
+// a CPU quota, longest spelling first so that "ms" is never read as "s"
+// with a stray "m" in front of it. A quota is CPU-seconds per second, so
+// anything above a day per second — 86400 CPUs — is past what the
+// formatter will be asked to print here, and past what this reads.
+var quotaUnitsUsec = []struct {
+	suffix string
+	usec   float64
+}{
+	{"min", 60_000_000},
+	{"ms", 1_000},
+	{"us", 1},
+	{"s", 1_000_000},
+	{"h", 3_600_000_000},
+	{"d", 86_400_000_000},
+}
+
+// quotaMilli reads CPUQuotaPerSecUSec, the CPU quota the manager holds,
+// expressed as a span of CPU time per second: "1s" is one whole CPU,
+// "1.500000s" is one and a half, "500ms" is half, and the schema counts
+// those as 1000, 1500 and 500 thousandths. Large quotas arrive in several
+// components — measured, 10000% prints as "1min 40s" — so the components
+// are summed rather than the first one taken.
+//
+// A percentage is deliberately not accepted. "150%" is how the *setting*
+// is written and never how this property reads, so taking it would make
+// the wrong property name parse cleanly again, which is the defect this
+// shape exists to prevent (#419).
 func quotaMilli(v string) *int64 {
-	pct, ok := strings.CutSuffix(strings.TrimSpace(v), "%")
-	if !ok {
+	fields := strings.Fields(v)
+	if len(fields) == 0 {
 		return nil
 	}
-	f, err := strconv.ParseFloat(pct, 64)
-	if err != nil || f <= 0 {
-		return nil
+	var usec float64
+	for _, field := range fields {
+		n, ok := quotaComponentUsec(field)
+		if !ok {
+			return nil
+		}
+		usec += n
 	}
-	milli := int64(f * 10)
+	milli := int64(math.Round(usec / 1_000))
 	if milli <= 0 {
 		return nil
 	}
 	return &milli
+}
+
+// quotaComponentUsec converts one "<number><unit>" component to
+// microseconds. An unknown unit — "infinity", a percentage, anything the
+// formatter does not emit — is not a zero to add but an answer this
+// provider cannot read, so it refuses the whole value.
+func quotaComponentUsec(field string) (float64, bool) {
+	for _, u := range quotaUnitsUsec {
+		digits, ok := strings.CutSuffix(field, u.suffix)
+		if !ok {
+			continue
+		}
+		f, err := strconv.ParseFloat(digits, 64)
+		if err != nil || f < 0 {
+			return 0, false
+		}
+		return f * u.usec, true
+	}
+	return 0, false
 }
