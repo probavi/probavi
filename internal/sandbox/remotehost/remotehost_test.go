@@ -811,9 +811,17 @@ func TestSystemdLimitParsing(t *testing.T) {
 			t.Errorf("bytesOrNil(%q) = %v, want %d", in, got, want)
 		}
 	}
+	// Every spelling here was printed by a real systemd for a real quota,
+	// measured on 257 and 261 by setting CPUQuota on a transient unit and
+	// reading CPUQuotaPerSecUSec back. "150%" is in the table as a refusal
+	// for the reason #419 exists: it is how the setting is written, never
+	// how the property reads, and a parser that accepted both would let the
+	// wrong property name look right again.
 	for in, want := range map[string]int64{
-		"150%": 1500, "100%": 1000, "50%": 500,
-		"infinity": 0, "": 0, "0%": 0, "150": 0,
+		"1s": 1000, "1.500000s": 1500, "500ms": 500, "10ms": 10,
+		"125ms": 125, "2s": 2000, "10s": 10000, "5ms": 5, "330ms": 330,
+		"50s": 50000, "1min 40s": 100000, "6min": 360000, "1h": 3600000,
+		"infinity": 0, "": 0, "150%": 0, "150": 0, "0s": 0,
 	} {
 		got := quotaMilli(in)
 		if want == 0 && got != nil {
@@ -826,10 +834,16 @@ func TestSystemdLimitParsing(t *testing.T) {
 
 // TestFactsReadsTheSliceRatherThanTheRequest: the values come from the
 // manager's record of the slice, not from the properties this provider
-// set — a property systemd accepted and did not apply would read back
-// differently. There is no image digest here and never will be: this
-// provider runs on a host, not from an image.
+// set, which is the distinction §6.1 draws between a limit read back and
+// a request echoed. It is the manager's answer and not the kernel's: a
+// quota systemd stored on a host whose kernel cannot enforce one would
+// read back here all the same, which is a narrower claim than this comment
+// used to make (ROADMAP). There is no image digest here and never will be:
+// this provider runs on a host, not from an image.
 func TestFactsReadsTheSliceRatherThanTheRequest(t *testing.T) {
+	// The stdout here is what systemctl show prints without --value, and
+	// the property order is the manager's rather than the order factsScript
+	// asks in — measured, and the reason the values are read by name.
 	tests := []struct {
 		name       string
 		stdout     string
@@ -838,9 +852,14 @@ func TestFactsReadsTheSliceRatherThanTheRequest(t *testing.T) {
 		wantMemory int64
 		wantCPU    int64
 	}{
-		{"both capped", "2147483648\n150%\n", 0, nil, 2147483648, 1500},
-		{"nothing capped", "infinity\ninfinity\n", 0, nil, 0, 0},
-		{"memory only", "536870912\ninfinity\n", 0, nil, 536870912, 0},
+		{"both capped", "CPUQuotaPerSecUSec=1.500000s\nMemoryMax=2147483648\n", 0, nil, 2147483648, 1500},
+		{"nothing capped", "CPUQuotaPerSecUSec=infinity\nMemoryMax=infinity\n", 0, nil, 0, 0},
+		{"memory only", "CPUQuotaPerSecUSec=infinity\nMemoryMax=536870912\n", 0, nil, 536870912, 0},
+		{"one whole cpu", "CPUQuotaPerSecUSec=1s\nMemoryMax=268435456\n", 0, nil, 268435456, 1000},
+		// The shape of #419: the quota asked for under its setting name is
+		// a property the manager does not know, so it prints nothing for
+		// it and the answer carries memory alone.
+		{"the property systemd does not know", "MemoryMax=268435456\n", 0, nil, 268435456, 0},
 		{"nothing at all", "", 0, nil, 0, 0},
 		{"ssh failed", "", 1, nil, 0, 0},
 		{"ssh could not run", "", 0, errors.New("ssh not found"), 0, 0},

@@ -105,8 +105,8 @@ func TestASuffixThatDoesNotRepeat(t *testing.T) {
 // there than an honest absence.
 func TestFactsAreAbsentWhenTheTargetDidNotAnswer(t *testing.T) {
 	for name, r := range map[string]response{
-		"a non-zero exit that still printed": {stdout: "2147483648 150%", stderr: "no such unit", exit: 1},
-		"a transport failure that printed":   {stdout: "2147483648 150%", err: errors.New("ssh died")},
+		"a non-zero exit that still printed": {stdout: "MemoryMax=2147483648", stderr: "no such unit", exit: 1},
+		"a transport failure that printed":   {stdout: "MemoryMax=2147483648", err: errors.New("ssh died")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p, _ := testProvider(t, r)
@@ -118,17 +118,26 @@ func TestFactsAreAbsentWhenTheTargetDidNotAnswer(t *testing.T) {
 }
 
 // TestFactsSurviveATargetThatAnsweredWithLess: the script asks for two
-// values and a slice with no CPU quota answers with one. Each index is
-// guarded for that reason, and the guards are the difference between a
-// missing field and a panic inside a drill that had already restored.
+// properties and the manager may answer with one — for a property it does
+// not know it prints nothing at all. Reading by name is what makes that an
+// absent field instead of the next property's value; the output is also
+// not line-aligned, which a read by position would have had to assume.
 func TestFactsSurviveATargetThatAnsweredWithLess(t *testing.T) {
-	p, _ := testProvider(t, response{stdout: "2147483648\n"})
-	facts := testSandbox(p).Facts(context.Background())
-	if facts.MemoryBytes == nil || *facts.MemoryBytes != 2147483648 {
-		t.Errorf("memory = %v, want the one value the target gave", facts.MemoryBytes)
-	}
-	if facts.CPUsMilli != nil {
-		t.Errorf("cpu = %d, want none: the slice stated no quota", *facts.CPUsMilli)
+	for name, stdout := range map[string]string{
+		"memory alone":                              "MemoryMax=2147483648\n",
+		"memory after an empty line":                "\nMemoryMax=2147483648\n\n",
+		"memory beside a property nobody asked for": "CPUQuotaPeriodUSec=infinity\nMemoryMax=2147483648\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, _ := testProvider(t, response{stdout: stdout})
+			facts := testSandbox(p).Facts(context.Background())
+			if facts.MemoryBytes == nil || *facts.MemoryBytes != 2147483648 {
+				t.Errorf("memory = %v, want the one value the target gave", facts.MemoryBytes)
+			}
+			if facts.CPUsMilli != nil {
+				t.Errorf("cpu = %d, want none: the manager stated no quota", *facts.CPUsMilli)
+			}
+		})
 	}
 }
 
@@ -144,12 +153,60 @@ func TestAReportedLimitIsKeptWhenItIsOne(t *testing.T) {
 		}
 	})
 	for in, want := range map[string]int64{
-		"1%":    10, // the smallest whole percentage
-		"0.1%":  1,  // the smallest quota that survives the conversion
-		"150%":  1500,
-		"0.05%": 0, // rounds away: absent, never a quota of zero
-		"0%":    0,
-		"150":   0, // no suffix: not a quota at all
+		"10ms":   10, // CPUQuota=1%, the smallest whole percentage
+		"1ms":    1,  // the smallest quota that survives the conversion
+		"500us":  1,  // half of one: rounds up rather than away
+		"100us":  0,  // rounds away: absent, never a quota of zero
+		"0s":     0,
+		"1min":   60000,
+		"150":    0, // no unit: not a quota at all
+		"1.5x":   0, // an unknown unit refuses the value
+		"1s 150": 0, // one unreadable component refuses all of them
+	} {
+		t.Run("a quota of "+in, func(t *testing.T) {
+			got := quotaMilli(in)
+			switch {
+			case want == 0 && got != nil:
+				t.Errorf("quotaMilli(%q) = %d, want nothing recorded", in, *got)
+			case want != 0 && (got == nil || *got != want):
+				t.Errorf("quotaMilli(%q) = %v, want %d", in, got, want)
+			}
+		})
+	}
+}
+
+// TestUnitPropertiesIgnoresALineThatIsNotAPair: systemctl show is invoked
+// behind "|| true", so a failure arrives as exit 0 with whatever reached
+// stdout, and the output of the --value form this read replaced is bare
+// values with no names at all. A line carrying no "=" must contribute no
+// key: a map that grows a key named "infinity" would answer a later
+// property lookup with something a manager never said.
+func TestUnitPropertiesIgnoresALineThatIsNotAPair(t *testing.T) {
+	got := unitProperties("infinity\n\nMemoryMax=268435456\n=orphan\nEnvironment=A=1\n")
+	want := map[string]string{"MemoryMax": "268435456", "Environment": "A=1"}
+	if len(got) != len(want) {
+		t.Errorf("properties = %#v, want exactly %#v", got, want)
+	}
+	for name, value := range want {
+		if got[name] != value {
+			t.Errorf("properties[%q] = %q, want %q", name, got[name], value)
+		}
+	}
+}
+
+// TestAQuotaComponentThatCannotBeReadRefusesTheWholeValue: a quota arrives
+// in several components once it passes a minute of CPU per second, and the
+// components are summed. A component this cannot read is therefore not a
+// zero to add — summing the rest would record a quota smaller than the one
+// that holds, which §6.1 ranks below recording nothing.
+func TestAQuotaComponentThatCannotBeReadRefusesTheWholeValue(t *testing.T) {
+	for in, want := range map[string]int64{
+		"1min 40s":  100000, // the measured form of CPUQuota=10000%
+		"1s 0ms":    1000,   // a zero component is still a component
+		"0.5s":      500,    // below one, and not a refusal
+		"1s abcms":  0,      // a unit this knows carrying no number
+		"-1s":       0,      // negative: not a span this provider wrote
+		"1s -500ms": 0,      // one negative component refuses all of them
 	} {
 		t.Run("a quota of "+in, func(t *testing.T) {
 			got := quotaMilli(in)

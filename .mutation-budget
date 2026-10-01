@@ -226,14 +226,18 @@ internal/sandbox/docker 3
 # answers agree. A port to a platform that saturates upward instead would
 # make this mutant observable, and it would then be a missing assertion.
 internal/sandbox/k8s  4
-# internal/sandbox/remotehost measured 2026-09-29 at 101 mutants, 97 caught,
-# after seven assertions closed fourteen. Its four survivors are the same
-# four the k8s provider carries, for the same reasons: two widen an index
-# test on a string TrimSpace has already stripped, one lets a zero through
-# to a conversion the next guard refuses, and one turns on what an
-# out-of-range float becomes as an int64 — equivalent by measurement rather
-# than by construction, as the k8s entry above explains at length.
-internal/sandbox/remotehost 4
+# internal/sandbox/remotehost measured 2026-10-01 at 101 mutants, 99 caught.
+# Two of the four it used to carry are gone with the code they lived in: the
+# CPU quota read-back was rewritten for #419, and the conversion that let a
+# zero through to the next guard and the one that turned on an out-of-range
+# float went with it. The parser that replaced it arrived with four
+# survivors of its own and they are asserted rather than budgeted — a
+# summed quota must refuse a component it cannot read, because adding a
+# zero instead would record a limit smaller than the one that holds. The
+# two that remain are the first two of the k8s provider's, for the same
+# reason that entry gives at length: both widen an index test on a string
+# TrimSpace has already stripped.
+internal/sandbox/remotehost 2
 # internal/redact masks the drill's secrets out of every string bound for a
 # record, a log or a notification (evidence-schema.md §8). Measured
 # 2026-09-30 at 6 mutants, all caught. A ceiling of zero is not ambition

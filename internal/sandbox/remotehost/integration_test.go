@@ -95,6 +95,25 @@ func TestRemoteHostLifecycle(t *testing.T) {
 		t.Errorf("deadline backstop timer is not armed: %v", err)
 	}
 
+	// Both limits reach a record, read back from this manager rather than
+	// from the params above (sandbox-providers.md §6.1). This is the only
+	// test that can see which property factsScript asks for: the unit tests
+	// hand Facts a fabricated stdout, so for a year they agreed with a
+	// script that asked systemd for CPUQuota — the name of the *setting* —
+	// and every bare-host record carried cpus_milli: null beside a filled
+	// memory_bytes (#419). A null here is a failure, not an absence: this
+	// drill asked for both caps and systemd accepted both.
+	facts := sbx.Facts(ctx)
+	if facts.MemoryBytes == nil || *facts.MemoryBytes != 268435456 {
+		t.Errorf("facts.memory_bytes = %v, want 268435456 for memory: 256M", facts.MemoryBytes)
+	}
+	if facts.CPUsMilli == nil || *facts.CPUsMilli != 1000 {
+		t.Errorf("facts.cpus_milli = %v, want 1000 for cpus: \"1\"", facts.CPUsMilli)
+	}
+	if facts.ImageDigest != nil {
+		t.Errorf("facts.image_digest = %q, want nil — a bare host runs from no image", *facts.ImageDigest)
+	}
+
 	// Exec: stdin roundtrip, environment, working directory, user, exit
 	// codes — all inside the slice.
 	res, err := sbx.Exec(ctx, sandbox.ExecRequest{Argv: []string{"cat"}, Stdin: []byte("piped-data")})
