@@ -11,6 +11,28 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Added
+
+- **The README's YAML examples are now loaded by the loader that reads
+  them** (`internal/docs/readmeyaml_test.go`). `internal/config` refuses an
+  unknown field and a duplicate key, so a renamed configuration key breaks
+  every drill file in the field at once — and left the document a
+  newcomer's first drill is copied from untouched.
+  `examples/drill.example.yaml` has been held to the loader since Phase 1;
+  the README's six blocks were held by nothing, and the last measurement of
+  them was by hand at `v0.1.0`.
+
+  Every fenced block is classified by what it declares rather than by how
+  it is fenced, and handed to `config.Load` or `config.LoadGameDay`; a
+  fragment documenting one section is composed onto a minimal skeleton the
+  same loader validates. Keying it on the fence was tried and measured
+  wrong: respelling five of the six fences removed them from the gate while
+  it still reported success. Thirteen mutations of the document were
+  measured against the finished gate: ten fail it — among them a renamed
+  `sign_key`, a duplicated `path`, a dropped `sandbox.timeout` and a
+  deleted game-day example — and three correctly change nothing, including
+  respelling the fences.
+
 ### Fixed
 
 - **The release and downloads badges rendered "invalid" in every README.**
