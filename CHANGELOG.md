@@ -11,6 +11,25 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.36.1] - 2026-10-01
+
+### Fixed
+
+- **The README's packaged-install command named an asset no release
+  carries.** The v0.36.0 bump moved the core package to
+  `probavi_0.36.0_amd64.deb` and left the adapter beside it at
+  `probavi-adapter-postgres_0.35.0_amd64.deb`, so the one `apt install`
+  line a reader copies asked for a file the release does not have —
+  measured against the published assets of v0.36.0, which carry
+  `probavi-adapter-postgres_0.36.0_amd64.deb` and nothing named 0.35.0 at
+  all.
+
+  The gate that exists to prevent exactly this missed it by one
+  character: it matched `probavi_<version>_amd64.deb`, which is the core
+  package alone, while the same gate's rule for `docs/packaging.md`
+  already covered both filenames. The README is now held to that wider
+  rule, which fails on the stale version before the fix is applied.
+
 ### Fixed
 
 - **`sandbox.resources.cpus_milli` was null in every bare-host record**
@@ -7188,7 +7207,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.36.0...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.36.1...HEAD
+[0.36.1]: https://github.com/probavi/probavi/compare/v0.36.0...v0.36.1
 [0.36.0]: https://github.com/probavi/probavi/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/probavi/probavi/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/probavi/probavi/compare/v0.33.0...v0.34.0

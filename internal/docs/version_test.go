@@ -127,8 +127,13 @@ var versionClaims = []versionClaim{
 		regexp.MustCompile(`Released as \*\*v(\d+\.\d+\.\d+)\*\*`)},
 	{sourceDoc, "the download example's tag",
 		regexp.MustCompile(`\$ tag=v(\d+\.\d+\.\d+) `)},
+	// Both package filenames, not just the core's. The narrower
+	// `probavi_…` form matched only the first of the two the example
+	// installs, and the adapter's stayed at 0.35.0 through the v0.36.0
+	// bump — an apt line naming an asset that release does not carry.
+	// This is the same shape docs/packaging.md is held to below.
 	{sourceDoc, "the packaged install example",
-		regexp.MustCompile(`probavi_(\d+\.\d+\.\d+)_amd64\.deb`)},
+		regexp.MustCompile(`probavi[-_](?:adapter-\w+[-_])?(\d+\.\d+\.\d+)_amd64\.deb`)},
 	{"docs/docker.md", "the image tag",
 		regexp.MustCompile(`ghcr\.io/probavi/probavi:(\d+\.\d+\.\d+)`)},
 	{"docs/docker.md", "the reproduce-the-image build argument",
