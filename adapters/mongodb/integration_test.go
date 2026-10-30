@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -577,9 +578,7 @@ func requireStartableEngine(t *testing.T) {
 	image := verifiedImage(t)
 	engineStartOnce.Do(func() {
 		engineStartRefusal = probeEngineStart(image)
-		if line := skipAnnotation(engineStartRefusal); line != "" {
-			fmt.Println(line)
-		}
+		recordSkip(engineStartRefusal)
 	})
 	if engineStartRefusal != "" {
 		t.Skipf("the engine refuses to start on this host, so this suite proves nothing here: %s",
@@ -587,12 +586,56 @@ func requireStartableEngine(t *testing.T) {
 	}
 }
 
-// skipAnnotation is how the skip reaches a reader who is not reading logs.
-// `go test` exits 0 when every test in a package skips, so the matrix job
-// for an affected engine version is **green**, and the only trace of the gap
-// is a SKIP line inside the job's own log — which is how a skip quietly
-// becomes indistinguishable from a pass. A workflow-command warning puts it
-// on the run's summary page instead, beside the job that raised it.
+// recordSkip is how a host's refusal reaches a reader who is not reading
+// logs, and the whole reason this mechanism is a skip rather than a red job.
+//
+// Two measurements shape it, both taken 2026-10-30 because two earlier
+// attempts at this were written on assumption and were wrong:
+//
+//   - `go test` exits 0 when every test in a package skips, so the matrix
+//     job goes green. The version-matrix workflow runs the suite without
+//     `-v`, and in that mode `go test` discards a passing package's output
+//     entirely — stdout *and* stderr. Measured: the job for `mongo:8.0` on
+//     an affected runner printed `ok … 15.098s` and nothing else. So neither
+//     a printed line nor a workflow command reaches the log from here.
+//   - Appending to the file named by GITHUB_STEP_SUMMARY does arrive,
+//     because it never passes through `go test` at all. That is the channel
+//     that works without asking the workflow to change how it invokes tests.
+//
+// So the summary file is the load-bearing half, and the stdout annotation is
+// kept for the runs that do show output — a verbose job, or a developer's
+// terminal — where it is both the readable line and a real annotation.
+func recordSkip(reason string) {
+	if reason == "" {
+		return
+	}
+	if line := skipAnnotation(reason); line != "" {
+		fmt.Println(line)
+	}
+	path := os.Getenv("GITHUB_STEP_SUMMARY")
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+	_, _ = io.WriteString(f, skipSummary(reason))
+}
+
+// skipSummary is the markdown that lands on the job's page. It says what was
+// skipped and why in the engine's own words, and fences them so a log line
+// cannot format the page; backticks are neutralised because the fence is the
+// one thing the engine's text must not be able to close.
+func skipSummary(reason string) string {
+	return "### MongoDB integration suite skipped\n\n" +
+		"The engine refuses to start on this host, so the suite proves nothing here.\n\n" +
+		"```\n" + strings.ReplaceAll(strings.TrimSpace(reason), "`", "'") + "\n```\n"
+}
+
+// skipAnnotation is the workflow-command form of the same notice, for a run
+// that does show test output.
 //
 // It returns "" for an empty reason and outside GitHub Actions, where the
 // line would be noise in somebody's terminal. The reason is squeezed onto
@@ -704,6 +747,60 @@ func TestSkipAnnotation(t *testing.T) {
 		got := skipAnnotation("refused ::error title=fake::nonsense")
 		if strings.Count(got, "::") != 2 {
 			t.Errorf("skipAnnotation = %q — want only the two the annotation itself needs", got)
+		}
+	})
+}
+
+// TestRecordSkipReachesTheJobPage pins the one channel measured to survive a
+// non-verbose `go test`, which is how CI invokes this suite.
+func TestRecordSkipReachesTheJobPage(t *testing.T) {
+	const reason = `{"s":"F","id":12257600,"msg":"MongoDB cannot start: Linux kernel versions 6.19 and newer"}`
+
+	t.Run("the refusal lands in the step summary", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "summary.md")
+		t.Setenv("GITHUB_STEP_SUMMARY", path)
+		t.Setenv("GITHUB_ACTIONS", "")
+		recordSkip(reason)
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read summary: %v", err)
+		}
+		for _, want := range []string{"skipped", "MongoDB cannot start", "12257600"} {
+			if !strings.Contains(string(got), want) {
+				t.Errorf("step summary = %q, want it to carry %q", got, want)
+			}
+		}
+	})
+
+	t.Run("it appends rather than replacing", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "summary.md")
+		if err := os.WriteFile(path, []byte("earlier content\n"), 0o644); err != nil {
+			t.Fatalf("seed summary: %v", err)
+		}
+		t.Setenv("GITHUB_STEP_SUMMARY", path)
+		recordSkip(reason)
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read summary: %v", err)
+		}
+		if !strings.Contains(string(got), "earlier content") {
+			t.Errorf("step summary = %q — another step's summary must survive", got)
+		}
+	})
+
+	t.Run("nothing refused writes nothing", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "summary.md")
+		t.Setenv("GITHUB_STEP_SUMMARY", path)
+		recordSkip("")
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("recordSkip(\"\") touched the summary: stat err = %v", err)
+		}
+	})
+
+	t.Run("the engine cannot close the fence", func(t *testing.T) {
+		got := skipSummary("refused ```\n# heading")
+		if strings.Count(got, "```") != 2 {
+			t.Errorf("skipSummary = %q — want only the two fences it opens and closes", got)
 		}
 	})
 }

@@ -147,13 +147,20 @@ that wants this must have all three:
 - **It fails open.** A probe that cannot reach the sandbox provider, or an
   engine that is merely slow, leaves the suite exactly as red as it would
   have been.
-- **It says so where the gap would otherwise be invisible.** `go test` exits
-  0 when every test in a package skips, so the job itself goes **green** and
-  a reader of the run sees a tick like any other. The suite therefore raises
-  a workflow-command warning on the run's summary page, beside the job that
-  raised it, and the engine's refusal line stays in the job log. Without that
-  line a skip is indistinguishable from a pass from outside, which is the one
-  failure mode that would make this mechanism dishonest rather than narrow.
+- **It says so where the gap would otherwise be invisible.** This is the
+  property that is easy to assume and wrong twice over, so it is stated as
+  measured on 2026-10-30. `go test` exits 0 when every test in a package
+  skips, so the job goes **green** and a reader of the run sees a tick like
+  any other. Worse, the matrix invokes the suites without `-v`, and in that
+  mode `go test` discards a passing package's output entirely — stdout and
+  stderr alike: the `mongo:8.0` job on an affected runner printed
+  `ok … 15.098s` and nothing else, so neither a printed line nor a
+  workflow-command annotation reaches the log from inside a test. What does
+  arrive is an append to the file named by `GITHUB_STEP_SUMMARY`, because it
+  never passes through `go test`, and that is where the suite writes the
+  engine's refusal. Without it a skip is indistinguishable from a pass from
+  outside, which is the one failure mode that would make this mechanism
+  dishonest rather than narrow.
 
 What a skip does **not** do is refresh the claim. While a host refuses, that
 listed version is not being exercised, and the honest reading of `verified`

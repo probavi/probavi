@@ -51,9 +51,11 @@ always called out explicitly.
   The integration suite no longer spends 855 seconds discovering this. It
   asks the engine once, and if the engine refuses, skips with the engine's
   own refusal line as the reason. Because `go test` exits 0 when every test
-  skips, the job itself goes green, so the suite also raises a warning on
-  the run's summary page — without it a skip would be indistinguishable from
-  a pass from outside. The skip cannot outlive its reason: it records no kernel version, no tag and
+  skips — and, without `-v`, discards a passing package's output altogether,
+  measured — the job goes green and its log says nothing, so the suite writes
+  the refusal to the job's summary page, the one channel that does not pass
+  through `go test`. Without it a skip would be indistinguishable from a pass
+  from outside. The skip cannot outlive its reason: it records no kernel version, no tag and
   no date, matches only the engine's own structured log id, and fails open
   on anything it cannot interpret, so a slow engine or an unreachable
   provider stays exactly as red as before. The rule it follows is normative

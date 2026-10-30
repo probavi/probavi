@@ -84,9 +84,10 @@ explanation is here instead.
 This repository's own CI meets the same wall: on an affected host the
 integration suite asks the engine once, and if it refuses, skips with the
 engine's refusal line as the reason. The matrix job for that version then
-goes **green** — `go test` exits 0 when every test skips — so the suite also
-raises a warning on the run's summary page, and the refusal line itself is in
-the job log. The rule and its limits are in
+goes **green**, and its log says nothing about it — `go test` exits 0 when
+every test skips, and without `-v` it discards a passing package's output
+altogether. So the suite writes the refusal to the job's own summary page
+instead, which is where to look. The rule and its limits are in
 [`docs/engine-versions.md`](../../docs/engine-versions.md) §2.
 
 ## The TTL monitor is disabled before the restore
