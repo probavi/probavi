@@ -124,6 +124,53 @@ under test is the manifest's, never the job's.
 it stays out of `docs/capabilities.json`. A consumer is told which versions
 CI restores from; which of them ran on the last push is our business.
 
+**One case produces neither a pass nor a failure: a host the engine itself
+refuses.** An engine may decline to start on the runner for reasons that are
+upstream's and have nothing to do with the backup, the adapter or the
+sandbox — measured 2026-10-30, `mongod` 8.0 exits before opening a socket on
+the GitHub-hosted `ubuntu-26.04` runner, because MongoDB ships a deliberate
+refusal for a window of Linux kernels (SERVER-121912), while the same image
+starts normally on kernel 7.2.3 the same day. A suite in that position
+**skips**, with the engine's own refusal line as the reason.
+
+Three properties make that a record rather than a lowered gate, and a suite
+that wants this must have all three:
+
+- **The refusal is matched exactly**, on the engine's own structured log id
+  rather than prose around it. Any other failure to start — including one
+  that merely looks similar — still fails.
+- **Nothing is recorded that could outlive the reason.** No kernel version,
+  no image tag, no date and no environment variable: the suite asks the
+  engine on the spot, every run. The day the host leaves the window, or
+  upstream withdraws the refusal, every test runs again with no commit and
+  nobody's memory involved.
+- **It fails open.** A probe that cannot reach the sandbox provider, or an
+  engine that is merely slow, leaves the suite exactly as red as it would
+  have been.
+- **It says so where the gap would otherwise be invisible.** This is the
+  property that is easy to assume and wrong twice over, so it is stated as
+  measured on 2026-10-30. `go test` exits 0 when every test in a package
+  skips, so the job goes **green** and a reader of the run sees a tick like
+  any other. Worse, the matrix invokes the suites without `-v`, and in that
+  mode `go test` discards a passing package's output entirely — stdout and
+  stderr alike: the `mongo:8.0` job on an affected runner printed
+  `ok … 15.098s` and nothing else, so neither a printed line nor a
+  workflow-command annotation reaches the log from inside a test. What does
+  arrive is an append to the file named by `GITHUB_STEP_SUMMARY`, because it
+  never passes through `go test`, and that is where the suite writes the
+  engine's refusal. Without it a skip is indistinguishable from a pass from
+  outside, which is the one failure mode that would make this mechanism
+  dishonest rather than narrow.
+
+What a skip does **not** do is refresh the claim. While a host refuses, that
+listed version is not being exercised, and the honest reading of `verified`
+for it is the last run that did exercise it. Removing the entry instead was
+considered and rejected on 2026-10-30 for MongoDB 8.0: the version restores
+correctly on hosts outside upstream's window, measured the same day, so
+dropping it would misreport the software rather than the pipeline — §4's
+first bullet in reverse. The engine's requirement belongs in the adapter's
+README, where an operator meeting the same wall will look.
+
 ## 3. When each version runs
 
 | Trigger | What runs | Why |
