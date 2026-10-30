@@ -147,6 +147,42 @@ func TestCompressedRestoreScriptJudgesBothEnds(t *testing.T) {
 	}
 }
 
+// TestTailIsHandedTheFifoAsAnOperand pins the one thing about the witness
+// the exit codes above cannot see. Measured 2026-10-30: Ubuntu 26.04 ships
+// uutils coreutils 0.10.0 in place of GNU's, and its `tail -c N < fifo`
+// never returns, while `tail -c N -- fifo` returns the same bytes GNU
+// does. In the redirection form the tap therefore had no reader, the tee
+// blocked on opening the fifo for writing, and every case in the table
+// above timed out instead of reaching a verdict. A GNU host cannot tell
+// the two forms apart by their outcome, so what is asserted here is the
+// invocation itself.
+func TestTailIsHandedTheFifoAsAnOperand(t *testing.T) {
+	realTail, err := exec.LookPath("tail")
+	if err != nil {
+		t.Skipf("no tail on this host: %v", err)
+	}
+	witness := filepath.Join(t.TempDir(), "tail-argv")
+	tailStub := fmt.Sprintf(`printf '%%s\n' "$*" >>%q`+"\n"+`exec %q "$@"`, witness, realTail)
+	binDir := stubPath(t, map[string]string{
+		"gzip": emitsWholeDump, "mariadb": drainsThenSucceeds, "tail": tailStub,
+	})
+	scratch := t.TempDir()
+	member := filepath.Join(scratch, "dump.sql.gz")
+	fifo := member + ".fifo"
+	if got := runLoadScript(t, compressedRestoreScript, binDir, member,
+		filepath.Join(scratch, "dump.status"), "root", "orders",
+		dumpCompleteMarker, strconv.Itoa(markerTailBytes)); got != 0 {
+		t.Fatalf("exit = %d, want 0", got)
+	}
+	argv, err := os.ReadFile(witness)
+	if err != nil {
+		t.Fatalf("read witness: %v", err)
+	}
+	if !strings.Contains(string(argv), fifo) {
+		t.Errorf("tail argv = %q, want %s among the operands", argv, fifo)
+	}
+}
+
 // compressedFixture writes a dump stored the way a dump pipeline stores
 // one: mysqldump's banner, the data, and the sign-off that says the dump
 // finished. The banner matters as much as the trailer — it is what puts the

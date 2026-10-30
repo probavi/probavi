@@ -11,6 +11,62 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A compressed restore hung forever on a sandbox image whose coreutils is
+  uutils rather than GNU's.** The scripts that replay a compressed dump tap
+  the stream to keep its last bytes, so the dump can be proved whole
+  without inflating it twice, and they did that by redirecting a fifo onto
+  `tail`'s stdin. Measured 2026-10-30: Ubuntu 26.04 ships uutils coreutils
+  0.10.0 in place of GNU's, and its `tail -c N < fifo` never returns, while
+  `tail -c N -- fifo` returns the same bytes GNU does — a pipe or a regular
+  file on stdin is fine either way, so only the fifo form is affected. With
+  no reader the `tee` feeding it blocked on opening the fifo for writing,
+  and the restore sat until the drill's context expired: no diagnosis, no
+  verdict, no record. The fifo is now `tail`'s operand in all four scripts
+  that tap one (`mysql` twice, `mariadb`, `postgres`), and each adapter's
+  script tests assert the invocation rather than the outcome, because a GNU
+  host cannot tell the two forms apart.
+
+  The hang reached a drill only on an image built from a distribution that
+  ships uutils, which Ubuntu does from 25.10. What found it was CI: GitHub's
+  `ubuntu-latest` moved from 24.04 to 26.04 between 2026-10-23 and
+  2026-10-24, the script tests run against the host's own tools, and six of
+  them timed out.
+
+- **The integration job could not preload its image into the kind node.**
+  `kind load docker-image` is `docker save` piped into
+  `ctr images import --all-platforms`, and when the host's Docker keeps its
+  images in a containerd store the archive is an OCI index whose other
+  platforms' manifests are absent, so the import fails with
+  `ctr: content digest sha256:… not found` — measured on the ubuntu-26.04
+  runner, and not a pin problem: kind v0.33.0 issues the same command as the
+  pinned v0.32.0, and `docker save` has no platform flag to narrow what it
+  writes. The step now runs kind's own import without `--all-platforms`, so
+  ctr resolves the node's platform and ignores the manifests that are not
+  in the archive.
+
+- **A damaged Solr backup was reported as a failed restore rather than a
+  corrupt source.** The adapter reads the Collections API's own `msg` to
+  tell a backup it cannot read from a drill that asked for something
+  impossible, and the marker it looked for was `Could not restore core`.
+  Measured 2026-10-30: the `solr:10` tag moved to 10.1.0 (image built
+  2026-10-29), which answers the same two artifacts — a damaged index, and
+  a backup with its `shard_backup_metadata` removed — with HTTP 500 and
+  `Could not restore shard`. Both wordings are now markers, because
+  `solr:10` moves and an operator may hold either. The drill failed either
+  way; what was wrong is the diagnosis an operator acts on, which said the
+  restore had failed for engine reasons where the backup was the problem.
+
+  The shard wording does not reach a refusal that is not about the
+  artifact: measured the same day on 10.1.0, a location that does not exist
+  answers with its own sentence, while restoring into a collection that
+  already exists and asking for a replicationFactor the cluster cannot
+  place both succeed. Within the 500s the body offers nothing else to key
+  on — empty `metadata`, identical `errorClass` and stack trace — so the
+  unit table now pins the location refusal to `restore_failed` beside the
+  two corrupt wordings.
+
 ## [0.36.1] - 2026-10-01
 
 ### Fixed

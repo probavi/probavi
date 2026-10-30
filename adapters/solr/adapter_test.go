@@ -657,10 +657,21 @@ func TestNotServingNamesWhichWaitRanOut(t *testing.T) {
 func TestProvisionClassifiesTheEnginesRefusals(t *testing.T) {
 	backup := writeBackup(t, nil)
 	tests := map[string]struct{ diagnosis, code, message string }{
+		// Both wordings the 10.x line answers a damaged artifact with:
+		// "core" through 10.0, "shard" from 10.1.0. Each is measured,
+		// and the position of each is recorded beside the marker list
+		// in ops.go rather than restated here.
 		"a backup the engine cannot read": {
 			`HTTP 500 {"error":{"msg":"Could not restore core"}}`, "source_corrupt", "Could not restore core"},
-		"a collection that already exists": {
-			`HTTP 400 {"error":{"msg":"collection already exists: orders"}}`, "restore_failed", "already exists"},
+		"a backup the engine cannot read, in 10.1's words": {
+			`HTTP 500 {"error":{"msg":"Could not restore shard"}}`, "source_corrupt", "Could not restore shard"},
+		// A 500 is not on its own a statement about the backup. This
+		// is what 10.1.0 answers a location that is not there, and it
+		// has to keep a verdict of its own — the shard marker above
+		// must not reach this far.
+		"a location the engine cannot find": {
+			`HTTP 500 {"error":{"msg":"specified location file:///srv/nowhere does not exist."}}`,
+			"restore_failed", "does not exist"},
 		"an engine that answered nothing": {"", "restore_failed", "said nothing"},
 	}
 	for name, tt := range tests {

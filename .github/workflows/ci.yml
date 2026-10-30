@@ -128,12 +128,38 @@ jobs:
         # kind is installed like every other Go tool — pinned version,
         # verified by the module checksum database. kubectl ships with the
         # runner image. postgres:16 is preloaded into the node so the k8s
-        # tests never pull through the cluster.
+        # tests never pull through the cluster; the pod spec sets no
+        # imagePullPolicy and the tag is not :latest, so an image already
+        # in the node's CRI is used as it is.
+        #
+        # The import is kind's own command with one flag removed, rather
+        # than `kind load docker-image`. That subcommand is `docker save`
+        # piped into `ctr images import --all-platforms …`, and when the
+        # host's Docker keeps its images in a containerd store the archive
+        # is an OCI index whose other platforms' manifests are not present:
+        # the import then fails with "ctr: content digest sha256:… not
+        # found", measured on the ubuntu-26.04 runner. Without
+        # --all-platforms, ctr resolves the node's own platform and ignores
+        # the manifests that are not there: measured against an
+        # index-shaped archive, it resolved the index and exactly one
+        # vnd.oci.image.manifest.v1+json, never looking at the index's
+        # other descriptors. The crictl listing at the end is the
+        # assertion — a silent no-op fails here rather than in a test.
+        #
+        # The pin is not the fix: kind v0.33.0 issues the same ctr command
+        # as the pinned v0.32.0 (read in its source), and `docker save` has
+        # no platform flag to narrow what it writes. Pulling inside the node
+        # instead would make the step depend on the node's own egress, which
+        # nothing else here needs.
         run: |
           go install sigs.k8s.io/kind@v0.32.0
           kind create cluster --name probavi-it --wait 120s
           docker pull -q postgres:16
-          kind load docker-image postgres:16 --name probavi-it
+          docker save postgres:16 -o /tmp/probavi-it-postgres16.tar
+          docker exec -i probavi-it-control-plane \
+            ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs - \
+            < /tmp/probavi-it-postgres16.tar
+          docker exec probavi-it-control-plane crictl images | grep postgres
       - name: set up ssh loopback (remote docker over ssh)
         # The remote-docker test drives the daemon through the docker CLI's
         # native SSH transport, looped back to this runner: key-based ssh to

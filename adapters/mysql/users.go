@@ -39,11 +39,12 @@ rc=$?
 // Its shape follows compressedRestoreScript, with one difference the
 // --force above forces: the client does not abort, so its status is
 // preserved rather than normalised, and only the decompressor's failure
-// takes the reserved exit.
+// takes the reserved exit. The fifo is tail's operand there for the
+// reason recorded there, and must stay one here.
 const compressedUsersLoadScript = `
 rm -f "$2.fifo"
 mkfifo "$2.fifo" || exit 92
-tail -c "$5" <"$2.fifo" >"$2.tail" &
+tail -c "$5" -- "$2.fifo" >"$2.tail" &
 { gzip -dc -- "$2"; echo $? > "$3"; } | tee "$2.fifo" | mysql -h 127.0.0.1 -u "$1" -f
 loaded=$?
 wait

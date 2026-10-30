@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "postgres"
-	adapterVersion = "0.19.0"
+	adapterVersion = "0.19.1"
 
 	// psqlConnectionRefused is psql's exit code for a connection that could
 	// not be established — distinct from 1 (psql's own fatal error) and 3
@@ -608,11 +608,18 @@ tail -c "$5" -- "$1" | grep -qE "$4" || exit 91
 // job that wrote it). psql is judged first for the reason the archive
 // script gives — once psql aborts, the decompressor dies of a broken pipe,
 // and blaming the compression would name the wrong culprit.
+//
+// The fifo reaches tail as an operand rather than on its stdin. Measured
+// 2026-10-30: Ubuntu 26.04 ships uutils coreutils 0.10.0 in place of GNU's,
+// and its `tail -c N < fifo` never returns, while `tail -c N -- fifo`
+// returns the same bytes GNU does. A reader that never starts leaves the
+// tee below blocked on opening the fifo for writing, so the restore would
+// hang until the drill's context expired — no diagnosis, no verdict.
 const compressedScriptReplayScript = `
 [ -n "$7" ] && { gzip -dc -- "$1" 2>/dev/null | head -c "$8" | grep -qE -- "$7"; } && exit 93
 rm -f "$1.fifo"
 mkfifo "$1.fifo" || exit 92
-tail -c "$5" <"$1.fifo" >"$1.tail" &
+tail -c "$5" -- "$1.fifo" >"$1.tail" &
 { gzip -dc -- "$1"; echo $? > "$1.status"; } | tee "$1.fifo" | psql -h 127.0.0.1 -U "$2" -d "$3" -v ON_ERROR_STOP="$6" -q >/dev/null
 rc=$?
 wait
