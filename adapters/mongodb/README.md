@@ -39,11 +39,12 @@ readiness probes cannot be fooled by a server that is about to restart.
 Because no authentication exists in the sandbox, `connection.user` is
 reported empty and the declared `sql_runner` references no `{{user}}`.
 
-## MongoDB 8.0 and Linux kernels 6.19 and newer
+## MongoDB 8.0 refuses to start on some kernels
 
-A drill against MongoDB 8.0 fails on a host running Linux 6.19 or newer,
-and the failure looks like nothing in particular: the sandbox comes up,
-the engine never answers, and the drill ends as `engine_not_ready`.
+A drill against MongoDB 8.0 fails on a host whose kernel upstream has
+declared incompatible, and the failure looks like nothing in particular:
+the sandbox comes up, the engine never answers, and the drill ends as
+`engine_not_ready`.
 
 The reason is upstream, not here. `mongod` 8.0 refuses to start on those
 kernels and says so before doing anything else:
@@ -54,14 +55,40 @@ incompatibility with this version of MongoDB.
 See https://jira.mongodb.org/browse/SERVER-121912
 ```
 
-The message goes to the container's own output, which an adapter cannot
-read — the protocol gives it `exec` and `put_file`, and there is nothing
-left in the sandbox to exec against once the engine has exited. So the
-adapter reports the readiness timeout truthfully and cannot explain it,
-which is why the explanation is here instead. Checked 2026-08-27 against
-`mongo:8.0` on kernel 7.1.9; MongoDB 7.0 starts on the same host.
+**The window is narrower than that sentence reads, and it has moved.**
+Measured 2026-08-27, `mongo:8.0` refused on kernel 7.1.9. Measured
+2026-10-30, the same tag — then `mongo:8.0` = 8.0.34 — starts normally on
+kernel 7.2.3, with no refusal line and no fatal line in its log, while it
+still refuses on the GitHub-hosted `ubuntu-26.04` runner the same day. So
+the refusal applies to a window of kernels rather than to everything from
+6.19 up, and upstream has since exempted the top of it: the ticket linked
+from SERVER-121912 is titled *"Remove the graceful exit for kernel version
+7.0.14 and above"* (SERVER-125742), which both measurements are consistent
+with. Where exactly the boundary sits is upstream's statement, not ours —
+nothing here has measured it.
 
-If your drill hosts run a recent kernel, this affects the 8.0 line only.
+What this means in practice: if a drill against 8.0 ends as
+`engine_not_ready` on your host, read the sandbox container's own log before
+suspecting the backup. If the refusal line is there, no configuration on
+this side will help — the engine has not started. MongoDB 7.0 is unaffected
+(measured 7.0.45 on the same kernel the same day).
+
+The adapter cannot read that line for you. The protocol gives it `exec` and
+`put_file`, and once the engine has exited there is nothing left in the
+sandbox to exec against; what the adapter reports is the daemon's answer to
+its last attempt, which on Docker is `container … is not running` — enough
+to tell you the engine exited rather than hung, and not enough to say why.
+The engine's own sentence is in the container log, which is why the
+explanation is here instead.
+
+This repository's own CI meets the same wall: on an affected host the
+integration suite asks the engine once, and if it refuses, skips with the
+engine's refusal line as the reason. The matrix job for that version then
+goes **green**, and its log says nothing about it — `go test` exits 0 when
+every test skips, and without `-v` it discards a passing package's output
+altogether. So the suite writes the refusal to the job's own summary page
+instead, which is where to look. The rule and its limits are in
+[`docs/engine-versions.md`](../../docs/engine-versions.md) §2.
 
 ## The TTL monitor is disabled before the restore
 
