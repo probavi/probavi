@@ -11,6 +11,27 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Changed
+
+- **A MongoDB readiness timeout now says what the engine answered.** The
+  verdict named the budget — `engine did not answer ping within 2m0s` —
+  and nothing else, which is the one thing an operator already knows: a
+  drill that waited two minutes says so by having waited. It now carries
+  the last attempt's exit code and the engine's own first line, through
+  the same credential scrub every other diagnostic in this adapter uses,
+  because this string reaches a signed record through the drill's outcome
+  (evidence schema §8). Measured 2026-10-30 against `mongo:8.0` with
+  nothing listening on the port: mongosh exits 1, writes nothing to
+  stdout, and puts `MongoNetworkError: connect ECONNREFUSED
+  127.0.0.1:27017` on stderr — so stderr is preferred, with stdout the
+  fallback for a server that answers but not with `1`.
+
+  The integration fixture gained the same obligation: a seed engine that
+  never becomes ready now reports its last probe and the tail of what
+  mongod itself wrote, read through the docker CLI. This is what the
+  `mongodb 8.0` matrix job has needed since 2026-10-20 — see ROADMAP,
+  where the still-unknown cause is recorded.
+
 ### Fixed
 
 - **A compressed restore hung forever on a sandbox image whose coreutils is

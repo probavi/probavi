@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "mongodb"
-	adapterVersion = "0.7.0"
+	adapterVersion = "0.7.1"
 
 	// defaultDatabase is the connection database when the drill config
 	// does not name one: admin always exists, so healthchecks and the
@@ -315,7 +315,7 @@ func opHealthcheck(ctx context.Context, c *core, payload json.RawMessage) (any, 
 func awaitEngine(ctx context.Context, c *core) (float64, *protoError) {
 	start := time.Now()
 	for {
-		val, stdout, _, perr := c.exec(ctx, execArgs{
+		val, stdout, stderr, perr := c.exec(ctx, execArgs{
 			Argv:           []string{"mongosh", "--quiet", "--norc", pingURI, "--eval", pingEval},
 			TimeoutSeconds: 5,
 		})
@@ -327,7 +327,8 @@ func awaitEngine(ctx context.Context, c *core) (float64, *protoError) {
 		}
 		if time.Since(start) > readinessBudget {
 			return 0, protoErr("engine_not_ready", true,
-				"engine did not answer ping within %s", readinessBudget)
+				"engine did not answer ping within %s; the last attempt exited %d and said %s",
+				readinessBudget, val.ExitCode, pingAnswer(stdout, stderr))
 		}
 		select {
 		case <-ctx.Done():
@@ -409,6 +410,32 @@ func verdictLine(b []byte) string {
 		}
 	}
 	return strings.ReplaceAll(scrubSecrets(fallback), `"`, "'")
+}
+
+// pingAnswer is what the engine said to the ping that ran out the
+// readiness budget. Without it the verdict named the budget and nothing
+// else, which is the one thing an operator already knows: a drill that
+// waited two minutes says so by having waited.
+//
+// stderr is preferred because that is where a refusal lands — measured
+// 2026-10-30 against mongo:8.0 with nothing listening on the port:
+// mongosh exits 1, writes nothing to stdout, and puts
+// "MongoNetworkError: connect ECONNREFUSED 127.0.0.1:27017" on stderr.
+// stdout is the other case the loop above describes, where a server
+// answers but not with 1.
+//
+// Both go through firstLine, so this string carries the same credential
+// scrub and quote neutralisation as every other engine diagnostic here:
+// it reaches a signed record through the drill's outcome, and the schema
+// forbids a record from carrying credentials (evidence schema §8).
+func pingAnswer(stdout, stderr []byte) string {
+	if line := firstLine(stderr); line != "" {
+		return `"` + line + `"`
+	}
+	if line := firstLine(stdout); line != "" {
+		return `"` + line + `"`
+	}
+	return "nothing"
 }
 
 // firstLine reduces captured output to its first line, quote-free and free

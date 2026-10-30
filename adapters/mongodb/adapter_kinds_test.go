@@ -345,6 +345,44 @@ func TestScrubSecrets(t *testing.T) {
 	})
 }
 
+// TestPingAnswer pins the half of the readiness verdict that says why.
+// The budget was always in the message; what the engine answered was not,
+// and without it a timed-out drill reports only that time passed.
+func TestPingAnswer(t *testing.T) {
+	tests := []struct{ name, stdout, stderr, want string }{
+		// Measured 2026-10-30 against mongo:8.0 with nothing listening
+		// on the port: exit 1, empty stdout, this line on stderr.
+		{"a refusal lands on stderr", "",
+			"MongoNetworkError: connect ECONNREFUSED 127.0.0.1:27017",
+			`"MongoNetworkError: connect ECONNREFUSED 127.0.0.1:27017"`},
+		{"stderr outranks stdout", "0", "MongoServerError: not primary",
+			`"MongoServerError: not primary"`},
+		{"stdout speaks when stderr is silent", "0", "", `"0"`},
+		{"only the first line", "", "first line\nsecond line", `"first line"`},
+		{"an engine that said nothing at all", "", "", "nothing"},
+		{"whitespace is not an answer", "\n  \n", " \t ", "nothing"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pingAnswer([]byte(tt.stdout), []byte(tt.stderr)); got != tt.want {
+				t.Errorf("pingAnswer(%q, %q) = %s, want %s", tt.stdout, tt.stderr, got, tt.want)
+			}
+		})
+	}
+	t.Run("a credential never reaches the message", func(t *testing.T) {
+		got := pingAnswer(nil, []byte(`storedKey: "O1o0hlJvo8yIdQ"`))
+		if strings.Contains(got, "O1o0hlJ") {
+			t.Errorf("pingAnswer = %s — this string reaches a signed record", got)
+		}
+	})
+	t.Run("the engine cannot close the quoting", func(t *testing.T) {
+		got := pingAnswer(nil, []byte(`he said "stop"`))
+		if strings.Count(got, `"`) != 2 {
+			t.Errorf("pingAnswer = %s — want exactly the two quotes this adds", got)
+		}
+	})
+}
+
 func TestNameList(t *testing.T) {
 	if got := nameList([]string{"a", "b"}, 5); got != "a; b" {
 		t.Errorf("nameList = %q", got)

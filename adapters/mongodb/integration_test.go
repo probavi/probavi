@@ -461,11 +461,52 @@ func awaitReady(t *testing.T, ctx context.Context, sbx *docker.Sandbox) {
 		if err == nil && res.ExitCode == 0 && strings.TrimSpace(string(res.Stdout)) == "1" {
 			return
 		}
+		last := probeAnswer(res, err)
 		if time.Now().After(deadline) {
-			t.Fatal("seed engine never became ready")
+			t.Fatalf("seed engine never became ready: last probe %s\nwhat mongod wrote:\n%s",
+				last, engineLog(t, sbx))
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// probeAnswer describes one unsuccessful readiness probe. The engine's own
+// words are the point: a fixture that times out without them leaves a CI
+// log saying only that three minutes passed, which is what mongodb 8.0's
+// matrix job did for a week.
+func probeAnswer(res *sandbox.ExecResult, err error) string {
+	if err != nil {
+		return fmt.Sprintf("did not run: %v", err)
+	}
+	return fmt.Sprintf("exited %d, stdout %q, stderr %q",
+		res.ExitCode, firstLineOf(res.Stdout), firstLineOf(res.Stderr))
+}
+
+func firstLineOf(b []byte) string {
+	s := strings.TrimSpace(string(b))
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return s
+}
+
+// engineLog is what the container itself wrote. mongod logs to stdout in
+// the official image, so this is the engine's startup account — the half
+// a probe from outside cannot see, and the half that says whether mongod
+// refused to start rather than merely being slow. Read through the docker
+// CLI, as the seed containers in the sibling adapters' suites already are.
+func engineLog(t *testing.T, sbx *docker.Sandbox) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "logs", "--tail", "40", sbx.ID()).CombinedOutput()
+	if err != nil {
+		return fmt.Sprintf("(docker logs failed: %v)", err)
+	}
+	if len(strings.TrimSpace(string(out))) == 0 {
+		return "(the container wrote nothing)"
+	}
+	return string(out)
 }
 
 func mustExec(t *testing.T, ctx context.Context, sbx *docker.Sandbox, argv ...string) {
