@@ -73,6 +73,13 @@ func binlogHandler(t *testing.T, sequence *[]string, replay *[]string) func(verb
 			return physical(call)
 		}
 		args, _ := lastArg(t, call)
+		// The version probe is two words of its own; the replay hands
+		// mysqlbinlog to a shell, so there it arrives as argv[2] and the
+		// branch below is the one that takes it.
+		if args.Argv[0] == "mysqlbinlog" {
+			*sequence = append(*sequence, "mysqlbinlog-version")
+			return okExec(0), nil
+		}
 		if len(args.Argv) > 2 && strings.Contains(args.Argv[2], "mysqlbinlog") {
 			*sequence = append(*sequence, "replay")
 			*replay = args.Argv
@@ -96,8 +103,10 @@ func TestProvisionWithBinlogsReplaysAfterTheEngineIsUp(t *testing.T) {
 	}
 
 	// The replay is last, and it is after the server is serving.
-	want := []string{"mysql-idle", "xtrabackup-version", "put_file", "prepare", "restore",
-		"start", "mysql-ready", "put_file-binlogs", "replay"}
+	// mysqlbinlog is asked for before the transfer, not after the restore:
+	// the position of that element is the assertion (issue #429).
+	want := []string{"mysql-idle", "xtrabackup-version", "mysqlbinlog-version", "put_file",
+		"prepare", "restore", "start", "mysql-ready", "put_file-binlogs", "replay"}
 	if strings.Join(sequence, "|") != strings.Join(want, "|") {
 		t.Errorf("sequence = %v, want %v", sequence, want)
 	}
@@ -156,6 +165,48 @@ func TestProvisionWithBinlogsRefusesABrokenChain(t *testing.T) {
 	}
 	if len(replay) != 0 {
 		t.Error("the replay ran anyway — a broken chain must not be partly applied")
+	}
+}
+
+// TestProvisionWithBinlogsRefusesAnImageWithoutMysqlbinlog: the official
+// server images ship a client set that does not carry mysqlbinlog, and
+// this kind cannot replay without it (issue #429). Refused up front, the
+// drill says the image is incomplete. Discovered where it used to be — in
+// the replay, after a restore that can run for minutes — it arrives as
+// restore_failed, which blames an engine and a backup that were both fine.
+func TestProvisionWithBinlogsRefusesAnImageWithoutMysqlbinlog(t *testing.T) {
+	dir := withBinlogsFixture(t, "binlog.000003")
+	var sequence, replay []string
+	rest := binlogHandler(t, &sequence, &replay)
+	line, _, exit := driveOp(t, "provision", withBinlogsPayload(dir, ""),
+		func(call verbCall) (any, *protoError) {
+			if call.Verb == "exec" {
+				if args, _ := lastArg(t, call); args.Argv[0] == "mysqlbinlog" {
+					sequence = append(sequence, "mysqlbinlog-missing")
+					return errExec(127, "bash: line 1: mysqlbinlog: command not found"), nil
+				}
+			}
+			return rest(call)
+		})
+	if exit != 0 {
+		t.Fatalf("exit = %d — a refusal is an answer, not a crash", exit)
+	}
+	f := parseFinal(t, line)
+	if f.OK || f.Error.Code != "invalid_request" || !strings.Contains(f.Error.Message, "mysqlbinlog") {
+		t.Fatalf("final = %+v, want invalid_request naming the missing tool", f)
+	}
+	if f.Error.Retryable {
+		t.Error("retryable — a stock image does not grow the tool on a second attempt")
+	}
+
+	// The whole point of the check is where it stops: nothing transferred,
+	// nothing prepared, nothing restored.
+	want := []string{"mysql-idle", "xtrabackup-version", "mysqlbinlog-missing"}
+	if strings.Join(sequence, "|") != strings.Join(want, "|") {
+		t.Errorf("sequence = %v, want %v", sequence, want)
+	}
+	if len(replay) != 0 {
+		t.Error("the replay ran without the tool that performs it")
 	}
 }
 

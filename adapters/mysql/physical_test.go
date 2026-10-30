@@ -188,6 +188,9 @@ func TestProvisionPhysicalHappyPath(t *testing.T) {
 		t.Fatalf("final = %+v", f)
 	}
 
+	// No mysqlbinlog-version element: the probe belongs to the kind that
+	// replays, and this one has nothing to replay. The handler's default
+	// arm fails the test if it is asked for anyway.
 	want := []string{"mysql-idle", "xtrabackup-version", "put_file", "prepare", "restore", "start", "mysql-ready"}
 	if strings.Join(sequence, "|") != strings.Join(want, "|") {
 		t.Errorf("sequence = %v, want %v", sequence, want)

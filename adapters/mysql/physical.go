@@ -55,6 +55,13 @@ func provisionPhysical(ctx context.Context, c *core, req *provisionRequest, src 
 	if perr := checkEngineVersion(ctx, c, backupSeries(src.path)); perr != nil {
 		return nil, perr
 	}
+	// Only the kind that replays: a full-only restore asks the image for
+	// nothing this check is about.
+	if src.binlogsPath != "" {
+		if perr := checkBinlogTool(ctx, c); perr != nil {
+			return nil, perr
+		}
+	}
 
 	put, perr := c.putFile(ctx, putFileArgs{SourcePath: src.path, DestPath: backupInSandbox, Mode: "0755"})
 	if perr != nil {
@@ -191,6 +198,33 @@ func checkIdleSandbox(ctx context.Context, c *core) *protoError {
 	if version.ExitCode != 0 {
 		return protoErr("invalid_request", false,
 			"sandbox image lacks xtrabackup (%s): use an image with mysqld, xtrabackup, and gosu", firstLine(stderr))
+	}
+	return nil
+}
+
+// checkBinlogTool refuses an image without mysqlbinlog by name, before a
+// byte of the backup moves. The official server images do not carry it —
+// measured 2026-10-30 on the images this adapter declares: mysql:8.4 and
+// mysql:9.7 have no mysqlbinlog, percona/percona-server:8.4.10 has it
+// (issue #429).
+//
+// Without this the drill transferred the backup, prepared it, copied it
+// back and started the server before the replay reported "mysqlbinlog:
+// command not found" as restore_failed — a code that says the restore ran
+// and failed for engine reasons, where nothing about the engine or the
+// backup had failed. An incomplete image is the operator's, so
+// invalid_request is what says so, and the postgres adapter refuses a
+// missing wal-g the same way.
+func checkBinlogTool(ctx context.Context, c *core) *protoError {
+	version, stderr, perr := execChecked(ctx, c, "mysqlbinlog", "--version")
+	if perr != nil {
+		return perr
+	}
+	if version.ExitCode != 0 {
+		return protoErr("invalid_request", false,
+			"sandbox image lacks mysqlbinlog (%s), which this kind replays the binary logs with: "+
+				"the official server images do not ship it, so the image has to carry it — see "+
+				"the adapter README", firstLine(stderr))
 	}
 	return nil
 }

@@ -97,6 +97,21 @@ always called out explicitly.
   affects every physical source kind: `pgbackrest`, `barman` and `walg`
   ([#428](https://github.com/probavi/probavi/issues/428)).
 
+- **The mysql adapter's `xtrabackup_with_binlogs` kind now names the tool a
+  stock image does not have, before the restore rather than after it.** The
+  replay runs `mysqlbinlog`, and the official server images do not ship it:
+  measured 2026-10-30, neither `mysql:8.4` (the baseline) nor `mysql:9.7`
+  carries the binary, which the adapter README had claimed the official
+  client tooling does. The absence surfaced from inside the replay — after
+  a restore that can run for minutes — as `restore_failed`, a code that
+  reads as an engine or backup fault when neither was at fault. The adapter
+  now asks the sandbox for `mysqlbinlog --version` before anything is
+  transferred and refuses the drill as `invalid_request`, the way the
+  postgres adapter already refuses an image without wal-g. The plain
+  `xtrabackup` kind is unaffected: it has nothing to replay. The README
+  carries the measured table and the measured Dockerfile in place of the
+  claim ([#429](https://github.com/probavi/probavi/issues/429)).
+
 ## [0.36.1] - 2026-10-01
 
 ### Fixed
