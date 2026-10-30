@@ -131,9 +131,7 @@ sandbox — measured 2026-10-30, `mongod` 8.0 exits before opening a socket on
 the GitHub-hosted `ubuntu-26.04` runner, because MongoDB ships a deliberate
 refusal for a window of Linux kernels (SERVER-121912), while the same image
 starts normally on kernel 7.2.3 the same day. A suite in that position
-**skips**, with the engine's own refusal line as the reason, and the job
-reports *skipped* rather than green: the gap stays visible to anyone reading
-the run instead of being papered over by a pass.
+**skips**, with the engine's own refusal line as the reason.
 
 Three properties make that a record rather than a lowered gate, and a suite
 that wants this must have all three:
@@ -149,6 +147,13 @@ that wants this must have all three:
 - **It fails open.** A probe that cannot reach the sandbox provider, or an
   engine that is merely slow, leaves the suite exactly as red as it would
   have been.
+- **It says so where the gap would otherwise be invisible.** `go test` exits
+  0 when every test in a package skips, so the job itself goes **green** and
+  a reader of the run sees a tick like any other. The suite therefore raises
+  a workflow-command warning on the run's summary page, beside the job that
+  raised it, and the engine's refusal line stays in the job log. Without that
+  line a skip is indistinguishable from a pass from outside, which is the one
+  failure mode that would make this mechanism dishonest rather than narrow.
 
 What a skip does **not** do is refresh the claim. While a host refuses, that
 listed version is not being exercised, and the honest reading of `verified`

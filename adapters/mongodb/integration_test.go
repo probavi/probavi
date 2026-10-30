@@ -575,11 +575,37 @@ var (
 func requireStartableEngine(t *testing.T) {
 	t.Helper()
 	image := verifiedImage(t)
-	engineStartOnce.Do(func() { engineStartRefusal = probeEngineStart(image) })
+	engineStartOnce.Do(func() {
+		engineStartRefusal = probeEngineStart(image)
+		if line := skipAnnotation(engineStartRefusal); line != "" {
+			fmt.Println(line)
+		}
+	})
 	if engineStartRefusal != "" {
 		t.Skipf("the engine refuses to start on this host, so this suite proves nothing here: %s",
 			engineStartRefusal)
 	}
+}
+
+// skipAnnotation is how the skip reaches a reader who is not reading logs.
+// `go test` exits 0 when every test in a package skips, so the matrix job
+// for an affected engine version is **green**, and the only trace of the gap
+// is a SKIP line inside the job's own log — which is how a skip quietly
+// becomes indistinguishable from a pass. A workflow-command warning puts it
+// on the run's summary page instead, beside the job that raised it.
+//
+// It returns "" for an empty reason and outside GitHub Actions, where the
+// line would be noise in somebody's terminal. The reason is squeezed onto
+// one line because a workflow command ends at the first newline: the rest
+// would be printed as ordinary output and the annotation would carry half a
+// sentence. `::` is neutralised for the same reason a verdict's quotes are —
+// the engine writes that string, not us.
+func skipAnnotation(reason string) string {
+	if reason == "" || os.Getenv("GITHUB_ACTIONS") != "true" {
+		return ""
+	}
+	oneLine := strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ", "::", ":").Replace(reason)
+	return "::warning title=Engine refused to start on this host::" + strings.TrimSpace(oneLine)
 }
 
 // probeEngineStart runs the verified image the way a drill sandbox runs it —
@@ -644,6 +670,42 @@ func TestKernelRefusalMatcher(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSkipAnnotation pins the line that keeps a skipped job from reading as a
+// passed one, including the three ways the engine's own text could break it.
+func TestSkipAnnotation(t *testing.T) {
+	t.Run("silent outside GitHub Actions", func(t *testing.T) {
+		t.Setenv("GITHUB_ACTIONS", "")
+		if got := skipAnnotation("refused"); got != "" {
+			t.Errorf("skipAnnotation = %q, want \"\" outside Actions", got)
+		}
+	})
+	t.Run("silent when nothing refused", func(t *testing.T) {
+		t.Setenv("GITHUB_ACTIONS", "true")
+		if got := skipAnnotation(""); got != "" {
+			t.Errorf("skipAnnotation = %q, want \"\" with no reason", got)
+		}
+	})
+	t.Run("one line, whatever the engine wrote", func(t *testing.T) {
+		t.Setenv("GITHUB_ACTIONS", "true")
+		got := skipAnnotation("MongoDB cannot start\nsecond line\r\nthird")
+		if strings.ContainsAny(got, "\n\r") {
+			t.Errorf("skipAnnotation = %q — a workflow command ends at the first newline", got)
+		}
+		for _, want := range []string{"MongoDB cannot start", "second line", "third"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("skipAnnotation = %q, want it to keep %q", got, want)
+			}
+		}
+	})
+	t.Run("the engine cannot open a workflow command of its own", func(t *testing.T) {
+		t.Setenv("GITHUB_ACTIONS", "true")
+		got := skipAnnotation("refused ::error title=fake::nonsense")
+		if strings.Count(got, "::") != 2 {
+			t.Errorf("skipAnnotation = %q — want only the two the annotation itself needs", got)
+		}
+	})
 }
 
 func mustExec(t *testing.T, ctx context.Context, sbx *docker.Sandbox, argv ...string) {
