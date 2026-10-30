@@ -611,7 +611,7 @@
       "name": "MariaDB",
       "status": "experimental",
       "since": "0.7.0",
-      "adapter_version": "0.6.0",
+      "adapter_version": "0.6.1",
       "engine": {
         "id": "mariadb",
         "name": "MariaDB"
@@ -771,7 +771,7 @@
       "name": "MySQL",
       "status": "experimental",
       "since": "0.1.0",
-      "adapter_version": "0.16.0",
+      "adapter_version": "0.16.1",
       "engine": {
         "id": "mysql",
         "name": "MySQL"
@@ -934,7 +934,7 @@
       "name": "PostgreSQL",
       "status": "experimental",
       "since": "0.1.0",
-      "adapter_version": "0.19.0",
+      "adapter_version": "0.19.1",
       "engine": {
         "id": "postgresql",
         "name": "PostgreSQL"

@@ -11,6 +11,29 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A compressed restore hung forever on a sandbox image whose coreutils is
+  uutils rather than GNU's.** The scripts that replay a compressed dump tap
+  the stream to keep its last bytes, so the dump can be proved whole
+  without inflating it twice, and they did that by redirecting a fifo onto
+  `tail`'s stdin. Measured 2026-10-30: Ubuntu 26.04 ships uutils coreutils
+  0.10.0 in place of GNU's, and its `tail -c N < fifo` never returns, while
+  `tail -c N -- fifo` returns the same bytes GNU does — a pipe or a regular
+  file on stdin is fine either way, so only the fifo form is affected. With
+  no reader the `tee` feeding it blocked on opening the fifo for writing,
+  and the restore sat until the drill's context expired: no diagnosis, no
+  verdict, no record. The fifo is now `tail`'s operand in all four scripts
+  that tap one (`mysql` twice, `mariadb`, `postgres`), and each adapter's
+  script tests assert the invocation rather than the outcome, because a GNU
+  host cannot tell the two forms apart.
+
+  The hang reached a drill only on an image built from a distribution that
+  ships uutils, which Ubuntu does from 25.10. What found it was CI: GitHub's
+  `ubuntu-latest` moved from 24.04 to 26.04 between 2026-10-23 and
+  2026-10-24, the script tests run against the host's own tools, and six of
+  them timed out.
+
 ## [0.36.1] - 2026-10-01
 
 ### Fixed

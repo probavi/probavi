@@ -37,7 +37,9 @@ func stubPath(t *testing.T, stubs map[string]string, omit ...string) string {
 		}
 	}
 	for _, name := range scriptTools {
-		if contains(omit, name) {
+		// A stub for one of these replaces the host's, the way the sibling
+		// adapters' helpers already allow: omit means genuinely absent.
+		if _, stubbed := stubs[name]; stubbed || contains(omit, name) {
 			continue
 		}
 		real, err := exec.LookPath(name)
@@ -178,6 +180,40 @@ func TestCompressedReplayScriptJudgesEveryEnd(t *testing.T) {
 				t.Errorf("exit = %d, want %d", got, tt.wantExit)
 			}
 		})
+	}
+}
+
+// TestTailIsHandedTheFifoAsAnOperand pins the one thing about the witness
+// the exit codes above cannot see. Measured 2026-10-30: Ubuntu 26.04 ships
+// uutils coreutils 0.10.0 in place of GNU's, and its `tail -c N < fifo`
+// never returns, while `tail -c N -- fifo` returns the same bytes GNU
+// does. In the redirection form the tap therefore had no reader, the tee
+// blocked on opening the fifo for writing, and every case in the table
+// above timed out instead of reaching a verdict. A GNU host cannot tell
+// the two forms apart by their outcome, so what is asserted here is the
+// invocation itself.
+func TestTailIsHandedTheFifoAsAnOperand(t *testing.T) {
+	realTail, err := exec.LookPath("tail")
+	if err != nil {
+		t.Skipf("no tail on this host: %v", err)
+	}
+	witness := filepath.Join(t.TempDir(), "tail-argv")
+	tailStub := fmt.Sprintf(`printf '%%s\n' "$*" >>%q`+"\n"+`exec %q "$@"`, witness, realTail)
+	whole := writePlain(t, t.TempDir(), "whole.sql", plainDumpBody)
+	binDir := stubPath(t, map[string]string{
+		"gzip": emits(whole, 0), "psql": drainsThenSucceeds, "tail": tailStub,
+	})
+	member := filepath.Join(t.TempDir(), "probavi-restore.sql.gz")
+	fifo := member + ".fifo"
+	if got := runReplay(t, compressedScriptReplayScript, binDir, member); got != 0 {
+		t.Fatalf("exit = %d, want 0", got)
+	}
+	argv, err := os.ReadFile(witness)
+	if err != nil {
+		t.Fatalf("read witness: %v", err)
+	}
+	if !strings.Contains(string(argv), fifo) {
+		t.Errorf("tail argv = %q, want %s among the operands", argv, fifo)
 	}
 }
 

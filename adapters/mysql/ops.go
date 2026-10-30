@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "mysql"
-	adapterVersion = "0.16.0"
+	adapterVersion = "0.16.1"
 
 	defaultUser     = "root"
 	defaultDatabase = "probavi"
@@ -365,10 +365,17 @@ func execRestore(ctx context.Context, c *core, user, database string, dump sqlMe
 //
 // A client failure exits 1 rather than passing the client's own status
 // through, so decompressFailedExit stays unambiguous.
+//
+// The fifo reaches tail as an operand rather than on its stdin. Measured
+// 2026-10-30: Ubuntu 26.04 ships uutils coreutils 0.10.0 in place of GNU's,
+// and its `tail -c N < fifo` never returns, while `tail -c N -- fifo`
+// returns the same bytes GNU does. A reader that never starts leaves the
+// tee below blocked on opening the fifo for writing, so the restore would
+// hang until the drill's context expired — no diagnosis, no verdict.
 const compressedRestoreScript = `
 rm -f "$1.fifo"
 mkfifo "$1.fifo" || exit 92
-tail -c "$6" <"$1.fifo" >"$1.tail" &
+tail -c "$6" -- "$1.fifo" >"$1.tail" &
 { gzip -dc -- "$1"; echo $? > "$2"; } | tee "$1.fifo" | mysql -h 127.0.0.1 -u "$3" --database "$4"
 rc=$?
 wait
