@@ -576,8 +576,59 @@ does not pretend otherwise; how far is what `drill.pitr_target` records.
 `state.mode` reads `physical+binlog` rather than `physical`, because it is
 a different proof from a full-only restore.
 
-The sandbox image needs `mysqlbinlog` beside `mysqld`, `xtrabackup` and
-`gosu` — the official client tooling ships it.
+### The image has to carry mysqlbinlog
+
+The replay is `mysqlbinlog` piped into `mysql`, and the official server
+images do not ship it. Measured 2026-10-30, on the three images under
+`verified` plus the two the recipes here draw from:
+
+| Image | `mysqlbinlog` |
+|---|---|
+| `mysql:8.4` (baseline) | **no** |
+| `mysql:9.7` | **no** |
+| `percona/percona-server:8.4.10` | yes, 8.4.10-10 |
+| `percona/percona-xtrabackup:8.4.0` | yes, 8.4.11-11 |
+| `mysql:8.0-debian` | yes, 8.0.46 |
+
+So the two official images need the tool added. The adapter asks the
+sandbox for `mysqlbinlog --version` **before** the backup is transferred
+and refuses the drill as `invalid_request` if the answer is not zero — the
+same choice the postgres adapter makes about wal-g, for the same reason.
+Without it the absence surfaces from inside the replay, after a restore
+that can run for minutes, as `restore_failed`: a code that says the
+restore ran and failed for engine reasons, where neither the engine nor
+the backup was at fault.
+
+`percona/percona-xtrabackup` carries `mysqlbinlog` beside the backup
+tools, so the image the `xtrabackup` kind already needs gains it with one
+more path on a `COPY` it already has:
+
+```dockerfile
+FROM percona/percona-xtrabackup:8.4.0 AS pxb
+FROM mysql:8.4
+USER root
+COPY --from=pxb /usr/bin/xtrabackup /usr/bin/xbstream /usr/bin/mysqlbinlog /usr/bin/
+COPY --from=pxb /usr/lib64/libev.so.4* /usr/lib64/
+COPY --from=pxb /usr/lib/private /usr/lib/private
+RUN microdnf install -y procps-ng && microdnf clean all \
+    && echo /usr/lib/private > /etc/ld.so.conf.d/pxb-private.conf && ldconfig
+```
+
+Three things in there are not decoration. **`gosu` is not copied**, because
+`mysql:8.4` already carries it (`/usr/local/bin/gosu`, 1.19) — the stage a
+Debian-based recipe needs for it is redundant here. **`procps-ng` is
+installed**, because without it `xtrabackup` exits on
+`libprocps.so.8: cannot open shared object file`. And the `mysqlbinlog`
+that arrives is a **Percona build beside a community server** (8.4.11-11
+and 8.4.13 as measured) — same series, different build; the replay only
+reads log files and then speaks the client protocol, but it is a pairing
+rather than an identity.
+
+What that measurement covered: each of the four tools answers `--version`
+inside the built image. What it did not: a drill end to end on this image
+(the integration suite still builds its own, `FROM mysql:8.0-debian` — see
+ROADMAP), a 9.x pairing (there is no 9.x XtraBackup to pair with), and any
+musl-based image.
 
 ## Source params
 
@@ -636,7 +687,8 @@ Two operator notes:
   (the mysqld + xtrabackup + gosu contract above). The official
   `percona/percona-server` image ships no XtraBackup — the suite builds
   the combined image from official Percona parts, and the same recipe
-  works for a drill:
+  works for a drill. It needs no `mysqlbinlog` line: measured
+  2026-10-30, `percona/percona-server:8.4.10` carries the tool already.
 
   ```dockerfile
   FROM percona/percona-xtrabackup:8.4.0 AS pxb
