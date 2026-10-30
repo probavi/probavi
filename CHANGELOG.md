@@ -28,11 +28,35 @@ always called out explicitly.
 
   The integration fixture gained the same obligation: a seed engine that
   never becomes ready now reports its last probe and the tail of what
-  mongod itself wrote, read through the docker CLI. This is what the
-  `mongodb 8.0` matrix job has needed since 2026-10-20 — see ROADMAP,
-  where the still-unknown cause is recorded.
+  mongod itself wrote, read through the docker CLI. That is what the
+  `mongodb 8.0` matrix job had needed since 2026-10-20, and the first run
+  with it answered in one line — `mongod` refusing to start on the
+  runner's kernel, which is the entry below.
 
 ### Fixed
+
+- **The MongoDB 8.0 kernel requirement was stated more widely than the
+  engine's own refusal, and CI could not say so at all.** `mongod` 8.0
+  declines to start on a window of Linux kernels — upstream's deliberate
+  refusal, [SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912),
+  closed as *Gone away* with no fix version — and the adapter README has
+  said so since 2026-08-27. What it said had since become too wide:
+  measured 2026-10-30, the same `mongo:8.0` tag (8.0.34) starts normally on
+  kernel 7.2.3, where it refused on 7.1.9 in August, because upstream
+  exempted the top of the window (SERVER-125742). The README now states the
+  window as a window, with both measurements and their dates, and says what
+  an operator meeting an `engine_not_ready` verdict should read first —
+  MongoDB 7.0 is unaffected (7.0.45 on the same kernel the same day).
+
+  The integration suite no longer spends 855 seconds discovering this. It
+  asks the engine once, and if the engine refuses, skips with the engine's
+  own refusal line as the reason — a *skipped* job, never a green one. The
+  skip cannot outlive its reason: it records no kernel version, no tag and
+  no date, matches only the engine's own structured log id, and fails open
+  on anything it cannot interpret, so a slow engine or an unreachable
+  provider stays exactly as red as before. The rule it follows is normative
+  in `docs/engine-versions.md` §2, and a listed version a host refuses is
+  explicitly *not* a refreshed claim.
 
 - **A compressed restore hung forever on a sandbox image whose coreutils is
   uutils rather than GNU's.** The scripts that replay a compressed dump tap

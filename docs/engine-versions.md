@@ -124,6 +124,41 @@ under test is the manifest's, never the job's.
 it stays out of `docs/capabilities.json`. A consumer is told which versions
 CI restores from; which of them ran on the last push is our business.
 
+**One case produces neither a pass nor a failure: a host the engine itself
+refuses.** An engine may decline to start on the runner for reasons that are
+upstream's and have nothing to do with the backup, the adapter or the
+sandbox — measured 2026-10-30, `mongod` 8.0 exits before opening a socket on
+the GitHub-hosted `ubuntu-26.04` runner, because MongoDB ships a deliberate
+refusal for a window of Linux kernels (SERVER-121912), while the same image
+starts normally on kernel 7.2.3 the same day. A suite in that position
+**skips**, with the engine's own refusal line as the reason, and the job
+reports *skipped* rather than green: the gap stays visible to anyone reading
+the run instead of being papered over by a pass.
+
+Three properties make that a record rather than a lowered gate, and a suite
+that wants this must have all three:
+
+- **The refusal is matched exactly**, on the engine's own structured log id
+  rather than prose around it. Any other failure to start — including one
+  that merely looks similar — still fails.
+- **Nothing is recorded that could outlive the reason.** No kernel version,
+  no image tag, no date and no environment variable: the suite asks the
+  engine on the spot, every run. The day the host leaves the window, or
+  upstream withdraws the refusal, every test runs again with no commit and
+  nobody's memory involved.
+- **It fails open.** A probe that cannot reach the sandbox provider, or an
+  engine that is merely slow, leaves the suite exactly as red as it would
+  have been.
+
+What a skip does **not** do is refresh the claim. While a host refuses, that
+listed version is not being exercised, and the honest reading of `verified`
+for it is the last run that did exercise it. Removing the entry instead was
+considered and rejected on 2026-10-30 for MongoDB 8.0: the version restores
+correctly on hosts outside upstream's window, measured the same day, so
+dropping it would misreport the software rather than the pipeline — §4's
+first bullet in reverse. The engine's requirement belongs in the adapter's
+README, where an operator meeting the same wall will look.
+
 ## 3. When each version runs
 
 | Trigger | What runs | Why |

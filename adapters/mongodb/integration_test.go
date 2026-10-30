@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -56,6 +57,7 @@ func sandboxParams(t *testing.T) map[string]string {
 // (plain and gzip, distinguished only by their bytes) and validate them
 // through the probe-declared sql_runner's mongosh --eval bridge.
 func TestEndToEndRestoreDrill(t *testing.T) {
+	requireStartableEngine(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -200,6 +202,7 @@ func driveDrill(t *testing.T, ctx context.Context, provider *docker.Provider, fi
 // TestCorruptArchiveVerdict proves a broken backup yields the right
 // verdict through the whole stack, not a generic failure.
 func TestCorruptArchiveVerdict(t *testing.T) {
+	requireStartableEngine(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -258,6 +261,7 @@ const ttlPassesJS = `print(Number(db.serverStatus().metrics.ttl.passes))`
 // moment the monitor is allowed to, which is what makes the first half
 // mean something.
 func TestTTLExpiredDocumentsSurviveTheDrill(t *testing.T) {
+	requireStartableEngine(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -447,24 +451,39 @@ db.orders.insertMany(docs);`
 	}
 }
 
-// awaitReady polls a ping until the seed engine answers commands.
+// readinessPing is the one probe that decides whether this engine is
+// answering commands. The suite's own wait and the start probe above it
+// share it so the two can never disagree about what "ready" means.
+func readinessPing() sandbox.ExecRequest {
+	return sandbox.ExecRequest{
+		Argv: []string{"mongosh", "--quiet", "--norc",
+			"mongodb://127.0.0.1:27017/admin?serverSelectionTimeoutMS=2000&connectTimeoutMS=2000",
+			"--eval", "db.runCommand({ping:1}).ok"},
+		Timeout: 5 * time.Second,
+	}
+}
+
+// pingAnswered reports the one outcome that means the engine is up.
+func pingAnswered(res *sandbox.ExecResult, err error) bool {
+	return err == nil && res.ExitCode == 0 && strings.TrimSpace(string(res.Stdout)) == "1"
+}
+
+// awaitReady polls a ping until the seed engine answers commands. By the
+// time a test calls this, requireStartableEngine has already established
+// that the engine does start on this host, so a timeout here is a failure
+// and not a host's verdict — which is why this path never skips.
 func awaitReady(t *testing.T, ctx context.Context, sbx *docker.Sandbox) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Minute)
 	for {
-		res, err := sbx.Exec(ctx, sandbox.ExecRequest{
-			Argv: []string{"mongosh", "--quiet", "--norc",
-				"mongodb://127.0.0.1:27017/admin?serverSelectionTimeoutMS=2000&connectTimeoutMS=2000",
-				"--eval", "db.runCommand({ping:1}).ok"},
-			Timeout: 5 * time.Second,
-		})
-		if err == nil && res.ExitCode == 0 && strings.TrimSpace(string(res.Stdout)) == "1" {
+		res, err := sbx.Exec(ctx, readinessPing())
+		if pingAnswered(res, err) {
 			return
 		}
 		last := probeAnswer(res, err)
 		if time.Now().After(deadline) {
 			t.Fatalf("seed engine never became ready: last probe %s\nwhat mongod wrote:\n%s",
-				last, engineLog(t, sbx))
+				last, engineLog(sbx))
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
@@ -495,8 +514,7 @@ func firstLineOf(b []byte) string {
 // a probe from outside cannot see, and the half that says whether mongod
 // refused to start rather than merely being slow. Read through the docker
 // CLI, as the seed containers in the sibling adapters' suites already are.
-func engineLog(t *testing.T, sbx *docker.Sandbox) string {
-	t.Helper()
+func engineLog(sbx *docker.Sandbox) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "docker", "logs", "--tail", "40", sbx.ID()).CombinedOutput()
@@ -507,6 +525,125 @@ func engineLog(t *testing.T, sbx *docker.Sandbox) string {
 		return "(the container wrote nothing)"
 	}
 	return string(out)
+}
+
+// engineRefusalID is the log id mongod writes when it declines to run on a
+// kernel upstream has declared incompatible, and exits
+// (https://jira.mongodb.org/browse/SERVER-121912). The id is matched rather
+// than the sentence around it: the prose is upstream's to reword, while a
+// log id is the stable half of a structured log line.
+const engineRefusalID = `"id":12257600`
+
+// kernelRefusal returns the engine's own refusal line when a container log
+// carries that id, and "" for everything else. Deliberately the narrowest
+// matcher in this file, because it is the only condition that may turn a
+// failing suite into a skipped one: a log that merely looks unhealthy, a
+// refusal with a different id, or an engine that died silently must all
+// keep their failure.
+func kernelRefusal(containerLog string) string {
+	for _, line := range strings.Split(containerLog, "\n") {
+		if strings.Contains(line, engineRefusalID) {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
+}
+
+var (
+	engineStartOnce    sync.Once
+	engineStartRefusal string
+)
+
+// requireStartableEngine skips this suite when the engine refuses to run on
+// this host at all — the one failure that is upstream's and not Probavi's.
+//
+// Measured 2026-10-30: on the GitHub-hosted ubuntu-26.04 runner, mongod 8.0
+// exits before opening a socket with engineRefusalID, so all five tests here
+// spent their three-minute deadlines waiting for a process that was already
+// gone, and the job took 855s to say so. Measured the same day on kernel
+// 7.2.3, the same `mongo:8.0` tag (8.0.34) starts normally — so this is the
+// host's verdict on the engine, not a fact about this repository.
+//
+// It is a skip rather than a lowered gate because it cannot outlive its
+// reason. Nothing here records a kernel version, an image tag or a date: the
+// suite asks the engine on the spot, every run, and skips only while the
+// engine itself is still refusing. The day the host moves out of upstream's
+// window, or upstream withdraws the refusal, every test runs again with no
+// commit and nobody's memory involved. Any other failure to start — including
+// one that merely looks like this — still fails, which is the whole reason
+// the matcher above is keyed on one id.
+func requireStartableEngine(t *testing.T) {
+	t.Helper()
+	image := verifiedImage(t)
+	engineStartOnce.Do(func() { engineStartRefusal = probeEngineStart(image) })
+	if engineStartRefusal != "" {
+		t.Skipf("the engine refuses to start on this host, so this suite proves nothing here: %s",
+			engineStartRefusal)
+	}
+}
+
+// probeEngineStart runs the verified image the way a drill sandbox runs it —
+// through the same provider, with the image's own command and no ingress —
+// and returns mongod's refusal line if it declines this kernel, or "" for
+// every other outcome, including every outcome it cannot interpret. Failing
+// open is the point: a probe that cannot reach Docker, or an engine that is
+// merely slow, must leave the suite exactly as red as it would have been.
+func probeEngineStart(image string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	sbx, err := docker.New(nil).Create(ctx, map[string]string{"image": image})
+	if err != nil {
+		return ""
+	}
+	defer func() {
+		dctx, dcancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer dcancel()
+		_ = sbx.Destroy(dctx)
+	}()
+	deadline := time.Now().Add(45 * time.Second)
+	for {
+		if refusal := kernelRefusal(engineLog(sbx)); refusal != "" {
+			return refusal
+		}
+		if pingAnswered(sbx.Exec(ctx, readinessPing())) {
+			return ""
+		}
+		if time.Now().After(deadline) {
+			return ""
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// TestKernelRefusalMatcher pins the width of the one matcher that can turn a
+// red suite green. It needs no engine, so it runs even when the gate above
+// has skipped everything else — which is exactly when it matters.
+func TestKernelRefusalMatcher(t *testing.T) {
+	const real = `{"t":{"$date":"2026-10-30T15:25:35.444Z"},"s":"F",  "c":"CONTROL",  ` +
+		`"id":12257600,"ctx":"main","msg":"MongoDB cannot start: Linux kernel versions 6.19 ` +
+		`and newer has a known incompatibility with this version of MongoDB."}`
+	tests := []struct {
+		name, log string
+		want      bool
+	}{
+		{"the measured refusal", real, true},
+		{"the refusal after other startup lines", "{\"s\":\"I\",\"msg\":\"starting\"}\n" + real, true},
+		{"a healthy start", `{"s":"I","c":"NETWORK","id":23016,"msg":"Waiting for connections"}`, false},
+		{"another fatal is still a failure", `{"s":"F","id":20557,"msg":"DBException in initAndListen"}`, false},
+		{"the prose without the id is not enough", `MongoDB cannot start: Linux kernel versions 6.19`, false},
+		{"a container that wrote nothing", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := kernelRefusal(tt.log)
+			if (got != "") != tt.want {
+				t.Fatalf("kernelRefusal(%q) = %q, want match=%v", tt.log, got, tt.want)
+			}
+			if tt.want && !strings.Contains(got, "MongoDB cannot start") {
+				t.Errorf("kernelRefusal returned %q — the engine's own sentence is the reason a reader needs", got)
+			}
+		})
+	}
 }
 
 func mustExec(t *testing.T, ctx context.Context, sbx *docker.Sandbox, argv ...string) {
@@ -537,6 +674,7 @@ func destroy(t *testing.T, sbx *docker.Sandbox) {
 // without them silently, so the operator did everything right and the
 // drill still proved only half the recovery.
 func TestAccountLayerDrillEndToEnd(t *testing.T) {
+	requireStartableEngine(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 
@@ -628,6 +766,7 @@ func TestAccountLayerDrillEndToEnd(t *testing.T) {
 // released. The archive therefore carries an oplog entry whose effect is
 // absent from the collection copy — exactly the state --oplog exists for.
 func TestOplogDrillEndToEnd(t *testing.T) {
+	requireStartableEngine(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 
