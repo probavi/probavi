@@ -34,6 +34,18 @@ always called out explicitly.
   2026-10-24, the script tests run against the host's own tools, and six of
   them timed out.
 
+- **The integration job could not preload its image into the kind node.**
+  `kind load docker-image` is `docker save` piped into
+  `ctr images import --all-platforms`, and when the host's Docker keeps its
+  images in a containerd store the archive is an OCI index whose other
+  platforms' manifests are absent, so the import fails with
+  `ctr: content digest sha256:… not found` — measured on the ubuntu-26.04
+  runner, and not a pin problem: kind v0.33.0 issues the same command as the
+  pinned v0.32.0, and `docker save` has no platform flag to narrow what it
+  writes. The step now runs kind's own import without `--all-platforms`, so
+  ctr resolves the node's platform and ignores the manifests that are not
+  in the archive.
+
 ## [0.36.1] - 2026-10-01
 
 ### Fixed
