@@ -67,6 +67,36 @@ always called out explicitly.
   unit table now pins the location refusal to `restore_failed` beside the
   two corrupt wordings.
 
+- **A `barman` drill could not restore a catalogue whose WAL kept the
+  modes PostgreSQL wrote.** `restore_command` runs as `postgres`, and
+  PostgreSQL writes WAL segments `0600`; `put_file` sets a mode on the top
+  directory only, so the segments arrived in the sandbox owned by root and
+  closed to the one process that had to read them. Every `restore_command`
+  failed, the server stopped at "could not locate required checkpoint
+  record", and the drill reported a restore failure against a catalogue
+  that was perfectly healthy. The adapter now hands the staged catalogue to
+  `postgres` before recovery starts — the same line the `walg` kind has
+  carried since it shipped, for the reason it measured then. An operator's
+  copy therefore needs no `chmod`, which the adapter README now says. The
+  integration fixture used to `chmod -R a+rX` the catalogue open, and that
+  is why the gap shipped at all: it now asserts that the archived segments
+  arrive closed to everyone but their owner, the way a mode-preserving copy
+  delivers them
+  ([#428](https://github.com/probavi/probavi/issues/428)).
+- **A restored cluster that failed to start reported `pg_ctl`'s line
+  instead of the server's.** `pg_ctl` writes "could not start server"
+  before the server log the adapter tails, so the one line that explains
+  nothing was the one that reached the signed evidence record, while the
+  `FATAL` naming the actual cause sat further down the same stderr. A failed start
+  now carries the server's own diagnostic — the first line marked `ERROR:`,
+  `FATAL:` or `PANIC:` — and falls back to the first line of all when no
+  marker matches, which is what a cluster reporting in a language other
+  than English still produces. The point-in-time verdict ("recovery ended
+  before the requested target time") continues to outrank both, because it
+  is a statement about the backup rather than about a line of output. This
+  affects every physical source kind: `pgbackrest`, `barman` and `walg`
+  ([#428](https://github.com/probavi/probavi/issues/428)).
+
 ## [0.36.1] - 2026-10-01
 
 ### Fixed

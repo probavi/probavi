@@ -433,6 +433,61 @@ func startFailsBeforeTarget(t *testing.T) func(verbCall) (any, *protoError) {
 	}
 }
 
+// TestStartFailureCarriesTheServersOwnLine holds the diagnostic to what an
+// operator can act on. pg_ctl writes its own refusal first and the tailed
+// server log follows it, so the first line of stderr is the one line that
+// explains nothing — a catalogue whose WAL the postgres user could not read
+// reported "pg_ctl: could not start server" while the FATAL naming the
+// missing checkpoint record sat further down the same stderr and never
+// reached the evidence record (issue #428).
+func TestStartFailureCarriesTheServersOwnLine(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stderr string
+		want   string
+	}{
+		{
+			"the FATAL below pg_ctl's refusal, not pg_ctl's refusal",
+			"pg_ctl: could not start server\nLOG:  starting PostgreSQL 17.11\n" +
+				"FATAL:  could not locate required checkpoint record at 0/3000080\n" +
+				"HINT:  If you are restoring from a backup, touch recovery.signal.",
+			"FATAL:  could not locate required checkpoint record at 0/3000080",
+		},
+		{
+			"a PANIC is the server speaking too",
+			"pg_ctl: could not start server\nPANIC:  could not locate a valid checkpoint record",
+			"PANIC:  could not locate a valid checkpoint record",
+		},
+		{
+			// The markers are English and a restored cluster reports in
+			// whatever lc_messages its own configuration names, so the
+			// fallback is the behaviour this scan replaced rather than a
+			// silence.
+			"a cluster that does not answer in English leaves pg_ctl's line",
+			"pg_ctl: nem sikerult elinditani a kiszolgalot\nVESZETES:  nincs ellenorzopont",
+			"pg_ctl: nem sikerult elinditani a kiszolgalot",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			perr := mapStartFailure([]byte(tc.stderr))
+			if perr.Code != "restore_failed" {
+				t.Errorf("code = %q, want restore_failed", perr.Code)
+			}
+			if !strings.Contains(perr.Message, tc.want) {
+				t.Errorf("message = %q, want it to carry %q", perr.Message, tc.want)
+			}
+		})
+	}
+
+	// The pitr verdict is about the backup and its archive rather than about
+	// a line of output, so it still outranks both.
+	perr := mapStartFailure([]byte("pg_ctl: could not start server\n" +
+		"FATAL:  recovery ended before configured recovery target was reached"))
+	if !strings.Contains(perr.Message, "pitr target not reachable") {
+		t.Errorf("message = %q, want the pitr verdict to win", perr.Message)
+	}
+}
+
 // execScript returns the shell script an exec call carries, or "" for
 // anything that is not one.
 func execScript(t *testing.T, call verbCall) string {
