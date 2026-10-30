@@ -1258,7 +1258,7 @@
       "name": "Apache Solr",
       "status": "experimental",
       "since": "0.20.0",
-      "adapter_version": "0.7.0",
+      "adapter_version": "0.7.1",
       "engine": {
         "id": "solr",
         "name": "Apache Solr"

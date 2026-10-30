@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "solr"
-	adapterVersion = "0.7.0"
+	adapterVersion = "0.7.1"
 	// defaultPort is where Solr listens inside the sandbox. Nothing is
 	// published: checks run in-sandbox through the runner below.
 	defaultPort = 8983
@@ -351,13 +351,27 @@ func errorMessage(body string) string {
 // restoreCorruptMarkers are what a damaged or incomplete artifact
 // produces, as opposed to a drill that asked for something impossible.
 // Measured against Solr 10 with a damaged index and with the shard
-// metadata removed: both answer HTTP 500 with "Could not restore core".
-// The restore is the act of reading the artifact, so a core the engine
+// metadata removed: both answer HTTP 500 with "Could not restore core"
+// on the 10.0 line and "Could not restore shard" on 10.1.0 — the same
+// two artifacts, the same status, a different noun. Both wordings stay,
+// because `solr:10` is a moving tag and an operator may hold either.
+// The restore is the act of reading the artifact, so a shard the engine
 // cannot restore from it is a statement about the backup. Both verdicts
 // are a drill failure either way (evidence-schema.md §fail); what this
 // buys is a diagnosis an operator can act on.
+//
+// What keeps the shard wording from swallowing a drill that asked for
+// something impossible is that none of those reach it. Measured the
+// same day on 10.1.0: a location that does not exist answers 500 with
+// its own sentence, while restoring into a collection that already
+// exists and asking for a replicationFactor the cluster cannot place
+// both *succeed*. Inside the three 500s the body carries nothing else
+// to go on — `metadata` is empty and `errorClass` and the stack trace
+// are identical, the overseer's message relayed — so `msg` is the only
+// signal there is.
 var restoreCorruptMarkers = []string{
 	"Could not restore core",
+	"Could not restore shard",
 	"Index 0 out of bounds",
 	"Could not find a valid backup",
 	"Couldn't restore since doesn't exist",

@@ -46,6 +46,27 @@ always called out explicitly.
   ctr resolves the node's platform and ignores the manifests that are not
   in the archive.
 
+- **A damaged Solr backup was reported as a failed restore rather than a
+  corrupt source.** The adapter reads the Collections API's own `msg` to
+  tell a backup it cannot read from a drill that asked for something
+  impossible, and the marker it looked for was `Could not restore core`.
+  Measured 2026-10-30: the `solr:10` tag moved to 10.1.0 (image built
+  2026-10-29), which answers the same two artifacts — a damaged index, and
+  a backup with its `shard_backup_metadata` removed — with HTTP 500 and
+  `Could not restore shard`. Both wordings are now markers, because
+  `solr:10` moves and an operator may hold either. The drill failed either
+  way; what was wrong is the diagnosis an operator acts on, which said the
+  restore had failed for engine reasons where the backup was the problem.
+
+  The shard wording does not reach a refusal that is not about the
+  artifact: measured the same day on 10.1.0, a location that does not exist
+  answers with its own sentence, while restoring into a collection that
+  already exists and asking for a replicationFactor the cluster cannot
+  place both succeed. Within the 500s the body offers nothing else to key
+  on — empty `metadata`, identical `errorClass` and stack trace — so the
+  unit table now pins the location refusal to `restore_failed` beside the
+  two corrupt wordings.
+
 ## [0.36.1] - 2026-10-01
 
 ### Fixed
