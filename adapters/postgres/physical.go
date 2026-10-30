@@ -282,9 +282,11 @@ chown postgres:postgres %s/pg_hba.conf`, pgdata, pgdata)
 		return 0, protoErr("internal", false, "write sandbox auth config: %s", firstLine(stderr))
 	}
 
-	// Start via sh so a failed start surfaces the server log's FATAL lines
-	// — for pitr that is where "recovery ended before configured recovery
-	// target" is reported.
+	// Start via sh so a failed start surfaces the server log's own lines —
+	// for pitr that is where "recovery ended before configured recovery
+	// target" is reported. pg_ctl has already written its own verdict to
+	// stderr by then, so the mapper below picks the line out rather than
+	// taking the first one.
 	startScript := fmt.Sprintf(
 		`gosu postgres pg_ctl -D %s -w -t 600 -l /tmp/probavi-pg.log start || { tail -n 20 /tmp/probavi-pg.log >&2; exit 1; }`,
 		pgdata)
@@ -309,12 +311,21 @@ chown postgres:postgres %s/pg_hba.conf`, pgdata, pgdata)
 // mapStartFailure classifies a failed server start. Recovery ending before
 // the requested target is a verdict about the backup and its WAL archive —
 // they do not cover the target time — not an infrastructure error.
+//
+// Anything else carries the server's own diagnostic rather than pg_ctl's.
+// pg_ctl writes "could not start server" first and the tailed log follows
+// it, so the first line of stderr is the one line that says nothing: a
+// catalogue whose WAL the postgres user cannot read reported exactly that,
+// while "FATAL: could not locate required checkpoint record" sat further
+// down the same stderr and never reached the record (issue #428). Every physical kind
+// goes through here.
 func mapStartFailure(stderr []byte) *protoError {
 	if strings.Contains(string(stderr), "recovery ended before configured recovery target was reached") {
 		return protoErr("restore_failed", false,
 			"pitr target not reachable: recovery ended before the requested target time — the backup and its WAL archive do not cover it")
 	}
-	return protoErr("restore_failed", false, "restored cluster failed to start: %s", firstLine(stderr))
+	return protoErr("restore_failed", false,
+		"restored cluster failed to start: %s", firstDiagnosticLine(stderr))
 }
 
 // awaitPromotion waits until recovery has finished and the instance is

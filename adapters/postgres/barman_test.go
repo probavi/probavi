@@ -272,6 +272,27 @@ func TestBarmanCreatedAtIgnoresUnfinishedBackups(t *testing.T) {
 	}
 }
 
+// TestBarmanRestoreScriptHandsTheCatalogueToPostgres is the unit half of
+// issue #428. restore_command runs as postgres, PostgreSQL writes WAL
+// segments 0600, and put_file sets a mode on the top directory only — so a
+// catalogue that arrived with its modes intact is closed to the one process
+// that has to read it, and the server exits with "could not locate required
+// checkpoint record" for a permission problem.
+func TestBarmanRestoreScriptHandsTheCatalogueToPostgres(t *testing.T) {
+	script := barmanRestoreScript("/scratch/probavi-barman", barmanFull, "/var/lib/postgresql/data",
+		false, time.Time{})
+
+	handover := "chown -R postgres:postgres /scratch/probavi-barman"
+	if !strings.Contains(script, handover) {
+		t.Fatalf("the script does not hand the catalogue over (%q):\n%s", handover, script)
+	}
+	// First, the way walgRestoreScript does it: a handover that fails stops
+	// the script here rather than at a recovery that cannot read a segment.
+	if strings.Index(script, handover) > strings.Index(script, "cp -a") {
+		t.Error("the handover must come before the restore it exists for")
+	}
+}
+
 // TestBarmanRestoreScriptStaysInsideItsOwnEscapes keeps two things the
 // measurement day settled from drifting.
 func TestBarmanRestoreScriptStaysInsideItsOwnEscapes(t *testing.T) {

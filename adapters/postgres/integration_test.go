@@ -2397,13 +2397,55 @@ func makeBarmanServer(t *testing.T, ctx context.Context, image, dest string) tim
 	if out, err := exec.CommandContext(ctx, "docker", "cp", id+":/var/lib/barman/demo", dest).CombinedOutput(); err != nil {
 		t.Fatalf("extract the catalogue: %v: %s", err, out)
 	}
-	// Barman writes the catalogue as its own user; a drill host reads it
-	// as whoever runs the drill.
-	if out, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none",
-		"-v", dest+":/c", image, "chmod", "-R", "a+rX", "/c").CombinedOutput(); err != nil {
-		t.Fatalf("make the catalogue readable: %v: %s", err, out)
-	}
+	assertWALClosedToOthers(t, dest)
 	return between.UTC()
+}
+
+// assertWALClosedToOthers is what keeps the Barman tests honest about
+// permissions. `docker cp` preserves modes and hands the files to whoever
+// ran it (measured), so the catalogue arrives here exactly as an operator's
+// mode-preserving copy does: segments readable only by their owner, because
+// that is how PostgreSQL wrote them. The drill host owns them and reads
+// them; the postgres user inside the sandbox does not, and the adapter has
+// to hand the catalogue over or the restore cannot recover at all.
+//
+// The assertion is stated rather than assumed, because this fixture used to
+// chmod the tree open — which made the restore pass for a reason no
+// operator has, and hid issue #428 from the day the kind shipped. A seed
+// that one day archives WAL through another route could put that state
+// back, and nothing else here would notice.
+func assertWALClosedToOthers(t *testing.T, catalogue string) {
+	t.Helper()
+	wals := filepath.Join(catalogue, "wals")
+	entries, err := os.ReadDir(wals)
+	if err != nil {
+		t.Fatalf("read the archived WAL: %v", err)
+	}
+	segments := 0
+	for _, dir := range entries {
+		if !dir.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(wals, dir.Name()))
+		if err != nil {
+			t.Fatalf("read the archived WAL: %v", err)
+		}
+		for _, f := range files {
+			info, err := f.Info()
+			if err != nil {
+				t.Fatalf("stat %s: %v", f.Name(), err)
+			}
+			segments++
+			if perm := info.Mode().Perm(); perm&0o077 != 0 {
+				t.Errorf("%s/%s is mode %04o: the fixture must present the catalogue as PostgreSQL "+
+					"wrote it, closed to everyone but its owner, or the restore proves nothing about "+
+					"the permissions an operator's copy actually has", dir.Name(), f.Name(), perm)
+			}
+		}
+	}
+	if segments == 0 {
+		t.Fatal("the seeded catalogue archived no WAL segment, so the restore would have nothing to recover from")
+	}
 }
 
 // TestBarmanEndToEnd restores a real Barman backup in the **stock**

@@ -13,7 +13,7 @@ import (
 
 const (
 	adapterName    = "postgres"
-	adapterVersion = "0.19.1"
+	adapterVersion = "0.19.2"
 
 	// psqlConnectionRefused is psql's exit code for a connection that could
 	// not be established — distinct from 1 (psql's own fatal error) and 3
@@ -732,7 +732,7 @@ func mapRestoreFailure(exitCode int, stderr []byte, storage dumpStorage, globals
 // the script carries its ownership and grants inline, and unlike
 // pg_restore's --no-owner there is no flag that drops them.
 func mapScriptRestoreFailure(stderr []byte, globalsKind string) *protoError {
-	line := restoreDiagnostic(stderr)
+	line := firstDiagnosticLine(stderr)
 	// A dump the server cannot parse is not a dump. pg_restore says so
 	// about an archive in as many words ("does not appear to be a valid
 	// archive"); for a script the server's own syntax error is the same
@@ -760,11 +760,18 @@ func mapDecompressFailure(stderr []byte) *protoError {
 	return protoErr("source_corrupt", false, "the dump could not be decompressed: %s", line)
 }
 
-// restoreDiagnostic returns psql's first failure line, falling back to the
-// first line of all. A decompressor shares the pipeline's stderr and adds a
-// broken-pipe note of its own once psql aborts; that note must not become
-// the drill's explanation.
-func restoreDiagnostic(stderr []byte) string {
+// firstDiagnosticLine returns the first line stderr marks as a failure,
+// falling back to the first line of all. Both callers have uninteresting
+// text ahead of the interesting line: a decompressor shares the restore
+// pipeline's stderr and adds a broken-pipe note of its own once psql
+// aborts, and pg_ctl reports its own refusal before the server log it
+// tails. Neither note may become the drill's explanation.
+//
+// The fallback is not cosmetic. The markers are English, and a restored
+// cluster's lc_messages comes from the backup's own configuration — where
+// the server does not answer in English nothing matches, and the first
+// line is what the record carries, as it did before this scan existed.
+func firstDiagnosticLine(stderr []byte) string {
 	for _, line := range strings.Split(string(stderr), "\n") {
 		if _, isFailure := diagnosticMessage(line); isFailure {
 			return firstLine([]byte(line))

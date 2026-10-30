@@ -345,6 +345,16 @@ directory inside `restore_command` is derived with `cut` rather than a
 printf width, because PostgreSQL rejects a `restore_command` containing any
 `%` escape it does not recognise.
 
+**Your copy of the catalogue needs no `chmod`.** PostgreSQL writes WAL
+segments mode `0600`, so a copy that preserves modes — `cp -a`, `rsync -a`,
+`docker cp`, a tar unpacked as yourself — hands you an archive only you can
+read. That is the right thing for it to be, and it is not the drill's
+problem: the adapter hands the staged catalogue to the `postgres` user
+inside the sandbox before recovery starts, because `restore_command` runs
+as that user. The `pgbackrest` and `walg` kinds do the same with their own
+staged repositories. What a copy **must** preserve is the file contents and
+the layout; the modes may be as closed as the backup host made them.
+
 Two verified images cannot host the **seeding** side of that test, which
 is a fact about them rather than about this source kind. The PostGIS
 variant is Debian 11, whose security archive no longer carries the

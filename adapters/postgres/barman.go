@@ -354,7 +354,23 @@ func provisionBarman(ctx context.Context, c *core, req *provisionRequest, src *r
 
 // barmanRestoreScript places the cluster and writes the recovery settings.
 //
-// Three of its lines are not obvious. The WAL directory is derived inside
+// The catalogue is handed to the postgres user first, the way the walg
+// kind hands over its own staged repository and for the reason
+// walgRestoreScript measured: put_file lands a tree owned by the identity
+// the sandbox execs as and sets a mode on the top directory only, so the
+// modes inside the tree survive the transfer untouched. Here the process
+// that needs them is the one PostgreSQL spawns for restore_command, which
+// runs as postgres — and PostgreSQL writes WAL segments 0600, which a copy
+// that preserves modes keeps (issue #428). Without this the cluster is
+// placed, recovery starts, every restore_command fails on a segment only
+// its copier can read, and the server exits with "could not locate
+// required checkpoint record": a message about the cluster, for a
+// permission problem. The whole catalogue rather than wals/ alone, because
+// one unconditional line swallows nothing — a narrower chown would need a
+// guard for the catalogue that has no archive yet, which checkBarmanChain
+// deliberately tolerates.
+//
+// Three further lines are not obvious. The WAL directory is derived inside
 // restore_command rather than listed, because Barman files a segment under
 // the first sixteen characters of its own name; `cut` is used instead of a
 // printf width because PostgreSQL rejects a restore_command containing any
@@ -367,6 +383,7 @@ func provisionBarman(ctx context.Context, c *core, req *provisionRequest, src *r
 func barmanRestoreScript(catalogue, backupID, pgdata string, pitr bool, target time.Time) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `set -e
+chown -R postgres:postgres %[2]s
 mkdir -p %[1]s
 find %[1]s -mindepth 1 -delete 2>/dev/null || true
 cp -a %[2]s/%[3]s/%[4]s/. %[1]s/
