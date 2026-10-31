@@ -11,6 +11,8 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.36.2] - 2026-10-31
+
 ### Changed
 
 - **A MongoDB readiness timeout now says what the engine answered.** The
@@ -7407,7 +7409,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.36.1...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.36.2...HEAD
+[0.36.2]: https://github.com/probavi/probavi/compare/v0.36.1...v0.36.2
 [0.36.1]: https://github.com/probavi/probavi/compare/v0.36.0...v0.36.1
 [0.36.0]: https://github.com/probavi/probavi/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/probavi/probavi/compare/v0.34.0...v0.35.0
