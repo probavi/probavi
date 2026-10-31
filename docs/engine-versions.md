@@ -120,6 +120,34 @@ names the version it is running, and `AdapterManifest.SandboxEngine`
 returns the base and the artifact the manifest pairs with it — so the jar
 under test is the manifest's, never the job's.
 
+That resolution binds a suite that **pulls** its sandbox image. Some build
+one instead — the official image is distroless, or cannot idle, or the
+source kind needs a tool no engine image carries — and a build is where a
+listed version can quietly be left behind. The rule is that the build is
+keyed off the listed image: nine of them extend it (an entrypoint cleared,
+the manifest's jar added, pgBackRest, Barman, wal-g or XtraBackup installed
+on top) and two copy the engine's own binaries out of it into a
+shell-bearing base. Measured 2026-10-31, eleven of the twelve such builds
+in the adapter suites resolve their image this way, so the matrix job
+proves the version it was handed.
+
+**The twelfth narrows what one adapter's rows cover.** `adapters/mysql`'s
+XtraBackup fixture builds `FROM mysql:8.0-debian`, a constant that reaches
+neither `AdapterManifest.SandboxImage` nor `PROBAVI_IT_IMAGE`, and the two
+tests that take it are the two that drill the physical source kinds. Of
+that adapter's three listed images the physical kinds therefore run on
+exactly one — `percona/percona-server:8.4.10`, through the variant test,
+which skips on every other image — and on neither `mysql:8.4` nor
+`mysql:9.7`, while the logical kinds run on all three as usual. So a
+`verified` row is not automatically a statement about every source kind the
+adapter declares: where a fixture builds its own image from a constant, the
+honest reading of that adapter's rows is per kind, and the adapter's README
+carries what each recipe has and has not drilled. Closing it is a
+measurement rather than a rename — XtraBackup pairs with the server series
+and no 9.x XtraBackup is published, so whether the `mysql:9.7` row can
+carry a physical job at all is itself unmeasured — and it is an open
+ROADMAP item.
+
 `baseline` is a fact about this repository's pipeline, not a capability, so
 it stays out of `docs/capabilities.json`. A consumer is told which versions
 CI restores from; which of them ran on the last push is our business.

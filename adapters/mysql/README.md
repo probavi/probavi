@@ -409,6 +409,15 @@ be running when the drill starts. Requirements:
   directory without `xtrabackup_checkpoints` is refused as
   `source_corrupt` before any transfer.
 
+**What the listed images have drilled.** The two physical tests build the
+image above from a constant `mysql:8.0-debian` rather than from the
+manifest, so of the three images in `verified` the physical kinds have run
+on `percona/percona-server:8.4.10` only (its own test, below) and on
+neither `mysql:8.4` nor `mysql:9.7`; the logical kinds run on all three.
+The 8.4 recipe further down is measured to the tool-version level, but no
+drill has taken it. `docs/engine-versions.md` §2 states the rule this
+fixture departs from, and the fix is an open ROADMAP item.
+
 The restored grant tables carry **production credentials the drill does
 not have**, so the adapter starts the server with an `--init-file` that
 resets `'root'@'%'` to an empty password with full privileges — the MySQL

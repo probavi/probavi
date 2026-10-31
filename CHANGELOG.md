@@ -161,6 +161,21 @@ always called out explicitly.
   carries the measured table and the measured Dockerfile in place of the
   claim ([#429](https://github.com/probavi/probavi/issues/429)).
 
+- **A `verified` row read as a statement about every source kind an adapter
+  declares, and for the mysql adapter it is not one.**
+  `docs/engine-versions.md` §2 says a listed version is exercised, and the
+  mechanism behind that is each suite resolving its sandbox image from the
+  manifest. A suite that *builds* its image can depart from it: measured
+  2026-10-31, eleven of the twelve image builds in the adapter suites key
+  off the listed image, while `adapters/mysql`'s XtraBackup fixture builds
+  `FROM mysql:8.0-debian`, a constant — so the physical source kinds have
+  drilled `percona/percona-server:8.4.10` and neither `mysql:8.4` nor
+  `mysql:9.7`, though the logical kinds run on all three. §2 now states the
+  rule and what a row therefore covers, and the adapter's README says which
+  listed images each recipe has drilled. No claim is withdrawn and no code
+  changed: what was wider than the measurement was the reading the document
+  invited.
+
 ## [0.36.1] - 2026-10-01
 
 ### Fixed
