@@ -10,11 +10,6 @@
   "versions_checked": "2026-08-30",
   "verified": [
     {
-      "engine_version": "14",
-      "image": "postgres:14",
-      "supported_until": "2026-11-12"
-    },
-    {
       "engine_version": "15",
       "image": "postgres:15",
       "supported_until": "2027-11-11"

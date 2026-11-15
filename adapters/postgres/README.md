@@ -811,6 +811,19 @@ local files). Secrets never appear in protocol messages or logs.
 - `teardown` has nothing to release — everything this adapter creates lives
   inside the sandbox, which the provider destroys.
 
+## Engine versions
+
+The PostgreSQL versions CI restores from are the `verified` list in
+`adapter.json`, rendered in the top-level README's engine table, and an
+entry stays there only while PostgreSQL itself supports that major
+(`docs/engine-versions.md` §1).
+
+**PostgreSQL 14 is no longer on the list.** Its vendor support ended on
+2026-11-12, with the final 14.x minor release. Nothing in this adapter
+refuses a 14 cluster, so a drill against one may still pass — but no CI
+job restores from `postgres:14` any more, and nothing in this repository
+proves that it does.
+
 ## pgvector
 
 The `verified` list carries a pgvector entry (`pgvector/pgvector`, the
