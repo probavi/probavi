@@ -41,7 +41,7 @@ so the drill sandbox runs a small wrapper you build yourself:
 ```dockerfile
 FROM victoriametrics/victoria-metrics:v1.150.0
 COPY --from=victoriametrics/vmrestore:v1.150.0 /vmrestore-prod /usr/local/bin/vmrestore
-COPY --from=prom/prometheus:v3.5.5 /bin/promtool /usr/local/bin/promtool
+COPY --from=prom/prometheus:v3.13.2 /bin/promtool /usr/local/bin/promtool
 RUN ln -s /victoria-metrics-prod /usr/local/bin/victoria-metrics
 ENTRYPOINT []
 ```

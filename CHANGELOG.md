@@ -11,6 +11,19 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Changed
+
+- **The VictoriaMetrics sandbox recipe takes `promtool` from Prometheus
+  3.13.2 instead of 3.5.5.** `promtool` is the drill's query client, not
+  an engine anyone verifies, but the image it came from belonged to an LTS
+  line whose support ended on 2026-07-31, and the README recommended it to
+  every operator building the wrapper. The recipe and the integration
+  suite now copy it from the same Prometheus LTS line the prometheus
+  adapter verifies. Nothing the runner reads moved: against a
+  VictoriaMetrics 1.150.0 server, both versions printed byte-identical
+  output for every shape the runner's filter accepts and every empty
+  result (measured 2026-11-15), so the adapter is unchanged.
+
 ### Removed
 
 - **PostgreSQL 14 is no longer a verified version.** Its vendor support
