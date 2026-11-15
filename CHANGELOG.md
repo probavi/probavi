@@ -24,6 +24,19 @@ always called out explicitly.
   PostgreSQL rows are now 15, 16, 17 and 18 plus the three variant
   images; the baseline stays at 16.
 
+### Fixed
+
+- **The Prometheus adapter README named a version it no longer verifies.**
+  Its sandbox recipe built the wrapper `FROM prom/prometheus:v3.5.5` and
+  called the result "verified against Prometheus 3.5", but 3.5 left the
+  `verified` list on 2026-08-27, when its LTS year ended, and the suite
+  has built the same two-line wrapper from `prom/prometheus:v3.13.2` ever
+  since. The removal changed the manifest and not the prose beside it, so
+  an operator copying the recipe got an image past its vendor's support
+  and a claim nothing in CI backed. The recipe, the sentence and the
+  example image tag now name 3.13 — the image the suite actually builds
+  from.
+
 ## [0.36.2] - 2026-10-31
 
 ### Changed
