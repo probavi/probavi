@@ -26,8 +26,12 @@ import (
 // VictoriaMetrics ships none, and a form-encoded HTTP one-liner is not a
 // substitute: it decodes `.+` as `. ` and answers zero on a populated
 // server (measured). The version is pinned like every other image this
-// suite builds from.
-const promtoolImage = "prom/prometheus:v3.5.5"
+// suite builds from, to the Prometheus LTS line the prometheus adapter
+// verifies, so the client is one its vendor still supports. Moving it
+// from 3.5.5 changed nothing the runner reads: every output shape it
+// filters came back byte-identical from a VictoriaMetrics server
+// (measured 2026-11-15).
+const promtoolImage = "prom/prometheus:v3.13.2"
 
 // verifiedImage is the official image this run's server comes from: the
 // manifest's baseline, or the version-matrix job's PROBAVI_IT_IMAGE when
