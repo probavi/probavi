@@ -11,6 +11,8 @@ always called out explicitly.
 
 ## [Unreleased]
 
+## [0.36.3] - 2026-11-15
+
 ### Changed
 
 - **The VictoriaMetrics sandbox recipe takes `promtool` from Prometheus
@@ -7448,7 +7450,8 @@ First tagged release. Everything below is new.
 - `probavi version`: prints the binary version and the contract versions
   the build speaks.
 
-[Unreleased]: https://github.com/probavi/probavi/compare/v0.36.2...HEAD
+[Unreleased]: https://github.com/probavi/probavi/compare/v0.36.3...HEAD
+[0.36.3]: https://github.com/probavi/probavi/compare/v0.36.2...v0.36.3
 [0.36.2]: https://github.com/probavi/probavi/compare/v0.36.1...v0.36.2
 [0.36.1]: https://github.com/probavi/probavi/compare/v0.36.0...v0.36.1
 [0.36.0]: https://github.com/probavi/probavi/compare/v0.35.0...v0.36.0
