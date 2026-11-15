@@ -944,10 +944,6 @@
       ],
       "verified": [
         {
-          "engine_version": "14",
-          "image": "postgres:14"
-        },
-        {
           "engine_version": "15",
           "image": "postgres:15"
         },

@@ -11,6 +11,19 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Removed
+
+- **PostgreSQL 14 is no longer a verified version.** Its vendor support
+  ended on 2026-11-12 with the final 14.x minor release, and
+  `docs/engine-versions.md` §1 lists only versions the vendor still
+  supports. `TestNoVerifiedVersionIsPastItsSupport` failed on the first
+  build after that date, which is what it was written to do: the claim
+  went stale on a date, not on a commit. The adapter refuses nothing about
+  a 14 cluster, so a drill against one may still pass, but no CI job
+  restores from `postgres:14` any more and nothing here proves it. The
+  PostgreSQL rows are now 15, 16, 17 and 18 plus the three variant
+  images; the baseline stays at 16.
+
 ## [0.36.2] - 2026-10-31
 
 ### Changed
