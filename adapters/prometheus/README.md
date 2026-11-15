@@ -74,7 +74,7 @@ writes extends the verification to the data it touches.
 yourself:
 
 ```dockerfile
-FROM prom/prometheus:v3.5.5
+FROM prom/prometheus:v3.13.2
 ENTRYPOINT []
 ```
 
@@ -83,14 +83,14 @@ exactly the official image's; only the entrypoint pin is lifted. A
 drill pointed at an image that cannot run the server through a shell
 fails up front with a message naming this section. The integration
 suite builds the same wrapper from the manifest's listed image, so
-"verified against Prometheus 3.5" means that server, exercised this
+"verified against Prometheus 3.13" means that server, exercised this
 way.
 
 ```yaml
 sandbox:
   provider: docker
   params:
-    image: your-registry/probavi-prometheus:3.5   # the wrapper above
+    image: your-registry/probavi-prometheus:3.13  # the wrapper above
     command: sleep infinity                        # the adapter owns the engine lifecycle
     memory: 512m
 source:
