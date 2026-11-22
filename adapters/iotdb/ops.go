@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "iotdb"
-	adapterVersion = "0.1.0"
+	adapterVersion = "0.2.0"
 
 	// defaultUser is the user checks connect as when the drill names none:
 	// IoTDB's own administrator, the one user that can read everything.
@@ -87,7 +87,7 @@ func probePayload() any {
 			// which: empty is the tree dialect, which has no current
 			// database, and a name is the table dialect run in that
 			// database. The password reaches the script in its environment
-			// and curl on its standard input, never an argument list.
+			// and base64 on its standard input, never an argument list.
 			"argv": []string{"bash", "-c", runnerScript, "bash", "{{database}}", "{{user}}", "{{sql}}"},
 			"env":  map[string]string{passwordEnv: "{{password}}"},
 		},
@@ -160,18 +160,10 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		"size_bytes", src.sizeBytes, "gzip", src.gzip)
 
 	paths := newSandboxPaths(req.Sandbox.ScratchDir)
-	if perr := prepareStep.run(ctx, c, 60, paths.root); perr != nil {
+	transferSeconds, perr := stage(ctx, c, src, paths)
+	if perr != nil {
 		return nil, perr
 	}
-	transferStart := time.Now()
-	dest := paths.staging
-	if src.kind == kindDataTar {
-		dest = paths.archive
-	}
-	if _, perr := c.putFile(ctx, putFileArgs{SourcePath: src.path, DestPath: dest, Mode: "0700"}); perr != nil {
-		return nil, perr
-	}
-	transferSeconds := time.Since(transferStart).Seconds()
 
 	restoreStart := time.Now()
 	if perr := placeData(ctx, c, src, paths); perr != nil {
@@ -218,6 +210,28 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 		},
 		"state": map[string]any{"data_dir": paths.data, "values_read": values},
 	}, nil
+}
+
+// stage readies the sandbox and moves the copy into it, and returns how
+// long the transfer took. The image is checked before a byte moves: one
+// that cannot read the engine would otherwise be found out only after the
+// whole copy had travelled and the readiness budget had run out.
+func stage(ctx context.Context, c *core, src *source, paths sandboxPaths) (float64, *protoError) {
+	if perr := prepareStep.run(ctx, c, 60, paths.root); perr != nil {
+		return 0, perr
+	}
+	if perr := clientStep.run(ctx, c, 30); perr != nil {
+		return 0, perr
+	}
+	start := time.Now()
+	dest := paths.staging
+	if src.kind == kindDataTar {
+		dest = paths.archive
+	}
+	if _, perr := c.putFile(ctx, putFileArgs{SourcePath: src.path, DestPath: dest, Mode: "0700"}); perr != nil {
+		return 0, perr
+	}
+	return time.Since(start).Seconds(), nil
 }
 
 // resolveLogin reads who the restored engine is read as.
@@ -282,6 +296,10 @@ type step struct {
 var (
 	// prepareStep failing is the sandbox's fault, not the backup's.
 	prepareStep = step{"prepare the sandbox", prepareScript, "sandbox_error", true}
+	// clientStep failing means the drill's image cannot read the engine:
+	// the drill configuration names the wrong image, and no retry changes it.
+	clientStep = step{"the sandbox image cannot read the engine over its REST service", clientScript,
+		"invalid_request", false}
 	// hostsStep failing means the sandbox cannot name the copy's node.
 	hostsStep = step{"map the node's host names to loopback", hostsScript, "restore_failed", false}
 	// configureStep failing means the engine's configuration could not be
