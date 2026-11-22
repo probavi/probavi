@@ -115,8 +115,8 @@ target:
 
 Without `password_env` the adapter uses IoTDB's default, and a refused login
 fails the drill as `invalid_request` saying so. The password reaches the
-sandbox in a process environment and curl on its standard input; it is on no
-argument list.
+sandbox in a process environment and base64 on its standard input; it is on
+no argument list.
 
 The user has to be able to read everything. A user without read privilege is
 answered an empty result, not an error (measured), so a drill read as such a
@@ -211,6 +211,15 @@ sandbox:
     command: sleep infinity
     memory: 1g
 ```
+
+**What the image has to carry is bash, coreutils and awk.** The adapter reads
+the engine over its REST service with bash's own `/dev/tcp`, not with an HTTP
+client from the image, because the rest of an image's tools are not part of its
+contract: `apache/iotdb:2.0.11-standalone` was rebuilt under the same tag on
+2026-11-20 without the `curl` the earlier build carried. An image that lacks
+what the adapter reads with is refused before anything is transferred, as
+`invalid_request` naming what is missing — not five minutes later as an engine
+that never served.
 
 `command: sleep infinity` replaces the image's `entrypoint.sh all`, and the
 adapter starts both nodes itself on a copy of the image's configuration under
