@@ -6,15 +6,21 @@ package main
 // script text: a check comes from drill config, and the only safe
 // assumption about drill config is that it is data. The one secret — the
 // password of the restored engine's user — travels in the exec's
-// environment and reaches curl on its standard input, so it is on no
+// environment and reaches base64 on its standard input, so it is on no
 // argument list inside the sandbox.
 //
-// Both verified images are Ubuntu 20.04 with bash 5.0, curl 7.68 and mawk
-// 1.3.4, and no jq, no python and no JDK compiler (measured on 2.0.11 and
-// 1.3.7). So the engine is read over its REST service with curl, and the
-// JSON it answers is taken apart by the awk program below — the single
-// JSON reader this adapter has, shared by the check runner and every
-// verdict, so it is tested once.
+// The engine is read over its REST service, and what that asks of the
+// image is bash, coreutils and awk and nothing else: the HTTP client is
+// bash's own /dev/tcp, and the JSON the engine answers is taken apart by
+// the awk program below — the single JSON reader this adapter has, shared
+// by the check runner and every verdict, so it is tested once. An image's
+// other tools are not part of its contract. apache/iotdb:2.0.11-standalone
+// was rebuilt under the same tag on 2026-11-20, on Ubuntu 22.04 and without
+// the curl and wget the earlier build carried, and an adapter that read
+// through curl then waited out every drill's readiness budget against an
+// engine that was serving (measured). Both verified images carry bash (5.1
+// on 2.0.11, 5.0 on 1.3.7), coreutils and mawk 1.3.4, and neither has jq,
+// python or a JDK compiler (measured).
 
 // restPort is where the engine's REST service answers. The service is off
 // by default and this adapter turns it on in the sandbox's copy of the
@@ -178,21 +184,41 @@ END {
 // dialect, run in that database: the tree dialect has no current database
 // and the table dialect needs one for an unqualified name, so the one
 // value says both. The user comes from IOTDB_USER, the password from
-// ` + passwordEnv + `; curl reads both from its standard input as a config
-// line, quoted by curl's own rules.
+// ` + passwordEnv + `, and both reach base64 on its standard input; the
+// shell's printf is a builtin, so neither is ever an argument.
+//
+// iotdb_post is the HTTP client, and it is bash alone: one HTTP/1.0 request
+// over /dev/tcp, which both verified engines answer without chunking —
+// with a Content-Length, or, for a long answer, by closing the connection
+// at its end (measured on Jetty 12.0.36 in 2.0.11 and 9.4.57 in 1.3.7).
+// It prints the body, a newline and the status, and fails when nothing
+// answers or the answer is not a whole HTTP response: one whose body falls
+// short of its own Content-Length is refused rather than parsed, as curl
+// refused it.
 const restFn = `
 iotdb_json_escape() {
   local x=$1
   x=${x//\\/\\\\}; x=${x//\"/\\\"}; x=${x//$'\n'/\\n}; x=${x//$'\r'/\\r}; x=${x//$'\t'/\\t}
   printf '%s' "$x"
 }
-iotdb_post() {
-  local u=${IOTDB_USER:-root} p=${` + passwordEnv + `:-root}
-  u=${u//\\/\\\\}; u=${u//\"/\\\"}; p=${p//\\/\\\\}; p=${p//\"/\\\"}
-  printf 'user = "%s:%s"\n' "$u" "$p" |
-    curl -s -K - -H 'Content-Type: application/json' --data-binary "$2" -w '\n%{http_code}' \
-      "http://127.0.0.1:` + restPort + `$1"
-}
+iotdb_post() (
+  auth=$(printf '%s:%s' "${IOTDB_USER:-root}" "${` + passwordEnv + `:-root}" | base64 -w 0) || exit 1
+  size=$(printf '%s' "$2" | wc -c) || exit 1
+  { exec 3<>/dev/tcp/127.0.0.1/` + restPort + `; } 2>/dev/null || exit 1
+  printf 'POST %s HTTP/1.0\r\nHost: 127.0.0.1:` + restPort + `\r\nAuthorization: Basic %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s' \
+    "$1" "$auth" "$size" "$2" >&3 2>/dev/null || exit 1
+  answer=$(cat <&3; echo .); answer=${answer%.}
+  case "$answer" in *$'\r\n\r\n'*) ;; *) exit 1 ;; esac
+  head=${answer%%$'\r\n\r\n'*}; body=${answer#*$'\r\n\r\n'}
+  status='^HTTP/[0-9.]+ ([0-9][0-9][0-9])'
+  [[ ${head%%$'\r'*} =~ $status ]] || exit 1
+  code=${BASH_REMATCH[1]}
+  length=$(printf '%s\n' "$head" | awk -F ': *' '{ sub(/\r$/, "") } tolower($1) == "content-length" { print $2 }')
+  if [ -n "$length" ]; then
+    [ "$(printf '%s' "$body" | wc -c)" -eq "$length" ] 2>/dev/null || exit 1
+  fi
+  printf '%s\n%s' "$body" "$code"
+)
 iotdb_precision() {
   local out code body
   out=$(iotdb_post /rest/v2/query '{"sql":"show variables"}') || return 1
@@ -426,6 +452,26 @@ for name in "$@"; do
   grep -qE "[[:space:]]$name([[:space:]]|$)" /etc/hosts && continue
   printf '127.0.0.1 %s\n' "$name" >> /etc/hosts || exit 1
 done`
+
+// clientScript answers, before anything is transferred, whether the image
+// can read the engine the way every later script does. Without it an image
+// lacking the client would start the engine, wait out the readiness budget
+// against a service it cannot ask, and report an engine that never served —
+// a verdict about the backup that is really one about the image. The tools
+// are coreutils and awk. /dev/tcp is bash's own: opening it to a closed
+// loopback port answers "Connection refused" (measured in both verified
+// images), while a bash built without it opens the name as a plain path
+// that does not exist, "No such file or directory" — which is what is
+// refused. LC_ALL=C keeps the message in the language it is matched in.
+const clientScript = `set -u
+for tool in base64 wc cat awk; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "the image has no $tool" >&2; exit 1; }
+done
+said=$( (LC_ALL=C; exec 3<>/dev/tcp/127.0.0.1/1) 2>&1 )
+case "$said" in
+  *'No such file or directory'*) echo "the image's bash opens no network connection through /dev/tcp" >&2; exit 1 ;;
+esac
+exit 0`
 
 // startScript starts both nodes on the sandbox's configuration and returns
 // at once. Their output goes to files and their standard streams are
