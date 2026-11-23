@@ -11,6 +11,21 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The IoTDB adapter no longer needs curl in the sandbox image.**
+  `apache/iotdb:2.0.11-standalone` was rebuilt under the same tag on
+  2026-11-20, on Ubuntu 22.04 and without the curl the earlier build
+  carried. The adapter read the engine's REST service through curl, so
+  every drill against that image waited out the five-minute readiness
+  budget and failed as `engine_not_ready` while the engine was serving
+  (measured). It now speaks HTTP through bash's own `/dev/tcp`, which
+  asks nothing of the image beyond bash, coreutils and awk; the password
+  still reaches no argument list. An image that lacks one of those is
+  refused before the transfer, as `invalid_request` naming what is
+  missing, instead of as an engine that never started. Adapter version
+  0.2.0.
+
 ## [0.36.3] - 2026-11-15
 
 ### Changed

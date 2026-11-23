@@ -1,38 +1,85 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/base64"
 	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
-// fakeCurl stands in for curl inside the scripts: it records the config
-// line curl would read from its standard input and the request it would
-// send, and answers from the scenario's handler — a bash function that sets
-// out (the body) and code (the HTTP status) for a path and a body.
-const fakeCurl = `#!/bin/bash
-cfg=$(cat)
-printf '%s\n' "$cfg" >> "$FAKE_DIR/config"
-body= url=
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --data-binary) body=$2; shift 2 ;;
-    -K|-H|-w) shift 2 ;;
-    -s) shift ;;
-    *) url=$1; shift ;;
-  esac
-done
-path=${url#http://127.0.0.1:18080}
-printf '%s\t%s\n' "$path" "$body" >> "$FAKE_DIR/requests"
-out= code=200
-. "$FAKE_DIR/handler"
-respond "$path" "$body"
-printf '%s\n%s' "$out" "$code"
-`
+// answerScript runs a scenario's handler — a bash function that sets out
+// (the body) and code (the HTTP status) for a path and a body — and prints
+// the status on its first line and the body after it.
+const answerScript = `out= code=200
+. "$1"
+respond "$2" "$3"
+printf '%s\n%s' "$code" "$out"`
+
+// fakeEngine stands in for the engine's REST service: a real HTTP server on
+// loopback, so the scripts' own client is what talks to it. It records the
+// login each request carried and the request itself, and answers from the
+// scenario's handler. It returns the port it listens on.
+func fakeEngine(t *testing.T, dir string) string {
+	t.Helper()
+	record := func(name, line string) {
+		f, err := os.OpenFile(filepath.Join(dir, name), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Errorf("record %s: %v", name, err)
+			return
+		}
+		_, err = f.WriteString(line + "\n")
+		if err = errors.Join(err, f.Close()); err != nil {
+			t.Errorf("record %s: %v", name, err)
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read the request body: %v", err)
+		}
+		user, pass, _ := r.BasicAuth()
+		record("config", user+":"+pass)
+		record("requests", r.URL.Path+"\t"+string(body))
+		answer, err := exec.CommandContext(r.Context(), "bash", "-c", answerScript, "bash",
+			filepath.Join(dir, "handler"), r.URL.Path, string(body)).Output()
+		if err != nil {
+			t.Errorf("run the handler: %v", err)
+		}
+		status, out, _ := strings.Cut(string(answer), "\n")
+		code, err := strconv.Atoi(status)
+		if err != nil {
+			t.Errorf("handler status %q: %v", status, err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		if _, err := io.WriteString(w, out); err != nil {
+			t.Errorf("answer %s: %v", r.URL.Path, err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return strings.TrimPrefix(srv.URL, "http://127.0.0.1:")
+}
+
+// atPort points a script's client at port instead of the engine's.
+func atPort(t *testing.T, script, port string) string {
+	t.Helper()
+	engine := "/dev/tcp/127.0.0.1/" + restPort
+	if strings.Contains(script, "iotdb_post") && !strings.Contains(script, engine) {
+		t.Fatalf("the script's client does not connect to %s", engine)
+	}
+	return strings.ReplaceAll(script, engine, "/dev/tcp/127.0.0.1/"+port)
+}
 
 // precisionIs answers show variables with the given precision; every
 // scenario's handler starts with it.
@@ -51,32 +98,47 @@ type scriptRun struct {
 	exit           int
 	requests       string
 	config         string
+	// base64Args is every argument list base64 was run with, one per line.
+	base64Args string
 }
 
+// recordingBase64 wraps the host's base64 to record the arguments it was
+// given, which is where a password must never be.
+const recordingBase64 = `#!/bin/bash
+printf '%s\n' "$*" >> "$FAKE_DIR/base64-args"
+exec "$REAL_BASE64" "$@"
+`
+
 // runScript runs one of this adapter's scripts on the host against the fake
-// curl, with the scenario's handler.
+// engine, with the scenario's handler.
 func runScript(t *testing.T, script, handler string, env map[string]string, args ...string) scriptRun {
 	t.Helper()
-	for _, tool := range []string{"bash", "awk", "mktemp", "grep", "sed"} {
+	for _, tool := range []string{"bash", "awk", "mktemp", "grep", "sed", "base64", "wc", "cat"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s is not on PATH", tool)
 		}
 	}
+	realBase64, err := exec.LookPath("base64")
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(fakeCurl), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "base64"), []byte(recordingBase64), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "handler"), []byte(handler), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	script = atPort(t, script, fakeEngine(t, dir))
 	cmd := exec.CommandContext(t.Context(), "bash", append([]string{"-c", script, "bash"}, args...)...)
-	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_DIR="+dir)
+	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"FAKE_DIR="+dir, "REAL_BASE64="+realBase64)
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err := cmd.Run()
+	err = cmd.Run()
 	run := scriptRun{stdout: stdout.String(), stderr: stderr.String()}
 	var exitErr *exec.ExitError
 	switch {
@@ -86,11 +148,12 @@ func runScript(t *testing.T, script, handler string, env map[string]string, args
 		t.Fatalf("run script: %v", err)
 	}
 	run.requests, run.config = recorded(t, dir, "requests"), recorded(t, dir, "config")
+	run.base64Args = recorded(t, dir, "base64-args")
 	return run
 }
 
-// recorded reads what the fake curl wrote, which is nothing when the script
-// never called it.
+// recorded reads what the fakes wrote, which is nothing when the script
+// never reached them.
 func recorded(t *testing.T, dir, name string) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(dir, name))
@@ -190,20 +253,25 @@ func TestRunnerFailsTheWayTheEngineDid(t *testing.T) {
 	}
 }
 
-// TestRunnerQuotesTheLoginForCurlsConfig pins the password's route: curl's
-// standard input, quoted by curl's own rules, and never an argument.
-func TestRunnerQuotesTheLoginForCurlsConfig(t *testing.T) {
+// TestRunnerSendsTheLoginOnlyOnTheWire pins the password's route: the
+// script's environment, base64's standard input and the request's Basic
+// credentials, byte for byte, and never an argument of any process.
+func TestRunnerSendsTheLoginOnlyOnTheWire(t *testing.T) {
 	handler := precisionIs("ms") + `answer() { out='{"values":[[1]],"data_types":["INT32"]}'; }` + "\n"
-	run := runScript(t, runnerScript, handler, map[string]string{passwordEnv: `p\a"ss`}, "", `au"d`, "select 1")
+	const secret = `p\a"ss: ünï`
+	run := runScript(t, runnerScript, handler, map[string]string{passwordEnv: secret}, "", `au"d`, "select 1")
 	if run.exit != 0 {
 		t.Fatalf("exit %d: %s", run.exit, run.stderr)
 	}
-	if want := `user = "au\"d:p\\a\"ss"`; !strings.Contains(run.config, want) {
-		t.Errorf("curl config = %q, want %q", run.config, want)
+	if want := `au"d:` + secret + "\n"; !strings.HasPrefix(run.config, want) {
+		t.Errorf("credentials the engine received = %q, want %q on every request", run.config, want)
+	}
+	if run.base64Args == "" || strings.Contains(run.base64Args, "p\\a") || strings.Contains(run.base64Args, "au\"d") {
+		t.Errorf("base64 argument lists = %q, want it run with options only", run.base64Args)
 	}
 	defaulted := runScript(t, runnerScript, handler, map[string]string{passwordEnv: ""}, "", "root", "select 1")
-	if !strings.Contains(defaulted.config, `user = "root:root"`) {
-		t.Errorf("curl config = %q, want IoTDB's default password when none is set", defaulted.config)
+	if !strings.HasPrefix(defaulted.config, "root:root\n") {
+		t.Errorf("credentials the engine received = %q, want IoTDB's default password when none is set", defaulted.config)
 	}
 }
 
@@ -362,5 +430,215 @@ func TestReadinessWantsEveryNodeAndRegionRunning(t *testing.T) {
 	refused := precisionIs("ms") + `answer() { out='{"code":801,"message":"WRONG_LOGIN_PASSWORD"}'; code=401; }` + "\n"
 	if run := runScript(t, readyScript, refused, nil); run.exit != exitLoginRefused {
 		t.Errorf("a refused login: exit %d, want %d", run.exit, exitLoginRefused)
+	}
+}
+
+// sentRequest is what the client put on the wire, and whether the fake
+// managed to answer it.
+type sentRequest struct {
+	proto, auth string
+	body        []byte
+	err         error
+	served      error
+}
+
+// rawEngine answers every connection with response, byte for byte, after
+// reading one HTTP request from it, and closes the connection: the answers
+// a well-behaved server never gives are exactly the ones the client has to
+// refuse. It returns the port and what each request carried.
+func rawEngine(t *testing.T, response string) (string, <-chan sentRequest) {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := ln.Close(); err != nil {
+			t.Errorf("close the fake engine: %v", err)
+		}
+	})
+	sent := make(chan sentRequest, 8)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			req, err := http.ReadRequest(bufio.NewReader(conn))
+			got := sentRequest{err: err}
+			if err == nil {
+				got.proto, got.auth = req.Proto, req.Header.Get("Authorization")
+				got.body, got.err = io.ReadAll(req.Body)
+			}
+			_, err = io.WriteString(conn, response)
+			got.served = errors.Join(err, conn.Close())
+			select {
+			case sent <- got:
+			default:
+			}
+		}
+	}()
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port, sent
+}
+
+// postTo runs the client alone against port and returns what it printed and
+// how it exited.
+func postTo(t *testing.T, port, body string) (string, int) {
+	t.Helper()
+	for _, tool := range []string{"bash", "awk", "base64", "wc", "cat"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s is not on PATH", tool)
+		}
+	}
+	script := atPort(t, "set -u\n"+restFn+"\niotdb_post /rest/v2/query \"$1\"", port)
+	cmd := exec.CommandContext(t.Context(), "bash", "-c", script, "bash", body)
+	cmd.Env = append(os.Environ(), "IOTDB_USER=root", passwordEnv+"=Drill-Pass-9")
+	out, err := cmd.Output()
+	var exitErr *exec.ExitError
+	switch {
+	case errors.As(err, &exitErr):
+		return string(out), exitErr.ExitCode()
+	case err != nil:
+		t.Fatalf("run the client: %v", err)
+	}
+	return string(out), 0
+}
+
+// received waits for the fake engine's account of one request, and fails
+// the test unless the request parsed as HTTP and was answered.
+func received(t *testing.T, sent <-chan sentRequest) sentRequest {
+	t.Helper()
+	select {
+	case got := <-sent:
+		if got.err != nil || got.served != nil {
+			t.Fatalf("the fake engine could not read the request (%v) or answer it (%v)", got.err, got.served)
+		}
+		return got
+	case <-time.After(10 * time.Second):
+		t.Fatal("the fake engine saw no request")
+	}
+	return sentRequest{}
+}
+
+// answer is an HTTP response with the given status line, headers and body.
+func answer(status, headers, body string) string {
+	return status + "\r\n" + headers + "\r\n" + body
+}
+
+// TestTheClientReadsWhatTheServerSaidAndNothingElse pins the HTTP client the
+// scripts carry instead of curl: the shapes both verified engines answer
+// with are read whole, and an answer that is not a whole HTTP response fails
+// the request rather than reaching the JSON reader.
+func TestTheClientReadsWhatTheServerSaidAndNothingElse(t *testing.T) {
+	long := `{"values":[[` + strings.Repeat("1.0,", 40000) + `1.0]]}`
+	short := `{"code":801,"message":"WRONG_LOGIN_PASSWORD"}`
+	for _, tc := range []struct {
+		name, response, want string
+		fails                bool
+	}{
+		{"an answer with its length", answer("HTTP/1.1 200 OK", "Content-Type: application/json\r\nContent-Length: "+
+			strconv.Itoa(len(short))+"\r\n", short), short + "\n200", false},
+		{"a length in lower case", answer("HTTP/1.1 401 Unauthorized", "content-length:"+strconv.Itoa(len(short))+"\r\n",
+			short), short + "\n401", false},
+		{"a long answer ended by the close", answer("HTTP/1.1 200 OK", "Content-Type: application/json\r\n", long),
+			long + "\n200", false},
+		{"trailing newlines kept", answer("HTTP/1.0 200 OK", "Content-Length: 4\r\n", "{}\n\n"), "{}\n\n\n200", false},
+		{"a body short of its length", answer("HTTP/1.1 200 OK", "Content-Length: "+strconv.Itoa(len(short)+1)+"\r\n",
+			short), "", true},
+		{"two lengths", answer("HTTP/1.1 200 OK", "Content-Length: 2\r\nContent-Length: 2\r\n", "{}"), "", true},
+		{"headers that never end", "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n", "", true},
+		{"not HTTP", "SSH-2.0-OpenSSH_9.6\r\n\r\n{}", "", true},
+		{"a status that is not one", answer("HTTP/1.1 20 OK", "", "{}"), "", true},
+		{"nothing at all", "", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			port, sent := rawEngine(t, tc.response)
+			out, exit := postTo(t, port, `{"sql":"show cluster"}`)
+			received(t, sent)
+			if tc.fails {
+				if exit == 0 {
+					t.Errorf("exit 0 printing %q, want the request to fail", out)
+				}
+				return
+			}
+			if exit != 0 || out != tc.want {
+				t.Errorf("exit %d printing %.200q, want exit 0 printing %.200q", exit, out, tc.want)
+			}
+		})
+	}
+}
+
+// TestTheClientSendsAWholeRequest pins the request half: HTTP/1.0, so no
+// server answers in chunks; a Content-Length in bytes, not characters, so a
+// statement outside ASCII arrives whole; and the login as Basic credentials.
+func TestTheClientSendsAWholeRequest(t *testing.T) {
+	port, sent := rawEngine(t, answer("HTTP/1.1 200 OK", "Content-Length: 2\r\n", "{}"))
+	body := `{"sql":"select v from root.m.d where note = 'ünï 😀'"}`
+	if out, exit := postTo(t, port, body); exit != 0 || out != "{}\n200" {
+		t.Fatalf("exit %d printing %q", exit, out)
+	}
+	got := received(t, sent)
+	if got.proto != "HTTP/1.0" || string(got.body) != body {
+		t.Errorf("sent %s with body %q, want HTTP/1.0 with %q", got.proto, got.body, body)
+	}
+	if want := "Basic " + base64.StdEncoding.EncodeToString([]byte("root:Drill-Pass-9")); got.auth != want {
+		t.Errorf("Authorization = %q, want %q", got.auth, want)
+	}
+}
+
+// TestTheClientFailsWhenNothingListens is the engine still starting: the
+// readiness loop polls on exactly this failure.
+func TestTheClientFailsWhenNothingListens(t *testing.T) {
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if out, exit := postTo(t, port, "{}"); exit == 0 || out != "" {
+		t.Errorf("exit %d printing %q, want a silent failure", exit, out)
+	}
+}
+
+// TestTheClientCheckPassesOnThisHost runs the provision's client check where
+// the tests run: a host whose bash opens /dev/tcp and which has every tool.
+func TestTheClientCheckPassesOnThisHost(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "bash", "-c", clientScript)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("client check: %v: %s", err, out)
+	}
+}
+
+// TestTheClientCheckNamesWhatIsMissing runs it with a PATH that lacks
+// base64, the way an image without coreutils' encoder would look.
+func TestTheClientCheckNamesWhatIsMissing(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is not on PATH")
+	}
+	dir := t.TempDir()
+	for _, tool := range []string{"wc", "cat", "awk"} {
+		real, err := exec.LookPath(tool)
+		if err != nil {
+			t.Skipf("%s is not on PATH", tool)
+		}
+		if err := os.Symlink(real, filepath.Join(dir, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.CommandContext(t.Context(), bash, "-c", clientScript)
+	cmd.Env = []string{"PATH=" + dir}
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "the image has no base64") {
+		t.Errorf("client check = %v: %q, want a failure naming base64", err, out)
 	}
 }

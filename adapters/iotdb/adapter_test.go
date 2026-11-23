@@ -44,6 +44,7 @@ type fakeSandbox struct {
 	verdict    any
 	start      any
 	place      any
+	client     any
 	calls      []string
 	args       map[string][]string
 	env        map[string]map[string]string
@@ -54,7 +55,8 @@ func newFakeSandbox(t *testing.T) *fakeSandbox {
 	return &fakeSandbox{
 		t: t, properties: realProperties,
 		ready: okExec(""), verdict: okExec("123\n"), start: okExec("started\n"), place: okExec(""),
-		args: map[string][]string{}, env: map[string]map[string]string{},
+		client: okExec(""),
+		args:   map[string][]string{}, env: map[string]map[string]string{},
 	}
 }
 
@@ -64,6 +66,7 @@ var scripts = map[string]string{
 	placeTarScript(true): "place", propertiesScript: "properties", hostsScript: "hosts",
 	configureScript: "configure", startScript: "start", readyScript: "ready",
 	verdictScript: "verdict", healthScript: "health", startupErrorScript: "startup-error",
+	clientScript: "client",
 }
 
 func (f *fakeSandbox) handle(call verbCall) (any, *protoError) {
@@ -90,22 +93,15 @@ func (f *fakeSandbox) handle(call verbCall) (any, *protoError) {
 	f.calls = append(f.calls, name)
 	f.args[name] = args.Argv[4:]
 	f.env[name] = args.Env
-	switch name {
-	case "properties":
-		return okExec(f.properties), nil
-	case "ready":
-		return f.ready, nil
-	case "verdict":
-		return f.verdict, nil
-	case "start":
-		return f.start, nil
-	case "place":
-		return f.place, nil
-	case "startup-error":
-		return okExec("ERROR o.a.i.d.s.DataNode - Create Data Region failed\n"), nil
-	default:
-		return okExec(""), nil
+	answers := map[string]any{
+		"properties": okExec(f.properties), "ready": f.ready, "verdict": f.verdict, "start": f.start,
+		"place": f.place, "client": f.client,
+		"startup-error": okExec("ERROR o.a.i.d.s.DataNode - Create Data Region failed\n"),
 	}
+	if answer, ok := answers[name]; ok {
+		return answer, nil
+	}
+	return okExec(""), nil
 }
 
 // writeCopy lays out the smallest tree inspect accepts: both nodes' system
@@ -215,7 +211,7 @@ func TestProvisionRunsTheStepsInOrder(t *testing.T) {
 	if final := parseFinal(t, line); exit != 0 || !final.OK {
 		t.Fatalf("provision failed: %+v", final.Error)
 	}
-	want := []string{"prepare", "put_file", "place", "properties", "configure", "start", "ready", "verdict"}
+	want := []string{"prepare", "client", "put_file", "place", "properties", "configure", "start", "ready", "verdict"}
 	if !slices.Equal(f.calls, want) {
 		t.Errorf("steps = %v, want %v", f.calls, want)
 	}
@@ -512,6 +508,24 @@ func TestEngineThatNeverStartsSaysWhatItSaid(t *testing.T) {
 	final := parseFinal(t, line)
 	if final.OK || final.Error.Code != "engine_not_ready" || !strings.Contains(final.Error.Message, "command not found") {
 		t.Errorf("got %+v, want engine_not_ready carrying what the start said", final.Error)
+	}
+}
+
+// TestAnImageThatCannotReadTheEngineIsRefusedBeforeTheTransfer keeps a
+// missing client from waiting out the readiness budget and reporting an
+// engine that never served: the image is named, nothing is transferred and
+// nothing is started.
+func TestAnImageThatCannotReadTheEngineIsRefusedBeforeTheTransfer(t *testing.T) {
+	f := newFakeSandbox(t)
+	f.client = codeExec(1, "the image has no base64\n")
+	line, _, _ := driveOp(t, "provision", provisionWith(t, kindData, writeCopy(t, ""), nil, nil), f.handle)
+	final := parseFinal(t, line)
+	if final.OK || final.Error.Code != "invalid_request" || final.Error.Retryable ||
+		!strings.Contains(final.Error.Message, "cannot read the engine over its REST service: the image has no base64") {
+		t.Errorf("got %+v, want a final invalid_request naming what the image lacks", final.Error)
+	}
+	if want := []string{"prepare", "client"}; !slices.Equal(f.calls, want) {
+		t.Errorf("steps = %v, want %v and nothing after", f.calls, want)
 	}
 }
 
