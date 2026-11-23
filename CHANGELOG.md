@@ -25,6 +25,21 @@ always called out explicitly.
   refused before the transfer, as `invalid_request` naming what is
   missing, instead of as an engine that never started. Adapter version
   0.2.0.
+- **Five more adapters refuse an image without their HTTP client before
+  the transfer.** The prometheus, questdb, solr, tdengine and
+  victoriametrics adapters read the restored engine through the image's
+  own `curl` or `wget`, and none of them asked whether it was there. An
+  image without it was found out only once the engine could not be
+  asked whether it was ready: after the readiness budget, as
+  `engine_not_ready` — marked retryable in prometheus, tdengine and
+  victoriametrics — and in prometheus, questdb and victoriametrics only
+  after the artifact had been transferred. Each now asks first and
+  refuses with `invalid_request`, saying the image cannot read the
+  engine and naming the missing tool. The couchdb, elasticsearch,
+  opensearch and weaviate adapters already asked. Every verified image
+  carries its client (measured), so no supported drill changes. Adapter
+  versions: prometheus 0.7.0, questdb 0.3.0, solr 0.8.0, tdengine 0.7.0,
+  victoriametrics 0.4.0.
 
 ## [0.36.3] - 2026-11-15
 

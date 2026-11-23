@@ -52,6 +52,13 @@ none` in about two seconds — no published ports, no name resolution
 needed. The drill config needs an image and a memory limit and nothing
 else.
 
+The image has to carry `curl`: the adapter asks Solr every question over
+its HTTP API with it — readiness, the restore, and each check — and the
+official image ships it (measured on `solr:10`). A drill pointed at an
+image without it is refused with `invalid_request` before Solr is waited
+for, rather than reporting after three minutes that the server never
+answered.
+
 ## Where the backup goes (`SOLR_HOME`)
 
 Solr refuses to read a backup from anywhere outside its own data
@@ -203,7 +210,7 @@ what was restored.
 | `source_unreadable` | the artifact cannot be read, or is still being written |
 | `source_corrupt` | Solr could not restore a core from it, an archive holds no backup, or an archive carries more collection and configuration names than a backup holds |
 | `unsupported_source` | an unknown kind, several collections, or document expiry (above) |
-| `invalid_request` | a standalone server, a PITR request, or a collection name Solr will not take |
+| `invalid_request` | a sandbox image without `curl`, a standalone server, a PITR request, or a collection name Solr will not take |
 | `engine_not_ready` | Solr did not answer within three minutes |
 | `restore_failed` | the Collections API refused, or reported success for a collection it does not serve |
 

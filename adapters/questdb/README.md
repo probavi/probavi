@@ -105,6 +105,13 @@ to set up its writer jobs and the server never comes up (measured on both
 verified versions). The engine answers 2.0–2.1 seconds after start under
 `--network none`.
 
+**The image has to carry `curl`.** The adapter asks QuestDB every
+question over its HTTP endpoint — whether it is idle, whether it is
+ready, what it restored, and each check — and the official images ship
+`curl` (measured on both verified versions). A drill pointed at an image
+without it is refused with `invalid_request` before the transfer, rather
+than starting the engine and reporting that it never answered.
+
 Telemetry is switched off for the drill (`QDB_TELEMETRY_ENABLED=false`).
 The image ships `telemetry.enabled=true`, and a restored copy of
 production data is the last thing that should report anywhere.
@@ -174,7 +181,7 @@ they wrote it.
 | `source_unreadable` | the artifact cannot be read, or is still being copied |
 | `source_corrupt` | the directory is not a QuestDB data root, or the restore served no table the artifact holds |
 | `unsupported_source` | an unknown source kind |
-| `invalid_request` | a checkpoint kind pointed at an unchecked copy, a PITR request, or a sandbox already serving |
+| `invalid_request` | a checkpoint kind pointed at an unchecked copy, a PITR request, a sandbox image without `curl`, or a sandbox already serving |
 | `engine_not_ready` | QuestDB did not answer within three minutes of starting on the restored data root |
 
 ## Timings

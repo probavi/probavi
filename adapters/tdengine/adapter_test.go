@@ -145,6 +145,8 @@ func step(t *testing.T, call verbCall) string {
 		script = args.Argv[2]
 	}
 	switch {
+	case strings.Contains(script, "command -v curl"):
+		return "client"
 	case strings.Contains(script, "taosdump -i"):
 		return "restore"
 	case strings.Contains(script, "nohup taosd"):
@@ -306,8 +308,8 @@ func TestProbeGolden(t *testing.T) {
 }
 
 // TestProvisionHappyPath pins the order the steps run in: the artifact is
-// read and fenced host-side, the server the image starts is waited for,
-// and only then does anything move.
+// read and fenced host-side, the image is asked whether it carries the
+// client, the server is waited for, and only then does anything move.
 func TestProvisionHappyPath(t *testing.T) {
 	dump := writeDump(t, dumpOptions{nested: true, startedAgo: time.Hour, keepDays: 3650})
 	var seen []string
@@ -319,7 +321,7 @@ func TestProvisionHappyPath(t *testing.T) {
 	if !f.OK {
 		t.Fatalf("final = %+v", f)
 	}
-	want := []string{"ready", "put_file", "restore", "tables"}
+	want := []string{"client", "ready", "put_file", "restore", "tables"}
 	if strings.Join(seen, ",") != strings.Join(want, ",") {
 		t.Errorf("steps = %v, want %v", seen, want)
 	}
@@ -370,6 +372,40 @@ func TestAnEngineThatIsAlreadyServingIsLeftAlone(t *testing.T) {
 		if s == "start" {
 			t.Errorf("the adapter restarted an engine that was already serving: %v", seen)
 		}
+	}
+}
+
+// TestProvisionRefusesAnImageWithoutItsClient pins the up-front check. An
+// image without curl cannot answer the readiness question, so the drill
+// used to start the engine and wait out the whole budget before reporting
+// a retryable engine_not_ready; the refusal is the image's, and it arrives
+// before the engine is waited for and before a byte moves.
+func TestProvisionRefusesAnImageWithoutItsClient(t *testing.T) {
+	dump := writeDump(t, dumpOptions{nested: true, startedAgo: time.Hour})
+	var seen []string
+	handler := happyHandler(t, &seen)
+	line, _, exit := driveOp(t, "provision", provisionPayload(dump, ""),
+		func(call verbCall) (any, *protoError) {
+			if call.Verb == "exec" && step(t, call) == "client" {
+				seen = append(seen, "client")
+				return execValue{ExitCode: 1, DurationSeconds: 0.1,
+					StderrB64: base64.StdEncoding.EncodeToString([]byte("the image has no curl\n"))}, nil
+			}
+			return handler(call)
+		})
+	if exit != 0 {
+		t.Fatalf("exit = %d", exit)
+	}
+	f := parseFinal(t, line)
+	if f.OK || f.Error == nil || f.Error.Code != "invalid_request" || f.Error.Retryable {
+		t.Fatalf("final = %+v, want a non-retryable invalid_request", f)
+	}
+	if !strings.Contains(f.Error.Message, "cannot read the engine") ||
+		!strings.Contains(f.Error.Message, "the image has no curl") {
+		t.Errorf("message = %q, want it to say the image cannot read the engine and why", f.Error.Message)
+	}
+	if strings.Join(seen, ",") != "client" {
+		t.Errorf("steps = %v, want the check and nothing after it", seen)
 	}
 }
 

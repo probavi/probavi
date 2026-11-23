@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "questdb"
-	adapterVersion = "0.2.0"
+	adapterVersion = "0.3.0"
 	// defaultPort is where QuestDB serves HTTP inside the sandbox. Nothing
 	// is published: checks run in-sandbox through the runner below.
 	defaultPort = 9000
@@ -97,6 +97,9 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	logger.Info("source resolved", "path", src.path, "size_bytes", src.sizeBytes,
 		"checkpointed", src.checkpointed, "user_tables", src.userTables)
 
+	if perr := checkClient(ctx, c); perr != nil {
+		return nil, perr
+	}
 	if perr := assertIdle(ctx, c); perr != nil {
 		return nil, perr
 	}
@@ -143,6 +146,24 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	}, nil
 }
 
+// checkClient refuses, before the transfer, an image that cannot read the
+// engine: every question this adapter asks QuestDB goes over its HTTP
+// endpoint through curl. What fails here is the image the drill names, so
+// the answer is invalid_request, and no retry changes it.
+func checkClient(ctx context.Context, c *core) *protoError {
+	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", clientScript}})
+	if perr != nil {
+		return perr
+	}
+	if val.ExitCode != 0 {
+		return protoErr("invalid_request", false,
+			"the sandbox image cannot read the engine: this adapter asks QuestDB every question over "+
+				"its HTTP endpoint with curl, which the official questdb/questdb images ship (%s)",
+			firstLine(stderr))
+	}
+	return nil
+}
+
 // assertIdle refuses a sandbox whose engine is already running.
 //
 // This adapter replaces the data root, which cannot be done under a server
@@ -156,9 +177,10 @@ func assertIdle(ctx context.Context, c *core) *protoError {
 		return perr
 	}
 	// Only a positive answer refuses: the script says 0 when it reached a
-	// server. Anything else means the question could not be asked — a
-	// sandbox without curl, say — and a drill is not stopped by a probe
-	// that did not run.
+	// server. Anything else means the question could not be asked, and a
+	// drill is not stopped by a probe that did not run. A sandbox without
+	// curl is the one such case worth naming, and checkClient has already
+	// refused it.
 	if val.ExitCode != 0 || strings.TrimSpace(string(stdout)) != "0" {
 		return nil
 	}

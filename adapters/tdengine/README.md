@@ -269,6 +269,13 @@ three minutes for a server that was never coming (measured).
 
 The restore runs at **256 MiB** (measured).
 
+**The image has to carry `curl`.** Readiness, the restore's verdict and
+every check go to taosAdapter's REST endpoint through it, and the
+official images ship it (measured on both verified versions). A drill
+pointed at an image without it is refused with `invalid_request` before
+the engine is waited for, rather than reporting a retryable
+`engine_not_ready` three minutes later.
+
 ### Readiness is a node the cluster calls ready
 
 Not a query that answers. Measured on a freshly started engine:
@@ -301,7 +308,7 @@ than silently wrong.
 | `source_unreadable` | the artifact cannot be read, or is still being written |
 | `source_corrupt` | the directory is no taosdump output, the tool reported failures, the restore and the artifact disagree about the row count, or the restored database serves no table |
 | `unsupported_source` | an unknown kind, or an outer directory holding several dumps |
-| `invalid_request` | a PITR request, or a file where a directory belongs |
+| `invalid_request` | a PITR request, a file where a directory belongs, or a sandbox image without `curl` |
 | `restore_failed` | the backup is older than its own `KEEP`, the tool never reached the server, or it restored nothing |
 | `engine_not_ready` | the server did not answer within three minutes |
 

@@ -165,6 +165,7 @@ func argvOf(t *testing.T, call verbCall) []string {
 // simulated answers per flow step; tests override single entries.
 type simulated struct {
 	engine   any // the wrapper-image probe
+	client   any // the HTTP-client probe
 	restore  any // vmrestore
 	ready    any // the health poll
 	census   any // the label-names read
@@ -186,6 +187,7 @@ func labelsBody(names ...string) string {
 func defaultSimulated() simulated {
 	return simulated{
 		engine:   okExec(),
+		client:   okExec(),
 		restore:  execValue{ExitCode: 0, DurationSeconds: 1.5},
 		ready:    okExec(),
 		census:   timedOut(labelsBody("job")),
@@ -243,6 +245,8 @@ func classifyShellExec(script string, sim simulated) (string, any) {
 	switch {
 	case script == engineProbeScript:
 		return "engine", sim.engine
+	case script == clientScript:
+		return "client", sim.client
 	case script == backupDirScript:
 		return "locate", outExec("/scratch/probavi-victoriametrics/extract\n")
 	case strings.Contains(script, "victoria-metrics -storageDataPath"):
@@ -319,7 +323,7 @@ func TestProvisionRestoresBackupDir(t *testing.T) {
 	// The wrapper-image probe, the skeleton, one put_file per file — the
 	// two markers, the partition's parts.json and its one part — then the
 	// restore, the background start, readiness, and the verdict read.
-	want := "engine|mkdir|put_file|put_file|put_file|put_file|restore|start|ready|census"
+	want := "engine|client|mkdir|put_file|put_file|put_file|put_file|restore|start|ready|census"
 	if got := strings.Join(sequence, "|"); got != want {
 		t.Errorf("sequence = %s, want %s", got, want)
 	}
@@ -378,7 +382,7 @@ func TestProvisionUnpacksArchive(t *testing.T) {
 	if exit != 0 || !f.OK {
 		t.Fatalf("exit=%d final=%+v", exit, f)
 	}
-	want := "engine|mkdir|put_file|unpack|locate|restore|start|ready|census"
+	want := "engine|client|mkdir|put_file|unpack|locate|restore|start|ready|census"
 	if got := strings.Join(sequence, "|"); got != want {
 		t.Errorf("sequence = %s, want %s", got, want)
 	}
@@ -403,7 +407,7 @@ func TestProvisionRecoversMetadataFromOpaqueArchive(t *testing.T) {
 	if exit != 0 || !f.OK {
 		t.Fatalf("exit=%d final=%+v", exit, f)
 	}
-	want := "engine|mkdir|put_file|unpack|locate|recover|restore|start|ready|census"
+	want := "engine|client|mkdir|put_file|unpack|locate|recover|restore|start|ready|census"
 	if got := strings.Join(sequence, "|"); got != want {
 		t.Errorf("sequence = %s, want %s", got, want)
 	}
@@ -508,11 +512,21 @@ func TestProvisionSandboxRefusals(t *testing.T) {
 		sim      func(s *simulated)
 		wantCode string
 		wantMsg  string
+		// wantSequence, when set, is every step the drill may have run:
+		// a refusal of the image must come before anything moves.
+		wantSequence string
 	}{
 		{
 			name:     "an image without the tools names the missing one",
 			sim:      func(s *simulated) { s.engine = execValue{ExitCode: 1, StdoutB64: b64("vmrestore\n")} },
-			wantCode: "invalid_request", wantMsg: "vmrestore",
+			wantCode: "invalid_request", wantMsg: "vmrestore", wantSequence: "engine",
+		},
+		{
+			name: "an image without its HTTP client says it cannot read the engine",
+			sim: func(s *simulated) {
+				s.client = execValue{ExitCode: 1, StderrB64: b64("the image has no wget\n")}
+			},
+			wantCode: "invalid_request", wantMsg: "the image has no wget", wantSequence: "engine|client",
 		},
 		{
 			name: "vmrestore's own completeness refusal",
@@ -560,6 +574,9 @@ func TestProvisionSandboxRefusals(t *testing.T) {
 			if f.Error.Code != tc.wantCode || !strings.Contains(f.Error.Message, tc.wantMsg) {
 				t.Errorf("refusal = %s %q, want %s containing %q",
 					f.Error.Code, f.Error.Message, tc.wantCode, tc.wantMsg)
+			}
+			if got := strings.Join(sequence, "|"); tc.wantSequence != "" && got != tc.wantSequence {
+				t.Errorf("sequence = %s, want %s", got, tc.wantSequence)
 			}
 		})
 	}
