@@ -11,6 +11,26 @@ always called out explicitly.
 
 ## [Unreleased]
 
+### Changed
+
+- **The docker provider says how podman resolves an unqualified image
+  reference.** docker resolves `image: nginx:1.27-alpine` against Docker
+  Hub. podman takes it from an image already in its store, from a
+  short-name alias, or from a single `unqualified-search-registries`
+  entry, and refuses the sandbox otherwise: measured on podman 6.1.4
+  both with none of those configured and with two search registries
+  under enforcing short-name mode, where podman would prompt and a drill
+  has no terminal to answer it. A drill that works under docker can
+  therefore fail at sandbox creation under podman until its registry is
+  spelled out. The provider keeps passing `image` verbatim, because
+  rewriting it would put a reference into the signed record that the
+  drill was never asked for; the descriptor and the README now say so.
+  The same measurement ran the provider suite — lifecycle, orphan sweep
+  and both resource caps — against rootless podman 6.1.4 on cgroup v2
+  with the systemd cgroup manager, a major beyond the 5.7.0 the podman
+  workflow's runner now carries, and all three pass. Nothing the
+  provider does changed.
+
 ### Fixed
 
 - **The IoTDB adapter no longer needs curl in the sandbox image.**
