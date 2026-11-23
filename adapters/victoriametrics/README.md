@@ -51,7 +51,9 @@ building the image rather than mounting a tool into it. `promtool` is
 there as a **query client**, not as a second engine — see the checks
 section for why an HTTP one-liner is not a substitute. A drill pointed at
 an image missing any of the three fails up front, naming the one it could
-not find.
+not find. The same holds for `wget`, which the wrapper inherits from the
+base image's busybox rather than from the recipe, and which the adapter
+asks the restored server whether it is ready and what it holds with.
 
 ```yaml
 sandbox:
@@ -265,6 +267,7 @@ hash.
 | a part a `parts.json` names but the artifact lacks | `source_corrupt`, naming the part |
 | tar cannot unpack the archive | `source_corrupt` |
 | the sandbox image lacks the server, `vmrestore` or the client | `invalid_request`, naming the missing one |
+| the sandbox image has no `wget` | `invalid_request`, saying the image cannot read the engine |
 | `vmrestore` fails for any other reason | `restore_failed`, carrying its message |
 | the restored server dies on incomplete storage | `source_corrupt`, carrying the engine's own line |
 | the restored server holds no series at all | `source_corrupt` |

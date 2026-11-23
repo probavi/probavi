@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "prometheus"
-	adapterVersion = "0.6.0"
+	adapterVersion = "0.7.0"
 
 	// workDirName is created under the provider's scratch directory — the
 	// one directory the provider guarantees writable (the official images
@@ -176,6 +176,9 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if perr := checkEngine(ctx, c); perr != nil {
 		return nil, perr
 	}
+	if perr := checkClient(ctx, c); perr != nil {
+		return nil, perr
+	}
 
 	workDir := path.Join(scratch, workDirName)
 	transferSeconds, unpackSeconds, dataDir, perr := transferArtifact(ctx, c, src, workDir)
@@ -231,6 +234,35 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 			"eval_time": strconv.FormatInt(census.maxTimeMs/1000, 10),
 		},
 	}, nil
+}
+
+// clientScript answers, before the transfer, whether the image carries the
+// client the adapter reads the restored server with. Without wget the
+// readiness question can never be answered, so the drill used to transfer
+// the artifact, start the server and wait out the whole budget for an
+// answer nothing in the sandbox could ask for — a verdict about the backup
+// that is really one about the image. command -v answers a missing tool
+// with 127 under the image's busybox shell and 1 under bash (measured), so
+// the script names the tool itself rather than leaving the exit code to
+// say it.
+const clientScript = `command -v wget >/dev/null 2>&1 || { echo "the image has no wget" >&2; exit 1; }`
+
+// checkClient refuses an image that cannot read the engine: readiness and
+// the census of loaded blocks go to the server's HTTP API through wget.
+// What fails here is the image the drill names, so the answer is
+// invalid_request, and no retry changes it.
+func checkClient(ctx context.Context, c *core) *protoError {
+	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"sh", "-c", clientScript}})
+	if perr != nil {
+		return perr
+	}
+	if val.ExitCode != 0 {
+		return protoErr("invalid_request", false,
+			"the sandbox image cannot read the engine: this adapter asks Prometheus whether it is ready "+
+				"and what it loaded over its HTTP API with wget, which the official prom/prometheus "+
+				"images ship in their busybox userland (%s)", firstLine(stderr))
+	}
+	return nil
 }
 
 // checkEngine verifies the image can run the server through a POSIX

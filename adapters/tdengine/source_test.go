@@ -545,7 +545,7 @@ func TestAnArchiveIsUnpackedInTheSandbox(t *testing.T) {
 	if !f.OK {
 		t.Fatalf("final = %+v", f)
 	}
-	if want := "ready,put_file,extract,restore,tables"; strings.Join(seen, ",") != want {
+	if want := "client,ready,put_file,extract,restore,tables"; strings.Join(seen, ",") != want {
 		t.Errorf("steps = %v, want %s", seen, want)
 	}
 	if restoredFrom != unpacked {

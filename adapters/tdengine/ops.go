@@ -11,7 +11,7 @@ import (
 
 const (
 	adapterName    = "tdengine"
-	adapterVersion = "0.6.0"
+	adapterVersion = "0.7.0"
 	// defaultPort is where taosAdapter serves HTTP inside the sandbox.
 	// Nothing is published: checks run in-sandbox through the runner.
 	defaultPort = 6041
@@ -105,6 +105,9 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	logger.Info("source resolved", "path", src.path, "size_bytes", src.sizeBytes,
 		"database", src.database, "keep_days", src.keepDays, "rows", src.rows)
 
+	if perr := checkClient(ctx, c); perr != nil {
+		return nil, perr
+	}
 	readySeconds, perr := awaitReady(ctx, c)
 	if perr != nil {
 		return nil, perr
@@ -161,6 +164,25 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 // so before the adapter starts the engine itself. Where the image's
 // entrypoint did work, the engine answers in about a second.
 const startGrace = 5 * time.Second
+
+// checkClient refuses, before the engine is waited for and before the
+// transfer, an image that cannot read the engine: readiness, the restore's
+// verdict and every check go to taosAdapter's REST endpoint through curl.
+// What fails here is the image the drill names, so the answer is
+// invalid_request, and no retry changes it.
+func checkClient(ctx context.Context, c *core) *protoError {
+	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"bash", "-c", clientScript}})
+	if perr != nil {
+		return perr
+	}
+	if val.ExitCode != 0 {
+		return protoErr("invalid_request", false,
+			"the sandbox image cannot read the engine: this adapter asks TDengine every question over "+
+				"taosAdapter's REST endpoint with curl, which the official tdengine/tdengine images "+
+				"ship (%s)", firstLine(stderr))
+	}
+	return nil
+}
 
 // awaitReady gets the engine serving and waits for a node that can work.
 //

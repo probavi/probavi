@@ -32,6 +32,16 @@ const homeScript = `printf %s "${SOLR_HOME:-` + defaultSolrHome + `}"`
 // different one.
 const defaultSolrHome = "/var/solr/data"
 
+// clientScript answers, before anything else runs in the sandbox, whether
+// the image carries the client every later script reads the engine with.
+// Without curl the readiness question below can never be answered, so the
+// drill waits out its whole budget and reports a server the image never
+// started — a verdict about the backup that is really one about the image.
+// command -v answers a missing tool with 127 under dash and 1 under bash
+// (measured), so the script names the tool itself rather than leaving the
+// exit code to say it.
+const clientScript = `command -v curl >/dev/null 2>&1 || { echo "the image has no curl" >&2; exit 1; }`
+
 // readyScript asks whether Solr is answering yet.
 const readyScript = `curl -sf -o /dev/null "` + serverURL + `/admin/info/system?wt=json"`
 

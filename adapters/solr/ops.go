@@ -12,7 +12,7 @@ import (
 
 const (
 	adapterName    = "solr"
-	adapterVersion = "0.7.1"
+	adapterVersion = "0.8.0"
 	// defaultPort is where Solr listens inside the sandbox. Nothing is
 	// published: checks run in-sandbox through the runner below.
 	defaultPort = 8983
@@ -130,6 +130,9 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	logger.Info("source resolved", "path", src.path, "size_bytes", src.sizeBytes,
 		"backup_collection", src.collection)
 
+	if perr := checkClient(ctx, c); perr != nil {
+		return nil, perr
+	}
 	var t timings
 	home, ready, perr := prepareEngine(ctx, c)
 	if perr != nil {
@@ -286,6 +289,24 @@ func assertCloudMode(ctx context.Context, c *core) *protoError {
 			"API, which such a server refuses. The official solr:10 image starts in SolrCloud mode with "+
 			"an embedded ZooKeeper and needs no configuration; solr:9.10 starts standalone (both "+
 			"measured), so point the drill at a 10.x image or start the server with -c")
+}
+
+// checkClient refuses, before the engine is waited for and before the
+// transfer, an image that cannot read the engine: readiness, the restore
+// and every check go to Solr's HTTP API through curl. What fails here is
+// the image the drill names, so the answer is invalid_request, and no
+// retry changes it.
+func checkClient(ctx context.Context, c *core) *protoError {
+	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"sh", "-c", clientScript}})
+	if perr != nil {
+		return perr
+	}
+	if val.ExitCode != 0 {
+		return protoErr("invalid_request", false,
+			"the sandbox image cannot read the engine: this adapter asks Solr every question over its "+
+				"HTTP API with curl, which the official solr images ship (%s)", firstLine(stderr))
+	}
+	return nil
 }
 
 // awaitReady polls until Solr serves its system information.

@@ -212,6 +212,8 @@ func classifyShellExec(script string, sim simulated) (string, any) {
 	switch {
 	case strings.Contains(script, "--version"):
 		return "engine", okExec()
+	case script == clientScript:
+		return "client", okExec()
 	case script == dataDirScript:
 		return "locate", outExec("/scratch/probavi-prometheus/extract\n")
 	case strings.Contains(script, "meta.json"):
@@ -279,6 +281,34 @@ func decodeProvision(t *testing.T, f finalResponse) (connection struct {
 	return got.Connection, got.SourceIdentity.CreatedAt, got.Timings
 }
 
+// TestProvisionRefusesAnImageWithoutItsClient pins where the check sits:
+// after the image has shown it can run the server, before anything is
+// transferred or started.
+func TestProvisionRefusesAnImageWithoutItsClient(t *testing.T) {
+	dir := writeSnapshot(t, filepath.Join(t.TempDir(), "snap"), maxAug2026-60000, maxAug2026)
+	var sequence []string
+	handler := provisionHandler(t, &sequence, defaultSimulated(2))
+	line, _, exit := driveOp(t, "provision",
+		provisionPayload(t, "prometheus_snapshot", dir, nil),
+		func(call verbCall) (any, *protoError) {
+			if call.Verb == "exec" {
+				if argv := argvOf(t, call); argv[0] == "sh" && argv[2] == clientScript {
+					sequence = append(sequence, "client")
+					return execValue{ExitCode: 1, DurationSeconds: 0.1,
+						StderrB64: base64.StdEncoding.EncodeToString([]byte("the image has no wget\n"))}, nil
+				}
+			}
+			return handler(call)
+		})
+	f := parseFinal(t, line)
+	if exit != 0 || f.OK || f.Error == nil || f.Error.Code != "invalid_request" || f.Error.Retryable {
+		t.Fatalf("exit=%d final=%+v, want a non-retryable invalid_request", exit, f)
+	}
+	if got := strings.Join(sequence, "|"); got != "engine|client" {
+		t.Errorf("sequence = %s, want the two image checks and nothing after them", got)
+	}
+}
+
 func TestProvisionRestoresSnapshotDir(t *testing.T) {
 	dir := writeSnapshot(t, filepath.Join(t.TempDir(), "snap"), maxAug2026-60000, maxAug2026)
 	var sequence []string
@@ -291,7 +321,7 @@ func TestProvisionRestoresSnapshotDir(t *testing.T) {
 	}
 	// Two blocks of four files each transfer after one mkdir of the whole
 	// skeleton; the server then starts and the two verdict reads run.
-	want := "engine|mkdir|put_file|put_file|put_file|put_file|put_file|put_file|put_file|put_file|config|start|ready|census|probe"
+	want := "engine|client|mkdir|put_file|put_file|put_file|put_file|put_file|put_file|put_file|put_file|config|start|ready|census|probe"
 	if got := strings.Join(sequence, "|"); got != want {
 		t.Errorf("sequence = %s, want %s", got, want)
 	}
@@ -361,7 +391,7 @@ func TestProvisionUnpacksArchive(t *testing.T) {
 		t.Fatalf("exit=%d final=%+v", exit, f)
 	}
 	// The host walked the archive, so no in-sandbox census recovery runs.
-	want := "engine|mkdir|put_file|unpack|locate|config|start|ready|census|probe"
+	want := "engine|client|mkdir|put_file|unpack|locate|config|start|ready|census|probe"
 	if got := strings.Join(sequence, "|"); got != want {
 		t.Errorf("sequence = %s, want %s", got, want)
 	}
@@ -399,7 +429,7 @@ func TestProvisionRecoversCensusFromOpaqueArchive(t *testing.T) {
 	if !f.OK {
 		t.Fatalf("final = %+v — the sandbox extraction is the authority on an opaque archive", f)
 	}
-	want := "engine|mkdir|put_file|unpack|locate|recover|config|start|ready|census|probe"
+	want := "engine|client|mkdir|put_file|unpack|locate|recover|config|start|ready|census|probe"
 	if got := strings.Join(sequence, "|"); got != want {
 		t.Errorf("sequence = %s, want %s", got, want)
 	}

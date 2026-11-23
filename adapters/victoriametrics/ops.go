@@ -15,7 +15,7 @@ import (
 
 const (
 	adapterName    = "victoriametrics"
-	adapterVersion = "0.3.0"
+	adapterVersion = "0.4.0"
 
 	// workDirName is created under the provider's scratch directory — the
 	// one directory the provider guarantees writable.
@@ -172,6 +172,9 @@ func opProvision(ctx context.Context, c *core, payload json.RawMessage, logger *
 	if perr := checkEngine(ctx, c); perr != nil {
 		return nil, perr
 	}
+	if perr := checkClient(ctx, c); perr != nil {
+		return nil, perr
+	}
 
 	workDir := path.Join(scratch, workDirName)
 	dataDir := path.Join(workDir, "data")
@@ -250,6 +253,36 @@ func checkEngine(ctx context.Context, c *core) *protoError {
 			"the sandbox image provides no %s: a drill needs the server, vmrestore and a query "+
 				"client together, and they ship in separate images — build the wrapper image the "+
 				"adapter README documents", firstLine(stdout))
+	}
+	return nil
+}
+
+// clientScript answers, before the transfer, whether the image carries the
+// client the adapter reads the restored server with. The wrapper's three
+// tools are checked above; wget is the fourth thing a drill needs, and it
+// comes from the base image's busybox rather than from the recipe, so a
+// base rebuilt without it would otherwise be found out only after the
+// transfer and the restore, as a server that never answered. command -v
+// answers a missing tool with 127 under busybox and 1 under bash
+// (measured), so the script names the tool itself rather than leaving the
+// exit code to say it.
+const clientScript = `command -v wget >/dev/null 2>&1 || { echo "the image has no wget" >&2; exit 1; }`
+
+// checkClient refuses an image that cannot read the engine: readiness and
+// the series census go to the server's HTTP API through wget. What fails
+// here is the image the drill names, so the answer is invalid_request, and
+// no retry changes it.
+func checkClient(ctx context.Context, c *core) *protoError {
+	val, _, stderr, perr := c.exec(ctx, execArgs{Argv: []string{"sh", "-c", clientScript}})
+	if perr != nil {
+		return perr
+	}
+	if val.ExitCode != 0 {
+		return protoErr("invalid_request", false,
+			"the sandbox image cannot read the engine: this adapter asks VictoriaMetrics whether it is "+
+				"ready and what it holds over its HTTP API with wget, which the official "+
+				"victoriametrics/victoria-metrics images ship in their busybox userland (%s)",
+			firstLine(stderr))
 	}
 	return nil
 }

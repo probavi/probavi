@@ -96,6 +96,24 @@ func TestCheckEngineNamesTheImageProblem(t *testing.T) {
 	}
 }
 
+// TestCheckClientNamesTheMissingClient: without wget the readiness
+// question cannot be asked, and a drill that went on would wait out its
+// budget against a server it had started; the refusal is the image's, and
+// it says which tool is missing.
+func TestCheckClientNamesTheMissingClient(t *testing.T) {
+	if perr := checkClient(context.Background(), answeredCore(t, said(0, "", ""))); perr != nil {
+		t.Errorf("perr = %+v, want an image with wget to pass", perr)
+	}
+	perr := checkClient(context.Background(), answeredCore(t, said(1, "", "the image has no wget\n")))
+	if perr == nil || perr.Code != "invalid_request" || perr.Retryable ||
+		!strings.Contains(perr.Message, "cannot read the engine") || !strings.Contains(perr.Message, "no wget") {
+		t.Errorf("perr = %+v, want a non-retryable invalid_request naming the missing client", perr)
+	}
+	if perr := checkClient(context.Background(), answeredCore(t)); perr == nil || perr.Code != "internal" {
+		t.Errorf("perr = %+v, want the harness's own failure", perr)
+	}
+}
+
 func TestMkdirAllReportsWhatTheShellSaid(t *testing.T) {
 	if perr := mkdirAll(context.Background(), answeredCore(t, said(0, "", "")), "/work/data"); perr != nil {
 		t.Errorf("perr = %+v, want a made directory to pass", perr)

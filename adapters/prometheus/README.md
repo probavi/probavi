@@ -81,7 +81,10 @@ ENTRYPOINT []
 Everything in the image — server, promtool, the busybox userland — is
 exactly the official image's; only the entrypoint pin is lifted. A
 drill pointed at an image that cannot run the server through a shell
-fails up front with a message naming this section. The integration
+fails up front with a message naming this section. So does one without
+the userland's `wget`, which the adapter asks the restored server
+whether it is ready and what it loaded with: that refusal comes before
+the transfer, rather than as a server that never answered. The integration
 suite builds the same wrapper from the manifest's listed image, so
 "verified against Prometheus 3.13" means that server, exercised this
 way.
@@ -238,6 +241,7 @@ change changes the hash.
 | a block without readable `meta.json` | `source_corrupt`, naming the block |
 | tar cannot unpack the archive | `source_corrupt` |
 | the sandbox image cannot run the server | `invalid_request`, naming the wrapper recipe |
+| the sandbox image has no `wget` | `invalid_request`, saying the image cannot read the engine |
 | the server refuses to start on a corrupted block | `source_corrupt`, carrying its log line |
 | the server loaded fewer blocks than the snapshot requires (compaction sources already excluded) | `source_corrupt` — the census |
 | every block named as another present block's compaction source | `source_corrupt` — cyclic metadata |

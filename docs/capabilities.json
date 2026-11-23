@@ -1028,7 +1028,7 @@
       "name": "Prometheus",
       "status": "experimental",
       "since": "0.12.0",
-      "adapter_version": "0.6.0",
+      "adapter_version": "0.7.0",
       "engine": {
         "id": "prometheus",
         "name": "Prometheus"
@@ -1117,7 +1117,7 @@
       "name": "QuestDB",
       "status": "experimental",
       "since": "0.27.0",
-      "adapter_version": "0.2.0",
+      "adapter_version": "0.3.0",
       "engine": {
         "id": "questdb",
         "name": "QuestDB"
@@ -1254,7 +1254,7 @@
       "name": "Apache Solr",
       "status": "experimental",
       "since": "0.20.0",
-      "adapter_version": "0.7.1",
+      "adapter_version": "0.8.0",
       "engine": {
         "id": "solr",
         "name": "Apache Solr"
@@ -1355,7 +1355,7 @@
       "name": "TDengine",
       "status": "experimental",
       "since": "0.28.0",
-      "adapter_version": "0.6.0",
+      "adapter_version": "0.7.0",
       "engine": {
         "id": "tdengine",
         "name": "TDengine"
@@ -1457,7 +1457,7 @@
       "name": "VictoriaMetrics",
       "status": "experimental",
       "since": "0.16.0",
-      "adapter_version": "0.3.0",
+      "adapter_version": "0.4.0",
       "engine": {
         "id": "victoriametrics",
         "name": "VictoriaMetrics"

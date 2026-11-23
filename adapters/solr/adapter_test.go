@@ -164,6 +164,8 @@ func step(t *testing.T, call verbCall) (string, execArgs) {
 		script = args.Argv[2]
 	}
 	switch {
+	case strings.Contains(script, "command -v curl"):
+		return "client", args
 	case strings.Contains(script, "SOLR_HOME"):
 		return "home", args
 	case strings.Contains(script, `"mode":"solrcloud"`):
@@ -327,7 +329,7 @@ func TestProvisionHappyPath(t *testing.T) {
 	if !f.OK {
 		t.Fatalf("final = %+v", f)
 	}
-	want := []string{"home", "ready", "mode", "put_file", "restore", "held", "health"}
+	want := []string{"client", "home", "ready", "mode", "put_file", "restore", "held", "health"}
 	if strings.Join(seen, ",") != strings.Join(want, ",") {
 		t.Errorf("steps = %v, want %v", seen, want)
 	}
@@ -414,6 +416,42 @@ func TestProvisionRefusesBeforeTouchingTheSandbox(t *testing.T) {
 				t.Errorf("message = %q, want it to carry %q", f.Error.Message, tt.message)
 			}
 		})
+	}
+}
+
+// TestProvisionRefusesAnImageWithoutItsClient pins the up-front check. An
+// image without curl cannot answer the readiness question, so the drill
+// used to wait out the whole budget and blame the image for not starting
+// the server; the refusal names what is actually missing, and it arrives
+// before the engine is waited for and before a byte moves.
+func TestProvisionRefusesAnImageWithoutItsClient(t *testing.T) {
+	backup := writeBackup(t, nil)
+	var seen []string
+	handler := happyHandler(t, &seen)
+	line, _, exit := driveOp(t, "provision", provisionPayload(backup, ""),
+		func(call verbCall) (any, *protoError) {
+			if call.Verb == "exec" {
+				if name, _ := step(t, call); name == "client" {
+					seen = append(seen, name)
+					return execValue{ExitCode: 1, DurationSeconds: 0.1,
+						StderrB64: base64.StdEncoding.EncodeToString([]byte("the image has no curl\n"))}, nil
+				}
+			}
+			return handler(call)
+		})
+	if exit != 0 {
+		t.Fatalf("exit = %d", exit)
+	}
+	f := parseFinal(t, line)
+	if f.OK || f.Error == nil || f.Error.Code != "invalid_request" || f.Error.Retryable {
+		t.Fatalf("final = %+v, want a non-retryable invalid_request", f)
+	}
+	if !strings.Contains(f.Error.Message, "cannot read the engine") ||
+		!strings.Contains(f.Error.Message, "the image has no curl") {
+		t.Errorf("message = %q, want it to say the image cannot read the engine and why", f.Error.Message)
+	}
+	if strings.Join(seen, ",") != "client" {
+		t.Errorf("steps = %v, want the check and nothing after it", seen)
 	}
 }
 
